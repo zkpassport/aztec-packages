@@ -4,24 +4,6 @@ use super::{
     traits::{DeserializeBuffer, SerializeBuffer},
 };
 
-pub unsafe fn schnorr_compute_public_key(private_key: &Fr) -> Point {
-    let mut output: <Point as DeserializeBuffer>::Slice = [0; 64];
-    bindgen::schnorr_compute_public_key(
-        private_key.to_buffer().as_slice().as_ptr(),
-        output.as_mut_ptr(),
-    );
-    Point::from_buffer(output)
-}
-
-pub unsafe fn schnorr_negate_public_key(public_key: &Point) -> Point {
-    let mut output: <Point as DeserializeBuffer>::Slice = [0; 64];
-    bindgen::schnorr_negate_public_key(
-        public_key.to_buffer().as_slice().as_ptr(),
-        output.as_mut_ptr(),
-    );
-    Point::from_buffer(output)
-}
-
 pub unsafe fn schnorr_construct_signature(
     message: &[u8],
     private_key: &Fr,

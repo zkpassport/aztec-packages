@@ -44,7 +44,7 @@ fn main() {
                 #include <barretenberg/crypto/blake2s/c_bind.hpp>
                 #include <barretenberg/crypto/schnorr/c_bind.hpp>
                 #include <barretenberg/srs/c_bind.hpp>
-                #include <barretenberg/examples/c_bind.hpp>
+                #include <barretenberg/examples/simple/c_bind.hpp>
                 #include <barretenberg/common/c_bind.hpp>
                 #include <barretenberg/dsl/acir_proofs/c_bind.hpp>
             "#,
@@ -57,8 +57,6 @@ fn main() {
         .allowlist_function("poseidon_hashes")
         .allowlist_function("blake2s")
         .allowlist_function("blake2s_to_field_")
-        .allowlist_function("schnorr_compute_public_key")
-        .allowlist_function("schnorr_negate_public_key")
         .allowlist_function("schnorr_construct_signature")
         .allowlist_function("schnorr_verify_signature")
         .allowlist_function("schnorr_multisig_create_multisig_public_key")

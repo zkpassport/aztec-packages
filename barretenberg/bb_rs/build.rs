@@ -6,13 +6,45 @@ fn main() {
     // Notify Cargo to rerun this build script if `build.rs` changes.
     println!("cargo:rerun-if-changed=build.rs");
 
+    // cfg!(target_os = "<os>") does not work so we get the value
+    // of the target_os environment variable to determine the target OS.
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+
     // Build the C++ code using CMake and get the build directory path.
-    let dst = Config::new("../cpp")
-        .profile("RelWithAssert")
-        .define("TARGET_ARCH", "skylake")
-        .configure_arg("--toolchain=cmake/toolchains/x86_64-linux.cmake")
+    let dst;
+    // iOS
+    if target_os == "ios" {
+        println!("target os => ios");
+        dst = Config::new("../cpp")
+            .generator("Ninja")
+            .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
+            .configure_arg("-DPLATFORM=OS64")
+            .configure_arg("-DDEPLOYMENT_TARGET=14.0")
+            .configure_arg("--toolchain=../cpp/ios.toolchain.cmake")
+            .build_target("bb")
+            .build();
+    }
+    // Android
+    else if target_os == "android" {
+        println!("target os => android");
+        dst = Config::new("../cpp")
+        .generator("Ninja")
+        .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
+        .configure_arg("-DANDROID_ABI=arm64-v8a")
+        .configure_arg("-DANDROID_PLATFORM=android-33")
+        .configure_arg(&format!("--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake", env!("ANDROID_HOME"), env!("NDK_VERSION")))
         .build_target("bb")
         .build();
+    } 
+    // MacOS and other platforms
+    else {
+        println!("target os => other");
+        dst = Config::new("../cpp")
+        .generator("Ninja")
+        .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
+        .build_target("bb")
+        .build();
+    }
 
     // Add the library search path for Rust to find during linking.
     println!("cargo:rustc-link-search={}/build/lib", dst.display());
@@ -27,13 +59,50 @@ fn main() {
         println!("cargo:rustc-link-lib=stdc++");
     }
 
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default();
+
+    if target_os == "android" {
+        builder = builder
         // Add the include path for headers.
         .clang_args([
             "-std=c++20",
             "-xc++",
             &format!("-I{}/build/include", dst.display()),
-        ])
+            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/c++/v1", env!("ANDROID_HOME"), env!("NDK_VERSION"), env!("HOST_TAG")),
+            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include", env!("ANDROID_HOME"), env!("NDK_VERSION"), env!("HOST_TAG")),
+            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/aarch64-linux-android", env!("ANDROID_HOME"), env!("NDK_VERSION"), env!("HOST_TAG"))
+        ]);
+    } else if target_os == "ios" {
+        builder = builder
+        // Add the include path for headers.
+        .clang_args([
+            "-std=c++20",
+            "-xc++",
+            &format!("-I{}/build/include", dst.display()),
+            "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include/c++/v1",
+            "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include"
+        ]);
+    } else if target_os == "macos" {
+        builder = builder
+            // Add the include path for headers.
+            .clang_args([
+                "-std=c++20",
+                "-xc++",
+                &format!("-I{}/build/include", dst.display()),
+                "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1",
+                "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include",
+            ]);
+    } else {
+        builder = builder
+        // Add the include path for headers.
+        .clang_args([
+            "-std=c++20",
+            "-xc++",
+            &format!("-I{}/build/include", dst.display())
+        ]);
+    }
+
+    let bindings = builder
         // The input header we would like to generate bindings for.
         .header_contents(
             "wrapper.hpp",

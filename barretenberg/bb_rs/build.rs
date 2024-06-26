@@ -14,7 +14,6 @@ fn main() {
     let dst;
     // iOS
     if target_os == "ios" {
-        println!("target os => ios");
         dst = Config::new("../cpp")
             .generator("Ninja")
             .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
@@ -26,7 +25,6 @@ fn main() {
     }
     // Android
     else if target_os == "android" {
-        println!("target os => android");
         dst = Config::new("../cpp")
         .generator("Ninja")
         .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
@@ -38,7 +36,6 @@ fn main() {
     } 
     // MacOS and other platforms
     else {
-        println!("target os => other");
         dst = Config::new("../cpp")
         .generator("Ninja")
         .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")

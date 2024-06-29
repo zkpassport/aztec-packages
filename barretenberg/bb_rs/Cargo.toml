@@ -1,6 +1,6 @@
 [package]
 name = "bb_rs"
-version = "0.32.0"
+version = "0.38.0"
 edition = "2021"
 authors = ["Bartosz Nowak"]
 

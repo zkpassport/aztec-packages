@@ -97,7 +97,8 @@ template <typename T, typename... Args> void write_benchmark(const std::string& 
         << "\"eventName\": \"" << name << "\", "
         << "\"type\": \"" << TypeTraits<T>::type << "\", "
         << "\"value\": " << value << ", "
-        << "\"threads\": " << env_hardware_concurrency();
+        //<< "\"threads\": " << env_hardware_concurrency();
+        << "\"threads\": " << 1;
 
     appendToStream(oss, args...); // unpack and append the key-value pairs
 

@@ -86,3 +86,6 @@ WASM_EXPORT void acir_serialize_verification_key_into_fields(in_ptr acir_compose
 
 WASM_EXPORT void acir_prove_ultra_honk(uint8_t const* acir_vec, uint8_t const* witness_vec, uint8_t** out);
                               
+WASM_EXPORT void acir_verify_ultra_honk(uint8_t const* proof_buf, uint8_t const* vk_buf, bool* result);
+
+WASM_EXPORT void acir_write_vk_ultra_honk(uint8_t const* acir_vec, uint8_t** out);

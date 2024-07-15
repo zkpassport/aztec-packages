@@ -174,6 +174,16 @@ pub unsafe fn acir_verify_ultra_honk(proof_buf: &[u8], vkey_buf: &[u8]) -> bool 
     result
 }
 
+pub unsafe fn acir_prove_and_verify_ultra_honk(constraint_system_buf: &[u8], witness_buf: &[u8]) -> bool {
+    let mut result = false;
+    bindgen::acir_prove_and_verify_ultra_honk(
+        constraint_system_buf.to_buffer().as_ptr(),
+        witness_buf.to_buffer().as_ptr(),
+        &mut result,
+    );
+    result
+}
+
 pub unsafe fn acir_serialize_proof_into_fields(
     acir_composer_ptr: &mut Ptr,
     proof_buf: &[u8],

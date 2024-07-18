@@ -27,7 +27,7 @@ endif(DOXYGEN_FOUND)
 
 option(DISABLE_ASM "Disable custom assembly" OFF)
 option(DISABLE_ADX "Disable ADX assembly variant" OFF)
-option(MULTITHREADING "Enable multi-threading" OFF)
+option(MULTITHREADING "Enable multi-threading" ON)
 option(OMP_MULTITHREADING "Enable OMP multi-threading" OFF)
 option(FUZZING "Build ONLY fuzzing harnesses" OFF)
 option(DISABLE_TBB "Intel Thread Building Blocks" OFF)

@@ -1,17 +1,21 @@
 #pragma once
 #include <atomic>
-// #include <barretenberg/env/hardware_concurrency.hpp>
+#include <barretenberg/env/hardware_concurrency.hpp>
 #include <barretenberg/numeric/bitop/get_msb.hpp>
 #include <functional>
 #include <iostream>
 #include <vector>
+#include <thread>
 
 namespace bb {
 
 inline size_t get_num_cpus()
 {
-    //return env_hardware_concurrency();
-    return 1;
+#if defined(__APPLE__) || defined(ANDROID) || defined(__ANDROID__)
+    return std::thread::hardware_concurrency();
+#else
+    return env_hardware_concurrency();
+#endif
 }
 
 // For algorithms that need to be divided amongst power of 2 threads.

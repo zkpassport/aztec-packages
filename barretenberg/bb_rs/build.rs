@@ -25,12 +25,15 @@ fn main() {
     }
     // Android
     else if target_os == "android" {
+        let android_home = option_env!("ANDROID_HOME").expect("ANDROID_HOME not set");
+        let ndk_version = option_env!("NDK_VERSION").expect("NDK_VERSION not set");
+
         dst = Config::new("../cpp")
         .generator("Ninja")
         .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
         .configure_arg("-DANDROID_ABI=arm64-v8a")
         .configure_arg("-DANDROID_PLATFORM=android-33")
-        .configure_arg(&format!("--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake", env!("ANDROID_HOME"), env!("NDK_VERSION")))
+        .configure_arg(&format!("--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake", android_home, ndk_version))
         .build_target("bb")
         .build();
     } 
@@ -59,15 +62,19 @@ fn main() {
     let mut builder = bindgen::Builder::default();
 
     if target_os == "android" {
+        let android_home = option_env!("ANDROID_HOME").expect("ANDROID_HOME not set");
+        let ndk_version = option_env!("NDK_VERSION").expect("NDK_VERSION not set");
+        let host_tag = option_env!("HOST_TAG").expect("HOST_TAG not set");
+
         builder = builder
         // Add the include path for headers.
         .clang_args([
             "-std=c++20",
             "-xc++",
             &format!("-I{}/build/include", dst.display()),
-            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/c++/v1", env!("ANDROID_HOME"), env!("NDK_VERSION"), env!("HOST_TAG")),
-            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include", env!("ANDROID_HOME"), env!("NDK_VERSION"), env!("HOST_TAG")),
-            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/aarch64-linux-android", env!("ANDROID_HOME"), env!("NDK_VERSION"), env!("HOST_TAG"))
+            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/c++/v1", android_home, ndk_version, host_tag),
+            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include", android_home, ndk_version, host_tag),
+            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/aarch64-linux-android", android_home, ndk_version, host_tag)
         ]);
     } else if target_os == "ios" {
         builder = builder

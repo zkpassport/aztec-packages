@@ -5,12 +5,17 @@
 #include <functional>
 #include <iostream>
 #include <vector>
+#include <thread>
 
 namespace bb {
 
 inline size_t get_num_cpus()
 {
+#if defined(__APPLE__) || defined(ANDROID) || defined(__ANDROID__)
+    return std::thread::hardware_concurrency();
+#else
     return env_hardware_concurrency();
+#endif
 }
 
 // For algorithms that need to be divided amongst power of 2 threads.

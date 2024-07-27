@@ -12,6 +12,7 @@
 #include "barretenberg/srs/global_crs.hpp"
 #include <cstdint>
 #include <memory>
+#include <stdio.h>
 
 WASM_EXPORT void acir_get_circuit_sizes(
     uint8_t const* acir_vec, bool const* honk_recursion, uint32_t* exact, uint32_t* total, uint32_t* subgroup)
@@ -126,7 +127,7 @@ WASM_EXPORT void acir_prove_and_verify_mega_honk(uint8_t const* acir_vec, uint8_
 }
 
 WASM_EXPORT void acir_load_verification_key(in_ptr acir_composer_ptr, uint8_t const* vk_buf)
-{
+{   
     auto acir_composer = reinterpret_cast<acir_proofs::AcirComposer*>(*acir_composer_ptr);
     auto vk_data = from_buffer<plonk::verification_key_data>(vk_buf);
     acir_composer->load_verification_key(std::move(vk_data));
@@ -218,7 +219,7 @@ WASM_EXPORT void acir_verify_ultra_honk(uint8_t const* proof_buf, uint8_t const*
     using Verifier = UltraVerifier_<UltraFlavor>;
 
     auto proof = from_buffer<std::vector<bb::fr>>(from_buffer<std::vector<uint8_t>>(proof_buf));
-    auto verification_key = std::make_shared<VerificationKey>(from_buffer<VerificationKey>(vk_buf));
+    auto verification_key = std::make_shared<VerificationKey>(from_buffer<VerificationKey>(from_buffer<std::vector<uint8_t>>(vk_buf)));
     verification_key->pcs_verification_key = std::make_shared<VerifierCommitmentKey>();
 
     Verifier verifier{ verification_key };

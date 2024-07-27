@@ -4,8 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 
-using namespace bb;
-
 WASM_EXPORT void acir_get_circuit_sizes(uint8_t const* constraint_system_buf,
                                         bool const* honk_recursion,
                                         uint32_t* exact,
@@ -67,11 +65,11 @@ WASM_EXPORT void acir_get_solidity_verifier(in_ptr acir_composer_ptr, out_str_bu
 WASM_EXPORT void acir_serialize_proof_into_fields(in_ptr acir_composer_ptr,
                                                   uint8_t const* proof_buf,
                                                   uint32_t const* num_inner_public_inputs,
-                                                  fr::vec_out_buf out);
+                                                  uint8_t** out);
 
 WASM_EXPORT void acir_serialize_verification_key_into_fields(in_ptr acir_composer_ptr,
-                                                             fr::vec_out_buf out_vkey,
-                                                             fr::out_buf out_key_hash);
+                                                             uint8_t** out_vkey,
+                                                             uint8_t* out_key_hash);
 
 WASM_EXPORT void acir_prove_ultra_honk(uint8_t const* acir_vec, uint8_t const* witness_vec, uint8_t** out);
 

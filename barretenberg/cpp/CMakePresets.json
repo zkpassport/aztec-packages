@@ -22,6 +22,22 @@
       }
     },
     {
+      "name": "ios",
+      "displayName": "Build for iOS",
+      "description": "Build for iOS",
+      "binaryDir": "build-ios",
+      "generator": "Ninja",
+      "toolchainFile": "./ios.toolchain.cmake"
+    },
+    {
+      "name": "android",
+      "displayName": "Build for Android",
+      "description": "Build for Android",
+      "binaryDir": "build-android",
+      "generator": "Ninja",
+      "toolchainFile": "$env{ANDROID_HOME}/ndk/$env{NDK_VERSION}/build/cmake/android.toolchain.cmake"
+    },
+    {
       "name": "homebrew",
       "displayName": "Homebrew + Clang",
       "description": "Build with Clang installed via Homebrew",
@@ -372,6 +388,18 @@
     {
       "name": "default",
       "configurePreset": "default",
+      "inheritConfigureEnvironment": true,
+      "jobs": 0
+    },
+    {
+      "name": "ios",
+      "configurePreset": "ios",
+      "inheritConfigureEnvironment": true,
+      "jobs": 0
+    },
+    {
+      "name": "android",
+      "configurePreset": "android",
       "inheritConfigureEnvironment": true,
       "jobs": 0
     },

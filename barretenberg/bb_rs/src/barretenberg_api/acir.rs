@@ -8,12 +8,13 @@ pub struct CircuitSizes {
     pub subgroup: u32,
 }
 
-pub unsafe fn get_circuit_sizes(constraint_system_buf: &[u8]) -> CircuitSizes {
+pub unsafe fn get_circuit_sizes(constraint_system_buf: &[u8], honk_recursion: bool) -> CircuitSizes {
     let mut exact = 0;
     let mut total = 0;
     let mut subgroup = 0;
     bindgen::acir_get_circuit_sizes(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
+        &honk_recursion,
         &mut exact,
         &mut total,
         &mut subgroup,
@@ -31,26 +32,8 @@ pub unsafe fn new_acir_composer(size_hint: u32) -> Ptr {
     out_ptr
 }
 
-pub unsafe fn new_goblin_acir_composer() -> Ptr {
-    let mut out_ptr = ptr::null_mut();
-    bindgen::acir_new_goblin_acir_composer(&mut out_ptr);
-    out_ptr
-}
-
 pub unsafe fn delete_acir_composer(acir_composer_ptr: Ptr) {
     bindgen::acir_delete_acir_composer(&acir_composer_ptr);
-}
-
-pub unsafe fn acir_create_circuit(
-    acir_composer_ptr: &mut Ptr,
-    constraint_system_buf: &[u8],
-    size_hint: u32,
-) {
-    bindgen::acir_create_circuit(
-        acir_composer_ptr,
-        constraint_system_buf.to_buffer().as_slice().as_ptr(),
-        size_hint.to_be_bytes().as_ptr() as *const u32,
-    );
 }
 
 pub unsafe fn acir_init_proving_key(acir_composer_ptr: &mut Ptr, constraint_system_buf: &[u8]) {

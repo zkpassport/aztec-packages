@@ -1,11 +1,32 @@
 use super::{bindgen, models::Ptr, traits::SerializeBuffer, Buffer};
 use std::ptr;
+use std::fmt::Write;
 
 #[derive(Debug)]
 pub struct CircuitSizes {
     pub exact: u32,
     pub total: u32,
     pub subgroup: u32,
+}
+
+fn from_buffer_to_fields(buffer: &[u8], size_in_bytes: u32, offset: u32) -> Vec<String> {
+    let mut result = Vec::new();
+
+    // Process the buffer in chunks of {size_in_bytes} bytes
+    for chunk in buffer[offset as usize..].chunks(size_in_bytes as usize) {
+         // Pre-allocate space for {size_in_bytes} bytes ({size_in_bytes} * 2 hex chars)
+        let mut hex_string = String::with_capacity((size_in_bytes * 2) as usize);
+        
+        // Convert each chunk to a hexadecimal string
+        for &byte in chunk.iter() {
+            write!(&mut hex_string, "{:02x}", byte).expect("Unable to write to string");
+        }
+        
+        // Prefix each field with "0x" and push it to the final Vector
+        result.push(format!("0x{}", hex_string));
+    }
+
+    result
 }
 
 pub unsafe fn get_circuit_sizes(constraint_system_buf: &[u8], honk_recursion: bool) -> CircuitSizes {
@@ -193,4 +214,33 @@ pub unsafe fn acir_serialize_verification_key_into_fields(
         out_key_hash.as_mut_ptr(),
     );
     (Buffer::from_ptr(out_vkey).unwrap().to_vec(), out_key_hash)
+}
+
+pub unsafe fn acir_proof_as_fields_ultra_honk(proof_buf: &[u8]) -> Vec<String> {
+    // NOTE: the output will be the same as the input, but this will fail if the input is not a well formatted proof
+    // so you can see this as a validation function for the format of the proof
+    let mut out_ptr = ptr::null_mut();
+    bindgen::acir_proof_as_fields_ultra_honk(
+        proof_buf.to_buffer().as_ptr(),
+        &mut out_ptr,
+    );
+    // We remove the first 4 bytes and keep the rest
+    // The first 3 fields are the circuit size, the number of public inputs and the offset of the public inputs
+    // Then the public inputs
+    // And the rest is the actual proof 
+    from_buffer_to_fields(&Buffer::from_ptr(out_ptr).unwrap().to_vec(), 32, 4)
+}
+
+pub unsafe fn acir_vk_as_fields_ultra_honk(vk_buf: &[u8]) -> (Vec<String>, String) {
+    let mut out_ptr = ptr::null_mut();
+    bindgen::acir_vk_as_fields_ultra_honk(
+        vk_buf.to_buffer().as_ptr(),
+        &mut out_ptr,
+    );
+    // We remove the first 4 bytes and the 3 first fields
+    // As for the proof the 3 first fields are the circuit size, the number of public inputs and the offset of the public inputs
+    // But for some reason the values are not correct for the verification key so we remove them, so we can add them later from the proof
+    let vk: Vec<String> = from_buffer_to_fields(&Buffer::from_ptr(out_ptr).unwrap().to_vec(), 32, 100);
+    let key_hash = vk[vk.len()-1].clone();
+    (vk[0..vk.len()-1].to_vec(), key_hash)
 }

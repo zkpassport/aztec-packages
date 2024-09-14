@@ -1,5 +1,5 @@
 #include "barretenberg/client_ivc/client_ivc.hpp"
-#include "tracy/Tracy.hpp"
+//#include "tracy/Tracy.hpp"
 
 namespace bb {
 
@@ -73,7 +73,7 @@ void ClientIVC::accumulate(ClientCircuit& circuit, const std::shared_ptr<Verific
  */
 ClientIVC::Proof ClientIVC::prove()
 {
-    ZoneScopedN("ClientIVC::prove");
+    //ZoneScopedN("ClientIVC::prove");
     max_block_size_tracker.print(); // print minimum structured sizes for each block
     return { fold_output.proof, decider_prove(), goblin.prove() };
 };
@@ -84,7 +84,7 @@ bool ClientIVC::verify(const Proof& proof,
                        const std::shared_ptr<ClientIVC::ECCVMVerificationKey>& eccvm_vk,
                        const std::shared_ptr<ClientIVC::TranslatorVerificationKey>& translator_vk)
 {
-    ZoneScopedN("ClientIVC::verify");
+    //ZoneScopedN("ClientIVC::verify");
     // Goblin verification (merge, eccvm, translator)
     GoblinVerifier goblin_verifier{ eccvm_vk, translator_vk };
     bool goblin_verified = goblin_verifier.verify(proof.goblin_proof);
@@ -118,7 +118,7 @@ bool ClientIVC::verify(Proof& proof, const std::vector<std::shared_ptr<DeciderVe
  */
 HonkProof ClientIVC::decider_prove() const
 {
-    ZoneScopedN("ClientIVC::decider_prove");
+    //ZoneScopedN("ClientIVC::decider_prove");
     MegaDeciderProver decider_prover(fold_output.accumulator);
     return decider_prover.construct_proof();
 }

@@ -7,7 +7,12 @@ use crate::barretenberg_api::traits::DeserializeBuffer;
 
 pub unsafe fn pedersen_commit(inputs: &[Fr]) -> Point {
     let mut output: <Point as DeserializeBuffer>::Slice = [0; 64];
-    bindgen::pedersen_commit(inputs.to_buffer().as_slice().as_ptr(), output.as_mut_ptr());
+    let offset: u32 = 0;
+    bindgen::pedersen_commit(
+        inputs.to_buffer().as_slice().as_ptr(),
+        offset.to_be_bytes().as_ptr() as *const u32,
+        output.as_mut_ptr(),
+    );
     Point::from_buffer(output)
 }
 

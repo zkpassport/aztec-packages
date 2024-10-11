@@ -14,36 +14,48 @@ fn main() {
     let dst;
     // iOS
     if target_os == "ios" {
+        // let deployment_target = if target_arch == "aarch64" {
+        //     "18.0" // iOS simulator minimum version
+        // } else {
+        //     "14.0" // iOS device minimum version
+        // };
         dst = Config::new("../cpp")
             .generator("Ninja")
             .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
             .configure_arg("-DPLATFORM=OS64")
-            .configure_arg("-DDEPLOYMENT_TARGET=14.0")
+            .configure_arg(&format!("-DDEPLOYMENT_TARGET={}", "18.0"))
             .configure_arg("--toolchain=../cpp/ios.toolchain.cmake")
             .build_target("bb")
             .build();
     }
     // Android
     else if target_os == "android" {
-        let android_home = option_env!("ANDROID_HOME").expect("ANDROID_HOME not set");
-        let ndk_version = option_env!("NDK_VERSION").expect("NDK_VERSION not set");
+        let android_abi = if env::var("CARGO_CFG_TARGET_ARCH").unwrap() == "arm" {
+            "armeabi-v7a"
+        } else {
+            "arm64-v8a"
+        };
 
         dst = Config::new("../cpp")
-        .generator("Ninja")
-        .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
-        .configure_arg("-DANDROID_ABI=arm64-v8a")
-        .configure_arg("-DANDROID_PLATFORM=android-33")
-        .configure_arg(&format!("--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake", android_home, ndk_version))
-        .build_target("bb")
-        .build();
-    } 
+            .generator("Ninja")
+            .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
+            .configure_arg(&format!("-DANDROID_ABI={}", android_abi))
+            .configure_arg("-DANDROID_PLATFORM=android-33")
+            .configure_arg(&format!(
+                "--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake",
+                env!("ANDROID_HOME"),
+                env!("NDK_VERSION")
+            ))
+            .build_target("bb")
+            .build();
+    }
     // MacOS and other platforms
     else {
         dst = Config::new("../cpp")
-        .generator("Ninja")
-        .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
-        .build_target("bb")
-        .build();
+            .generator("Ninja")
+            .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
+            .build_target("bb")
+            .build();
     }
 
     // Add the library search path for Rust to find during linking.
@@ -62,20 +74,42 @@ fn main() {
     let mut builder = bindgen::Builder::default();
 
     if target_os == "android" {
-        let android_home = option_env!("ANDROID_HOME").expect("ANDROID_HOME not set");
-        let ndk_version = option_env!("NDK_VERSION").expect("NDK_VERSION not set");
-        let host_tag = option_env!("HOST_TAG").expect("HOST_TAG not set");
+        let android_abi = if env::var("CARGO_CFG_TARGET_ARCH").unwrap() == "arm" {
+            "armeabi-v7a"
+        } else {
+            "arm64-v8a"
+        };
 
         builder = builder
-        // Add the include path for headers.
-        .clang_args([
-            "-std=c++20",
-            "-xc++",
-            &format!("-I{}/build/include", dst.display()),
-            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/c++/v1", android_home, ndk_version, host_tag),
-            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include", android_home, ndk_version, host_tag),
-            &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/aarch64-linux-android", android_home, ndk_version, host_tag)
-        ]);
+            // Add the include path for headers.
+            .clang_args([
+                "-std=c++20",
+                "-xc++",
+                &format!("-I{}/build/include", dst.display()),
+                &format!(
+                    "-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/c++/v1",
+                    env!("ANDROID_HOME"),
+                    env!("NDK_VERSION"),
+                    env!("HOST_TAG")
+                ),
+                &format!(
+                    "-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include",
+                    env!("ANDROID_HOME"),
+                    env!("NDK_VERSION"),
+                    env!("HOST_TAG")
+                ),
+                &format!(
+                    "-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/{}",
+                    env!("ANDROID_HOME"),
+                    env!("NDK_VERSION"),
+                    env!("HOST_TAG"),
+                    if android_abi == "armeabi-v7a" {
+                        "arm-linux-androideabi"
+                    } else {
+                        "aarch64-linux-android"
+                    }
+                ),
+            ]);
     } else if target_os == "ios" {
         builder = builder
         // Add the include path for headers.
@@ -98,12 +132,12 @@ fn main() {
             ]);
     } else {
         builder = builder
-        // Add the include path for headers.
-        .clang_args([
-            "-std=c++20",
-            "-xc++",
-            &format!("-I{}/build/include", dst.display())
-        ]);
+            // Add the include path for headers.
+            .clang_args([
+                "-std=c++20",
+                "-xc++",
+                &format!("-I{}/build/include", dst.display()),
+            ]);
     }
 
     let bindings = builder

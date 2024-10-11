@@ -14,11 +14,16 @@ fn main() {
     let dst;
     // iOS
     if target_os == "ios" {
+        // let deployment_target = if target_arch == "aarch64" {
+        //     "18.0" // iOS simulator minimum version
+        // } else {
+        //     "14.0" // iOS device minimum version
+        // };
         dst = Config::new("../cpp")
             .generator("Ninja")
             .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
             .configure_arg("-DPLATFORM=OS64")
-            .configure_arg("-DDEPLOYMENT_TARGET=14.0")
+            .configure_arg(&format!("-DDEPLOYMENT_TARGET={}", "18.0"))
             .configure_arg("--toolchain=../cpp/ios.toolchain.cmake")
             .build_target("bb")
             .build();

@@ -1,8 +1,8 @@
 [package]
 name = "bb_rs"
-version = "0.55.0"
+version = "0.56.0"
 edition = "2021"
-authors = ["Bartosz Nowak"]
+authors = ["Bartosz Nowak", "Théo Madzou"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

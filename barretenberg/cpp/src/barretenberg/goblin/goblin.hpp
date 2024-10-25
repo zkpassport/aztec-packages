@@ -171,17 +171,17 @@ class GoblinProver {
     void prove_eccvm()
     {
         {
-            ZoneScopedN("Create ECCVMBuilder and ECCVMProver");
+            //ZoneScopedN("Create ECCVMBuilder and ECCVMProver");
             auto eccvm_builder = std::make_unique<ECCVMBuilder>(op_queue);
             eccvm_prover = std::make_unique<ECCVMProver>(*eccvm_builder);
         }
         {
-            ZoneScopedN("Construct ECCVM Proof");
+            //ZoneScopedN("Construct ECCVM Proof");
             goblin_proof.eccvm_proof = eccvm_prover->construct_proof();
         }
 
         {
-            ZoneScopedN("Assign Translation Evaluations");
+            //ZoneScopedN("Assign Translation Evaluations");
             goblin_proof.translation_evaluations = eccvm_prover->translation_evaluations;
         }
     }
@@ -198,14 +198,14 @@ class GoblinProver {
         eccvm_key = eccvm_prover->key;
         eccvm_prover = nullptr;
         {
-            ZoneScopedN("Create TranslatorBuilder and TranslatorProver");
+            //ZoneScopedN("Create TranslatorBuilder and TranslatorProver");
             auto translator_builder =
                 std::make_unique<TranslatorBuilder>(translation_batching_challenge_v, evaluation_challenge_x, op_queue);
             translator_prover = std::make_unique<TranslatorProver>(*translator_builder, transcript);
         }
 
         {
-            ZoneScopedN("Construct Translator Proof");
+            //ZoneScopedN("Construct Translator Proof");
             goblin_proof.translator_proof = translator_prover->construct_proof();
         }
     }

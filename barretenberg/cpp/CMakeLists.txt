@@ -31,7 +31,7 @@ option(DISABLE_AZTEC_VM "Don't build Aztec VM (acceptable if iterating on core p
 option(MULTITHREADING "Enable multi-threading" ON)
 option(OMP_MULTITHREADING "Enable OMP multi-threading" OFF)
 option(FUZZING "Build ONLY fuzzing harnesses" OFF)
-option(DISABLE_TBB "Intel Thread Building Blocks" ON)
+option(DISABLE_TBB "Intel Thread Building Blocks" OFF)
 option(COVERAGE "Enable collecting coverage from tests" OFF)
 option(ENABLE_ASAN "Address sanitizer for debugging tricky memory corruption" OFF)
 option(ENABLE_HEAVY_TESTS "Enable heavy tests when collecting coverage" OFF)
@@ -191,3 +191,20 @@ if (ENABLE_ASAN AND NOT(FUZZING))
         message(AUTHOR_WARNING "Run `export ASAN_SYMBOLIZER_PATH=\"${LLVM_SYMBOLIZER_PATH}\"` before running tests for better ASAN output (at which lines the bugs are).")
     endif()
 endif()
+
+# Get all the .h and .hpp files recursively from the src directory
+file(GLOB_RECURSE HEADER_FILES ./*.h ./*.hpp ./*tcc)
+
+message(STATUS "HEADER_FILES: ${HEADER_FILES}")
+
+# Remove the prefix from each file path
+foreach(HEADER ${HEADER_FILES})
+    # Get the relative path of the header file to the src directory
+    file(RELATIVE_PATH HEADER_RELATIVE_PATH ${CMAKE_SOURCE_DIR}/src ${HEADER})
+    
+    # Compute the destination directory for the header
+    get_filename_component(DEST_DIR ${HEADER_RELATIVE_PATH} DIRECTORY)
+    
+    # Copy the file, preserving its directory structure in the destination
+    file(COPY ${HEADER} DESTINATION include/${DEST_DIR})
+endforeach()

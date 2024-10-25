@@ -12,6 +12,10 @@
 #include "barretenberg/srs/global_crs.hpp"
 #include <cstdint>
 #include <memory>
+#include <stdio.h>
+
+using namespace acir_format;
+using namespace bb;
 
 WASM_EXPORT void acir_get_circuit_sizes(
     uint8_t const* acir_vec, bool const* honk_recursion, uint32_t* exact, uint32_t* total, uint32_t* subgroup)
@@ -23,7 +27,7 @@ WASM_EXPORT void acir_get_circuit_sizes(
     auto num_extra_gates = builder.get_num_gates_added_to_ensure_nonzero_polynomials();
     auto total_with_extra_gates = builder.get_total_circuit_size() + num_extra_gates;
     *total = htonl((uint32_t)total_with_extra_gates);
-    *subgroup = htonl((uint32_t)builder.get_circuit_subgroup_size(builder.get_total_circuit_size()));
+    *subgroup = htonl((uint32_t)builder.get_circuit_subgroup_size(total_with_extra_gates));
 }
 
 WASM_EXPORT void acir_new_acir_composer(uint32_t const* size_hint, out_ptr out)
@@ -222,7 +226,7 @@ WASM_EXPORT void acir_verify_ultra_honk(uint8_t const* proof_buf, uint8_t const*
     using Verifier = UltraVerifier_<UltraFlavor>;
 
     auto proof = from_buffer<std::vector<bb::fr>>(from_buffer<std::vector<uint8_t>>(proof_buf));
-    auto verification_key = std::make_shared<VerificationKey>(from_buffer<VerificationKey>(vk_buf));
+    auto verification_key = std::make_shared<VerificationKey>(from_buffer<VerificationKey>(from_buffer<std::vector<uint8_t>>(vk_buf)));
     verification_key->pcs_verification_key = std::make_shared<VerifierCommitmentKey>();
 
     Verifier verifier{ verification_key };
@@ -256,5 +260,8 @@ WASM_EXPORT void acir_vk_as_fields_ultra_honk(uint8_t const* vk_buf, fr::vec_out
 
     auto verification_key = std::make_shared<VerificationKey>(from_buffer<VerificationKey>(vk_buf));
     std::vector<bb::fr> vkey_as_fields = verification_key->to_field_elements();
+    bb::fr vk_hash = verification_key->hash();
+    // We add the hash to the end of the vector
+    vkey_as_fields.push_back(vk_hash);
     *out_vkey = to_heap_buffer(vkey_as_fields);
 }

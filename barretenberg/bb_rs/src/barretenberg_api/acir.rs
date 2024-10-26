@@ -4,7 +4,6 @@ use std::fmt::Write;
 
 #[derive(Debug)]
 pub struct CircuitSizes {
-    pub exact: u32,
     pub total: u32,
     pub subgroup: u32,
 }
@@ -30,18 +29,15 @@ fn from_buffer_to_fields(buffer: &[u8], size_in_bytes: u32, offset: u32) -> Vec<
 }
 
 pub unsafe fn get_circuit_sizes(constraint_system_buf: &[u8], honk_recursion: bool) -> CircuitSizes {
-    let mut exact = 0;
     let mut total = 0;
     let mut subgroup = 0;
     bindgen::acir_get_circuit_sizes(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
         &honk_recursion,
-        &mut exact,
         &mut total,
         &mut subgroup,
     );
     CircuitSizes {
-        exact: exact.to_be(),
         total: total.to_be(),
         subgroup: subgroup.to_be(),
     }

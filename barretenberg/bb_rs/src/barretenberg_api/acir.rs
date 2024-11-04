@@ -1,6 +1,7 @@
 use super::{bindgen, models::Ptr, traits::SerializeBuffer, Buffer};
 use std::ptr;
 use std::fmt::Write;
+use num_bigint::BigUint;
 
 #[derive(Debug)]
 pub struct CircuitSizes {
@@ -9,24 +10,38 @@ pub struct CircuitSizes {
     pub subgroup: u32,
 }
 
-fn from_buffer_to_fields(buffer: &[u8], size_in_bytes: u32, offset: u32) -> Vec<String> {
-    let mut result = Vec::new();
+fn pack_proof_into_biguints(vec_u8: &[u8]) -> Vec<BigUint> {
+    // We skip the first 4 bytes and then we process the rest in chunks of 32 bytes
+    vec_u8[4..].chunks(32).map(|chunk| BigUint::from_bytes_be(chunk)).collect()
+}
 
-    // Process the buffer in chunks of {size_in_bytes} bytes
-    for chunk in buffer[offset as usize..].chunks(size_in_bytes as usize) {
-         // Pre-allocate space for {size_in_bytes} bytes ({size_in_bytes} * 2 hex chars)
-        let mut hex_string = String::with_capacity((size_in_bytes * 2) as usize);
+fn pack_vk_into_biguints(vec_u8: &[u8]) -> Vec<BigUint> {
+    // We skip the first 97 bytes and then we process the rest in chunks of 32 bytes
+    let mut biguints: Vec<BigUint> = Vec::new();
+    // First 8 bytes are the circuit size
+    biguints.push(BigUint::from_bytes_be(&vec_u8[0..8]));
+    // The 8 bytes after the circuit size are ignored
+    // Next 8 bytes are the number of public inputs
+    biguints.push(BigUint::from_bytes_be(&vec_u8[16..24]));
+    // Next 8 bytes are the public inputs offset
+    biguints.push(BigUint::from_bytes_be(&vec_u8[24..32]));
+    // What is this byte?
+    biguints.push(BigUint::from(vec_u8[32]));
+    // Another 16 bytes going from 1 to 16?
+    biguints.extend(vec_u8[33..97].chunks(4).map(|chunk| BigUint::from_bytes_be(chunk)));
+    // Then the actual vkey
+    biguints.extend(vec_u8[97..].chunks(32)
+    .flat_map(|chunk| {
+        let mut biguints = Vec::new();
+        biguints.push(BigUint::from_bytes_be(&chunk[15..32]));
+        biguints.push(BigUint::from_bytes_be(&chunk[0..15]));
+        biguints.into_iter()
+    }));
+    biguints
+}
 
-        // Convert each chunk to a hexadecimal string
-        for &byte in chunk.iter() {
-            write!(&mut hex_string, "{:02x}", byte).expect("Unable to write to string");
-        }
-
-        // Prefix each field with "0x" and push it to the final Vector
-        result.push(format!("0x{}", hex_string));
-    }
-
-    result
+fn from_biguints_to_hex_strings(biguints: &[BigUint]) -> Vec<String> {
+    biguints.iter().map(|biguint| format!("0x{:064x}", biguint)).collect()
 }
 
 pub unsafe fn get_circuit_sizes(constraint_system_buf: &[u8], honk_recursion: bool) -> CircuitSizes {
@@ -217,29 +232,18 @@ pub unsafe fn acir_serialize_verification_key_into_fields(
 }
 
 pub unsafe fn acir_proof_as_fields_ultra_honk(proof_buf: &[u8]) -> Vec<String> {
-    // NOTE: the output will be the same as the input, but this will fail if the input is not a well formatted proof
-    // so you can see this as a validation function for the format of the proof
-    let mut out_ptr = ptr::null_mut();
-    bindgen::acir_proof_as_fields_ultra_honk(
-        proof_buf.to_buffer().as_ptr(),
-        &mut out_ptr,
+    from_biguints_to_hex_strings(&pack_proof_into_biguints(&proof_buf))
+}
+
+pub unsafe fn acir_get_vk_hash_ultra_honk(vk_buf: &[u8]) -> String {
+    let mut result = [0; 32];
+    bindgen::acir_get_vk_hash_ultra_honk(
+        vk_buf.to_buffer().as_ptr(),
+        result.as_mut_ptr(),
     );
-    // We remove the first 4 bytes and keep the rest
-    // The first 3 fields are the circuit size, the number of public inputs (+ 16 for recursive proofs)
-    // and the offset of the public inputs. Then the public inputs and the rest is the actual proof
-    from_buffer_to_fields(&Buffer::from_ptr(out_ptr).unwrap().to_vec(), 32, 4)
+    format!("0x{}", result.iter().map(|b| format!("{:02x}", b)).collect::<String>())
 }
 
 pub unsafe fn acir_vk_as_fields_ultra_honk(vk_buf: &[u8]) -> (Vec<String>, String) {
-    let mut out_ptr = ptr::null_mut();
-    bindgen::acir_vk_as_fields_ultra_honk(
-        vk_buf.to_buffer().as_ptr(),
-        &mut out_ptr,
-    );
-    // We remove the first 4 bytes and the 3 first fields
-    // As for the proof the 3 first fields are the circuit size, the number of public inputs and the offset of the public inputs
-    // But for some reason the values are not correct for the verification key so we remove them, so we can add them later from the proof
-    let vk: Vec<String> = from_buffer_to_fields(&Buffer::from_ptr(out_ptr).unwrap().to_vec(), 32, 100);
-    let key_hash = vk[vk.len()-1].clone();
-    (vk[0..vk.len()-1].to_vec(), key_hash)
+    (from_biguints_to_hex_strings(&pack_vk_into_biguints(&vk_buf)), acir_get_vk_hash_ultra_honk(&vk_buf))
 }

@@ -265,3 +265,12 @@ WASM_EXPORT void acir_vk_as_fields_ultra_honk(uint8_t const* vk_buf, fr::vec_out
     vkey_as_fields.push_back(vk_hash);
     *out_vkey = to_heap_buffer(vkey_as_fields);
 }
+
+WASM_EXPORT void acir_get_vk_hash_ultra_honk(uint8_t const* vk_buf, fr::out_buf out_hash)
+{
+    using VerificationKey = UltraFlavor::VerificationKey;
+
+    auto verification_key = std::make_shared<VerificationKey>(from_buffer<VerificationKey>(vk_buf));
+    bb::fr vk_hash = verification_key->hash();
+    write(out_hash, vk_hash);
+}

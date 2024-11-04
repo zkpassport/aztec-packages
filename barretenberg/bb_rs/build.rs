@@ -36,7 +36,7 @@ fn main() {
         .configure_arg(&format!("--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake", android_home, ndk_version))
         .build_target("bb")
         .build();
-    } 
+    }
     // MacOS and other platforms
     else {
         dst = Config::new("../cpp")
@@ -163,6 +163,7 @@ fn main() {
         .allowlist_function("acir_prove_and_verify_ultra_honk")
         .allowlist_function("acir_proof_as_fields_ultra_honk")
         .allowlist_function("acir_vk_as_fields_ultra_honk")
+        .allowlist_function("acir_get_vk_hash_ultra_honk")
         // Tell cargo to invalidate the built crate whenever any of the included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         // Finish the builder and generate the bindings.

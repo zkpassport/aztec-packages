@@ -18,7 +18,7 @@ fn main() {
             .generator("Ninja")
             .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
             .configure_arg("-DPLATFORM=OS64")
-            .configure_arg("-DDEPLOYMENT_TARGET=14.0")
+            .configure_arg("-DDEPLOYMENT_TARGET=15.0")
             .configure_arg("--toolchain=../cpp/ios.toolchain.cmake")
             .build_target("bb")
             .build();

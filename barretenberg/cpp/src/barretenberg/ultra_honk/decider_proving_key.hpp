@@ -209,7 +209,7 @@ template <IsUltraFlavor Flavor> class DeciderProvingKey_ {
                     }
                 }
                 {
-                    ZoneScopedN("allocating lookup read counts and tags");
+                    //ZoneScopedN("allocating lookup read counts and tags");
                     // Allocate the read counts and tags polynomials
                     proving_key.polynomials.lookup_read_counts =
                         Polynomial(max_tables_size, dyadic_circuit_size, table_offset);
@@ -217,7 +217,7 @@ template <IsUltraFlavor Flavor> class DeciderProvingKey_ {
                         Polynomial(max_tables_size, dyadic_circuit_size, table_offset);
                 }
                 {
-                    ZoneScopedN("allocating lookup and databus inverses");
+                    //ZoneScopedN("allocating lookup and databus inverses");
                     // Allocate the lookup_inverses polynomial
                     const size_t lookup_offset = static_cast<size_t>(circuit.blocks.lookup.trace_offset);
                     // TODO(https://github.com/AztecProtocol/barretenberg/issues/1033): construct tables and counts

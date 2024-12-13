@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <unistd.h>
+#include <thread>
 
 #pragma GCC diagnostic ignored "-Wunused-result" // GCC13 hits this
 
@@ -97,7 +98,11 @@ template <typename T, typename... Args> void write_benchmark(const std::string& 
         << "\"eventName\": \"" << name << "\", "
         << "\"type\": \"" << TypeTraits<T>::type << "\", "
         << "\"value\": " << value << ", "
+#if defined(__APPLE__) || defined(__ANDROID__) || defined(ANDROID)
+        << "\"threads\": " << std::thread::hardware_concurrency();
+#else
         << "\"threads\": " << env_hardware_concurrency();
+#endif
 
     appendToStream(oss, args...); // unpack and append the key-value pairs
 

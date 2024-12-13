@@ -6,10 +6,16 @@ cd "$(dirname "$0")"
 
 CMD=${1:-}
 
+OS=linux
+
 if [ -n "$CMD" ]; then
   if [ "$CMD" = "clean" ]; then
     git clean -ffdx
     exit 0
+  elif [ "$CMD" = "ios" ]; then
+    OS=ios
+  elif [ "$CMD" = "android" ]; then
+    OS=android
   else
     echo "Unknown command: $CMD"
     exit 1
@@ -17,15 +23,17 @@ if [ -n "$CMD" ]; then
 fi
 
 # Determine system.
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  OS=macos
-elif [[ "$OSTYPE" == "linux-gnu" ]]; then
-  OS=linux
-elif [[ "$OSTYPE" == "linux-musl" ]]; then
-  OS=linux
-else
-  echo "Unknown OS: $OSTYPE"
-  exit 1
+if [ "$OS" != "ios" ] && [ "$OS" != "android" ]; then
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    OS=macos
+  elif [[ "$OSTYPE" == "linux-gnu" ]]; then
+    OS=linux
+  elif [[ "$OSTYPE" == "linux-musl" ]]; then
+    OS=linux
+  else
+    echo "Unknown OS: $OSTYPE"
+    exit 1
+  fi
 fi
 
 # Download ignition transcripts.
@@ -38,6 +46,10 @@ fi
 ARCH=$(uname -m)
 if [ "$OS" == "macos" ]; then
   PRESET=default
+elif [ "$OS" == "ios" ]; then
+  PRESET=ios
+elif [ "$OS" == "android" ]; then
+  PRESET=android
 else
   if [ "$(which clang++-16)" != "" ]; then
     PRESET=clang16
@@ -49,7 +61,7 @@ fi
 PIC_PRESET="$PRESET-pic"
 
 # Remove cmake cache files.
-rm -f {build,build-wasm,build-wasm-threads}/CMakeCache.txt
+rm -f {build,build-wasm,build-wasm-threads,build-ios,build-android}/CMakeCache.txt
 
 (cd src/barretenberg/world_state_napi && yarn --frozen-lockfile --prefer-offline)
 

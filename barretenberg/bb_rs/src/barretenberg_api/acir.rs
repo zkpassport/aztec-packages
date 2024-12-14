@@ -46,7 +46,7 @@ fn from_biguints_to_hex_strings(biguints: &[BigUint]) -> Vec<String> {
 pub unsafe fn get_circuit_sizes(constraint_system_buf: &[u8], recursive: bool) -> CircuitSizes {
     let mut total = 0;
     let mut subgroup = 0;
-    let honk_recursion = false;
+    let honk_recursion = recursive;
     bindgen::acir_get_circuit_sizes(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
         &recursive,

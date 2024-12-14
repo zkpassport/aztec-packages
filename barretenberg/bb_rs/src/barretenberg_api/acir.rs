@@ -43,10 +43,10 @@ fn from_biguints_to_hex_strings(biguints: &[BigUint]) -> Vec<String> {
     biguints.iter().map(|biguint| format!("0x{:064x}", biguint)).collect()
 }
 
-pub unsafe fn get_circuit_sizes(constraint_system_buf: &[u8], honk_recursion: bool) -> CircuitSizes {
+pub unsafe fn get_circuit_sizes(constraint_system_buf: &[u8], recursive: bool) -> CircuitSizes {
     let mut total = 0;
     let mut subgroup = 0;
-    let recursive = false;
+    let honk_recursion = false;
     bindgen::acir_get_circuit_sizes(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
         &recursive,
@@ -70,8 +70,7 @@ pub unsafe fn delete_acir_composer(acir_composer_ptr: Ptr) {
     bindgen::acir_delete_acir_composer(&acir_composer_ptr);
 }
 
-pub unsafe fn acir_init_proving_key(acir_composer_ptr: &mut Ptr, constraint_system_buf: &[u8]) {
-    let recursive = false;
+pub unsafe fn acir_init_proving_key(acir_composer_ptr: &mut Ptr, constraint_system_buf: &[u8], recursive: bool) {
     bindgen::acir_init_proving_key(
         acir_composer_ptr,
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
@@ -83,8 +82,8 @@ pub unsafe fn acir_create_proof(
     acir_composer_ptr: &mut Ptr,
     constraint_system_buf: &[u8],
     witness_buf: &[u8],
+    recursive: bool,
 ) -> Vec<u8> {
-    let recursive = false;
     let mut out_ptr = ptr::null_mut();
     bindgen::acir_create_proof(
         acir_composer_ptr,
@@ -107,8 +106,8 @@ pub unsafe fn acir_create_proof(
 pub unsafe fn acir_prove_ultra_honk(
     constraint_system_buf: &[u8],
     witness_buf: &[u8],
+    recursive: bool,
 ) -> Vec<u8> {
-    let recursive = false;
     let mut out_ptr = ptr::null_mut();
     bindgen::acir_prove_ultra_honk(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
@@ -150,9 +149,8 @@ pub unsafe fn acir_get_verification_key(acir_composer_ptr: &mut Ptr) -> Vec<u8> 
     .to_vec()
 }
 
-pub unsafe fn acir_get_honk_verification_key(constraint_system_buf: &[u8]) -> Vec<u8> {
+pub unsafe fn acir_get_honk_verification_key(constraint_system_buf: &[u8], recursive: bool) -> Vec<u8> {
     let mut out_ptr = ptr::null_mut();
-    let recursive = false;
     bindgen::acir_write_vk_ultra_honk(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
         &recursive,
@@ -169,9 +167,8 @@ pub unsafe fn acir_get_honk_verification_key(constraint_system_buf: &[u8]) -> Ve
     .to_vec()
 }
 
-pub unsafe fn acir_get_proving_key(acir_composer_ptr: &mut Ptr, acir_vec: &[u8]) -> Vec<u8> {
+pub unsafe fn acir_get_proving_key(acir_composer_ptr: &mut Ptr, acir_vec: &[u8], recursive: bool) -> Vec<u8> {
     let mut out_ptr = ptr::null_mut();
-    let recursive = false;
     bindgen::acir_get_proving_key(
         acir_composer_ptr,
         acir_vec.to_buffer().as_slice().as_ptr(),
@@ -201,9 +198,8 @@ pub unsafe fn acir_verify_ultra_honk(proof_buf: &[u8], vkey_buf: &[u8]) -> bool 
     result
 }
 
-pub unsafe fn acir_prove_and_verify_ultra_honk(constraint_system_buf: &[u8], witness_buf: &[u8]) -> bool {
+pub unsafe fn acir_prove_and_verify_ultra_honk(constraint_system_buf: &[u8], witness_buf: &[u8], recursive: bool) -> bool {
     let mut result = false;
-    let recursive = false;
     bindgen::acir_prove_and_verify_ultra_honk(
         constraint_system_buf.to_buffer().as_ptr(),
         &recursive,

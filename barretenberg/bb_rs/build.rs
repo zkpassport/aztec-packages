@@ -1,6 +1,7 @@
 use cmake::Config;
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn main() {
     // Notify Cargo to rerun this build script if `build.rs` changes.
@@ -59,6 +60,10 @@ fn main() {
     } else {
         println!("cargo:rustc-link-lib=stdc++");
     }
+
+    // Copy the headers to the build directory.
+    // Fix an issue where the headers are not included in the build.
+    Command::new("sh").args(&["copy-headers.sh", &format!("{}/build/include", dst.display())]).output().unwrap();
 
     let mut builder = bindgen::Builder::default();
 

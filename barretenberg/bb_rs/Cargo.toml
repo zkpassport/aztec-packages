@@ -13,5 +13,5 @@ tracing-subscriber = "0.3"
 num-bigint = "0.4"
 
 [build-dependencies]
-bindgen = "0.69.4"
+bindgen = "0.71.1"
 cmake = "0.1.50"

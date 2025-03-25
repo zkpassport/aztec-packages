@@ -241,15 +241,6 @@ pub unsafe fn acir_proof_as_fields_ultra_honk(proof_buf: &[u8]) -> Vec<String> {
     from_biguints_to_hex_strings(&pack_proof_into_biguints(&proof_buf))
 }
 
-pub unsafe fn acir_get_vk_hash_ultra_honk(vk_buf: &[u8]) -> String {
-    let mut result = [0; 32];
-    bindgen::acir_get_vk_hash_ultra_honk(
-        vk_buf.to_buffer().as_ptr(),
-        result.as_mut_ptr(),
-    );
-    format!("0x{}", result.iter().map(|b| format!("{:02x}", b)).collect::<String>())
-}
-
-pub unsafe fn acir_vk_as_fields_ultra_honk(vk_buf: &[u8]) -> (Vec<String>, String) {
-    (from_biguints_to_hex_strings(&pack_vk_into_biguints(&vk_buf)), acir_get_vk_hash_ultra_honk(&vk_buf))
+pub unsafe fn acir_vk_as_fields_ultra_honk(vk_buf: &[u8]) -> Vec<String> {
+    from_biguints_to_hex_strings(&pack_vk_into_biguints(&vk_buf))
 }

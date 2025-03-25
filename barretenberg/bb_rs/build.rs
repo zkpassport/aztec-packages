@@ -16,7 +16,7 @@ fn main() {
     if target_os == "ios" {
         dst = Config::new("../cpp")
             .generator("Ninja")
-            .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
+            .configure_arg("-DCMAKE_BUILD_TYPE=Release")
             .configure_arg("-DPLATFORM=OS64")
             .configure_arg("-DDEPLOYMENT_TARGET=15.0")
             .configure_arg("--toolchain=../cpp/ios.toolchain.cmake")
@@ -30,7 +30,7 @@ fn main() {
 
         dst = Config::new("../cpp")
         .generator("Ninja")
-        .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
+        .configure_arg("-DCMAKE_BUILD_TYPE=Release")
         .configure_arg("-DANDROID_ABI=arm64-v8a")
         .configure_arg("-DANDROID_PLATFORM=android-33")
         .configure_arg(&format!("--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake", android_home, ndk_version))
@@ -41,7 +41,8 @@ fn main() {
     else {
         dst = Config::new("../cpp")
         .generator("Ninja")
-        .configure_arg("-DCMAKE_BUILD_TYPE=RelWithAssert")
+        .configure_arg("-DCMAKE_BUILD_TYPE=Release")            
+        .configure_arg("-DTRACY_ENABLE=OFF")
         .build_target("bb")
         .build();
     }
@@ -162,7 +163,6 @@ fn main() {
         .allowlist_function("acir_write_vk_ultra_honk")
         .allowlist_function("acir_prove_and_verify_ultra_honk")
         .allowlist_function("acir_proof_as_fields_ultra_honk")
-        .allowlist_function("acir_get_vk_hash_ultra_honk")
         // Tell cargo to invalidate the built crate whenever any of the included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         // Finish the builder and generate the bindings.

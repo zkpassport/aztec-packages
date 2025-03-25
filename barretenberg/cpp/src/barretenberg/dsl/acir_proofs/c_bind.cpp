@@ -14,6 +14,10 @@
 #include "honk_contract.hpp"
 #include <cstdint>
 #include <memory>
+#include <stdio.h>
+
+using namespace acir_format;
+using namespace bb;
 
 WASM_EXPORT void acir_get_circuit_sizes(
     uint8_t const* acir_vec, bool const* recursive, bool const* honk_recursion, uint32_t* total, uint32_t* subgroup)
@@ -357,7 +361,7 @@ WASM_EXPORT void acir_verify_ultra_honk(uint8_t const* proof_buf, uint8_t const*
     using Verifier = UltraVerifier_<UltraFlavor>;
 
     auto proof = from_buffer<std::vector<bb::fr>>(from_buffer<std::vector<uint8_t>>(proof_buf));
-    auto verification_key = std::make_shared<VerificationKey>(from_buffer<VerificationKey>(vk_buf));
+    auto verification_key = std::make_shared<VerificationKey>(from_buffer<VerificationKey>(from_buffer<std::vector<uint8_t>>(vk_buf)));
     verification_key->pcs_verification_key = std::make_shared<VerifierCommitmentKey>();
 
     Verifier verifier{ verification_key };

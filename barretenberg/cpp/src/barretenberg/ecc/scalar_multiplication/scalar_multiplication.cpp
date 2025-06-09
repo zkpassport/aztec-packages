@@ -468,7 +468,7 @@ void evaluate_addition_chains(affine_product_runtime_state<Curve>& state,
                               const size_t max_bucket_bits,
                               bool handle_edge_cases)
 {
-    ZoneScoped; /* tracy profile */
+    //ZoneScoped; /* tracy profile */
 
     size_t end = state.num_points;
     size_t start = 0;
@@ -507,7 +507,7 @@ typename Curve::AffineElement* reduce_buckets(affine_product_runtime_state<Curve
                                               bool first_round,
                                               bool handle_edge_cases)
 {
-    ZoneScoped; /* tracy profile */
+    //ZoneScoped; /* tracy profile */
 
     // std::chrono::steady_clock::time_point time_start = std::chrono::steady_clock::now();
     // This method sorts our points into our required base-2 sequences.
@@ -587,7 +587,7 @@ typename Curve::AffineElement* reduce_buckets(affine_product_runtime_state<Curve
 template <typename Curve>
 uint32_t construct_addition_chains(affine_product_runtime_state<Curve>& state, bool empty_bucket_counts)
 {
-    ZoneScoped; /* tracy profile */
+    //ZoneScoped; /* tracy profile */
 
     using Group = typename Curve::Group;
     // if this is the first call to `construct_addition_chains`, we need to count up our buckets

@@ -21,6 +21,7 @@ fn main() {
             .configure_arg("-DPLATFORM=OS64")
             .configure_arg("-DDEPLOYMENT_TARGET=15.0")
             .configure_arg("--toolchain=../cpp/ios.toolchain.cmake")
+            .configure_arg("-DTRACY_ENABLE=OFF")
             .build_target("bb")
             .build();
     }
@@ -35,6 +36,7 @@ fn main() {
         .configure_arg("-DANDROID_ABI=arm64-v8a")
         .configure_arg("-DANDROID_PLATFORM=android-33")
         .configure_arg(&format!("--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake", android_home, ndk_version))
+        .configure_arg("-DTRACY_ENABLE=OFF")
         .build_target("bb")
         .build();
     }
@@ -78,6 +80,8 @@ fn main() {
             "-std=c++20",
             "-xc++",
             &format!("-I{}/build/include", dst.display()),
+            // Dependencies' include paths needs to be added manually.
+            &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
             &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/c++/v1", android_home, ndk_version, host_tag),
             &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include", android_home, ndk_version, host_tag),
             &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/aarch64-linux-android", android_home, ndk_version, host_tag)
@@ -89,6 +93,8 @@ fn main() {
             "-std=c++20",
             "-xc++",
             &format!("-I{}/build/include", dst.display()),
+            // Dependencies' include paths needs to be added manually.
+            &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
             "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include/c++/v1",
             "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include"
         ]);
@@ -99,6 +105,8 @@ fn main() {
                 "-std=c++20",
                 "-xc++",
                 &format!("-I{}/build/include", dst.display()),
+                // Dependencies' include paths needs to be added manually.
+                &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
                 "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1",
                 "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include",
             ]);
@@ -108,7 +116,9 @@ fn main() {
         .clang_args([
             "-std=c++20",
             "-xc++",
-            &format!("-I{}/build/include", dst.display())
+            &format!("-I{}/build/include", dst.display()),
+            // Dependencies' include paths needs to be added manually.
+            &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
         ]);
     }
 
@@ -123,7 +133,6 @@ fn main() {
                 #include <barretenberg/crypto/blake2s/c_bind.hpp>
                 #include <barretenberg/crypto/schnorr/c_bind.hpp>
                 #include <barretenberg/srs/c_bind.hpp>
-                #include <barretenberg/examples/simple/c_bind.hpp>
                 #include <barretenberg/common/c_bind.hpp>
                 #include <barretenberg/dsl/acir_proofs/c_bind.hpp>
             "#,
@@ -132,8 +141,8 @@ fn main() {
         .allowlist_function("pedersen_hash")
         .allowlist_function("pedersen_hashes")
         .allowlist_function("pedersen_hash_buffer")
-        .allowlist_function("poseidon_hash")
-        .allowlist_function("poseidon_hashes")
+        .allowlist_function("poseidon2_hash")
+        .allowlist_function("poseidon2_hashes")
         .allowlist_function("blake2s")
         .allowlist_function("blake2s_to_field_")
         .allowlist_function("schnorr_construct_signature")
@@ -147,14 +156,9 @@ fn main() {
         .allowlist_function("aes_decrypt_buffer_cbc")
         .allowlist_function("srs_init_srs")
         .allowlist_function("srs_init_grumpkin_srs")
-        .allowlist_function("examples_simple_create_and_verify_proof")
         .allowlist_function("test_threads")
         .allowlist_function("common_init_slab_allocator")
         .allowlist_function("acir_get_circuit_sizes")
-        .allowlist_function("acir_new_acir_composer")
-        .allowlist_function("acir_delete_acir_composer")
-        .allowlist_function("acir_init_proving_key")
-        .allowlist_function("acir_create_proof")
         .allowlist_function("acir_load_verification_key")
         .allowlist_function("acir_init_verification_key")
         .allowlist_function("acir_get_verification_key")

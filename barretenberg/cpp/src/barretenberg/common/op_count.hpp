@@ -2,7 +2,9 @@
 #pragma once
 
 #include <memory>
+#if defined TRACY_INSTRUMENTED
 #include <tracy/Tracy.hpp>
+#endif
 
 #ifdef BB_USE_OP_COUNT_TIME_ONLY
 #define PROFILE_THIS() BB_OP_COUNT_TIME_NAME(__func__)

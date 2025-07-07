@@ -42,7 +42,7 @@ static std::set<size_t> FREED_GATES; // hack to prevent instrumentation failures
 
 #define pad(size, alignment) (size - (size % alignment) + ((size % alignment) == 0 ? 0 : alignment))
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(ANDROID) || defined(__ANDROID__)
 inline void* aligned_alloc(size_t alignment, size_t size)
 {
     void* t = 0;

@@ -112,8 +112,14 @@ fn main() {
     // Add the library search path for Rust to find during linking.
     println!("cargo:rustc-link-search={}/build/lib", dst.display());
 
+    // Add the library search path for libdeflate
+    println!("cargo:rustc-link-search={}/build/_deps/libdeflate-build", dst.display());
+
     // Link the `barretenberg` static library.
     println!("cargo:rustc-link-lib=static=barretenberg");
+
+    // Link the `libdeflate` static library.
+    println!("cargo:rustc-link-lib=static=deflate");
 
     // Link the C++ standard library.
     if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
@@ -141,6 +147,7 @@ fn main() {
             &format!("-I{}/build/include", dst.display()),
             // Dependencies' include paths needs to be added manually.
             &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
+            //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
             &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/c++/v1", android_home, ndk_version, host_tag),
             &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include", android_home, ndk_version, host_tag),
             &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/aarch64-linux-android", android_home, ndk_version, host_tag)
@@ -154,6 +161,7 @@ fn main() {
             &format!("-I{}/build/include", dst.display()),
             // Dependencies' include paths needs to be added manually.
             &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
+            //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
             "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include/c++/v1",
             "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include"
         ]);
@@ -166,6 +174,7 @@ fn main() {
                 &format!("-I{}/build/include", dst.display()),
                 // Dependencies' include paths needs to be added manually.
                 &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
+                //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
                 "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1",
                 "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include",
             ]);
@@ -178,6 +187,7 @@ fn main() {
             &format!("-I{}/build/include", dst.display()),
             // Dependencies' include paths needs to be added manually.
             &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
+            //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
         ]);
     }
 

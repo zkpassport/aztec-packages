@@ -47,9 +47,9 @@ WASM_EXPORT void acir_prove_and_verify_ultra_honk(uint8_t const* acir_vec, uint8
 
     auto builder = acir_format::create_circuit<UltraCircuitBuilder>(program, metadata);
 
-    auto proving_key = std::make_shared<DeciderProvingKey_<UltraFlavor>>(builder);
-    auto verification_key = std::make_shared<UltraFlavor::VerificationKey>(proving_key->proving_key);
-    UltraProver prover{ proving_key, verification_key };
+    auto proving_key = std::make_shared<DeciderProvingKey_<UltraZKFlavor>>(builder);
+    auto verification_key = std::make_shared<UltraZKFlavor::VerificationKey>(proving_key->proving_key);
+    UltraProver_<UltraZKFlavor> prover{ proving_key, verification_key };
     auto proof = prover.construct_proof();
 
     UltraVerifier verifier{ verification_key };
@@ -125,18 +125,18 @@ WASM_EXPORT void acir_prove_ultra_honk(uint8_t const* acir_vec,
                                        uint8_t** out)
 {
     // Lambda function to ensure things get freed before proving.
-    UltraProver prover = [&] {
+    UltraProver_<UltraZKFlavor> prover = [&] {
         const acir_format::ProgramMetadata metadata{ .honk_recursion = 1 };
         acir_format::AcirProgram program{
             acir_format::circuit_buf_to_acir_format(from_buffer<std::vector<uint8_t>>(acir_vec)),
             acir_format::witness_buf_to_witness_data(from_buffer<std::vector<uint8_t>>(witness_vec))
         };
         auto builder = acir_format::create_circuit<UltraCircuitBuilder>(program, metadata);
-        auto proving_key = std::make_shared<DeciderProvingKey_<UltraFlavor>>(builder);
+        auto proving_key = std::make_shared<DeciderProvingKey_<UltraZKFlavor>>(builder);
         auto verification_key =
-            std::make_shared<UltraFlavor::VerificationKey>(from_buffer<UltraFlavor::VerificationKey>(vk_buf));
+            std::make_shared<UltraZKFlavor::VerificationKey>(from_buffer<UltraZKFlavor::VerificationKey>(vk_buf));
 
-        return UltraProver(proving_key, verification_key);
+        return UltraProver_<UltraZKFlavor>(proving_key, verification_key);
     }();
 
     auto proof = prover.construct_proof();
@@ -239,8 +239,8 @@ WASM_EXPORT void acir_prove_ultra_starknet_zk_honk([[maybe_unused]] uint8_t cons
 
 WASM_EXPORT void acir_verify_ultra_honk(uint8_t const* proof_buf, uint8_t const* vk_buf, bool* result)
 {
-    using VerificationKey = UltraFlavor::VerificationKey;
-    using Verifier = UltraVerifier_<UltraFlavor>;
+    using VerificationKey = UltraZKFlavor::VerificationKey;
+    using Verifier = UltraVerifier_<UltraZKFlavor>;
 
     auto proof = many_from_buffer<bb::fr>(from_buffer<std::vector<uint8_t>>(proof_buf));
     auto verification_key = std::make_shared<VerificationKey>(from_buffer<VerificationKey>(vk_buf));
@@ -316,8 +316,8 @@ WASM_EXPORT void acir_verify_ultra_starknet_zk_honk([[maybe_unused]] uint8_t con
 
 WASM_EXPORT void acir_write_vk_ultra_honk(uint8_t const* acir_vec, uint8_t** out)
 {
-    using DeciderProvingKey = DeciderProvingKey_<UltraFlavor>;
-    using VerificationKey = UltraFlavor::VerificationKey;
+    using DeciderProvingKey = DeciderProvingKey_<UltraZKFlavor>;
+    using VerificationKey = UltraZKFlavor::VerificationKey;
     // lambda to free the builder
     DeciderProvingKey proving_key = [&] {
         const acir_format::ProgramMetadata metadata{ .honk_recursion = 1 };
@@ -432,7 +432,7 @@ WASM_EXPORT void acir_proof_as_fields_ultra_honk(uint8_t const* proof_buf, fr::v
 
 WASM_EXPORT void acir_vk_as_fields_ultra_honk(uint8_t const* vk_buf, fr::vec_out_buf out_vkey)
 {
-    using VerificationKey = UltraFlavor::VerificationKey;
+    using VerificationKey = UltraZKFlavor::VerificationKey;
 
     auto verification_key = std::make_shared<VerificationKey>(from_buffer<VerificationKey>(vk_buf));
     std::vector<bb::fr> vkey_as_fields = verification_key->to_field_elements();

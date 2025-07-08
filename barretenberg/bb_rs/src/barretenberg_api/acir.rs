@@ -151,9 +151,43 @@ pub unsafe fn acir_get_verification_key(acir_composer_ptr: &mut Ptr) -> Vec<u8> 
     .to_vec()
 }
 
-pub unsafe fn acir_get_honk_verification_key(constraint_system_buf: &[u8]) -> Vec<u8> {
+pub unsafe fn acir_get_ultra_honk_verification_key(constraint_system_buf: &[u8]) -> Vec<u8> {
     let mut out_ptr = ptr::null_mut();
     bindgen::acir_write_vk_ultra_honk(
+        constraint_system_buf.to_buffer().as_slice().as_ptr(),
+        &mut out_ptr
+    );
+    Buffer::from_ptr(
+        Buffer::from_ptr(out_ptr)
+            .unwrap()
+            .to_vec()
+            .as_slice()
+            .as_ptr(),
+    )
+    .unwrap()
+    .to_vec()
+}
+
+pub unsafe fn acir_get_ultra_honk_keccak_verification_key(constraint_system_buf: &[u8]) -> Vec<u8> {
+    let mut out_ptr = ptr::null_mut();
+    bindgen::acir_write_vk_ultra_keccak_honk(
+        constraint_system_buf.to_buffer().as_slice().as_ptr(),
+        &mut out_ptr
+    );
+    Buffer::from_ptr(
+        Buffer::from_ptr(out_ptr)
+            .unwrap()
+            .to_vec()
+            .as_slice()
+            .as_ptr(),
+    )
+    .unwrap()
+    .to_vec()
+}
+
+pub unsafe fn acir_get_ultra_honk_keccak_zk_verification_key(constraint_system_buf: &[u8]) -> Vec<u8> {
+    let mut out_ptr = ptr::null_mut();
+    bindgen::acir_write_vk_ultra_keccak_zk_honk(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
         &mut out_ptr
     );

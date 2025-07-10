@@ -228,7 +228,6 @@ fn main() {
         .allowlist_function("test_threads")
         .allowlist_function("common_init_slab_allocator")
         .allowlist_function("acir_get_circuit_sizes")
-        .allowlist_function("acir_get_solidity_verifier")
         .allowlist_function("acir_serialize_proof_into_fields")
         .allowlist_function("acir_serialize_verification_key_into_fields")
         .allowlist_function("acir_prove_ultra_honk")
@@ -251,7 +250,6 @@ fn main() {
         //.allowlist_function("acir_write_vk_ultra_starknet_honk")
         //.allowlist_function("acir_write_vk_ultra_starknet_zk_honk")
         .allowlist_function("acir_prove_and_verify_ultra_honk")
-        .allowlist_function("acir_proof_as_fields_ultra_honk")
         // Tell cargo to invalidate the built crate whenever any of the included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         // Finish the builder and generate the bindings.

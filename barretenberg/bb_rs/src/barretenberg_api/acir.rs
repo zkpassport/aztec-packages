@@ -10,17 +10,18 @@ pub struct CircuitSizes {
 }
 
 fn pack_proof_into_biguints(vec_u8: &[u8]) -> Vec<BigUint> {
-    // We skip the first 4 bytes and then we process the rest in chunks of 32 bytes
-    vec_u8[4..].chunks(32).map(|chunk| BigUint::from_bytes_be(chunk)).collect()
+    // We process the vector in chunks of 32 bytes
+    vec_u8.chunks(32).map(|chunk| BigUint::from_bytes_be(chunk)).collect()
 }
 
-fn pack_vk_into_biguints(vec_u8: &[u8]) -> Vec<BigUint> {
+// TODO: Enable this once we know how to format the vk as fields
+/*fn pack_vk_into_biguints(vec_u8: &[u8]) -> Vec<BigUint> {
     // We skip the first 97 bytes and then we process the rest in chunks of 32 bytes
     let mut biguints: Vec<BigUint> = Vec::new();
-    // First 8 bytes are the circuit size
+    // First 8 bytes are the subgroup size
     biguints.push(BigUint::from_bytes_be(&vec_u8[0..8]));
-    // The 8 bytes after the circuit size are ignored
-    // Next 8 bytes are the number of public inputs
+    // The 8 bytes after the subgroup size are ignored
+    // Next 8 bytes are the number of public inputs (including the pairing inputs)
     biguints.push(BigUint::from_bytes_be(&vec_u8[16..24]));
     // Next 8 bytes are the public inputs offset
     biguints.push(BigUint::from_bytes_be(&vec_u8[24..32]));
@@ -37,7 +38,7 @@ fn pack_vk_into_biguints(vec_u8: &[u8]) -> Vec<BigUint> {
         biguints.into_iter()
     }));
     biguints
-}
+}*/
 
 fn from_biguints_to_hex_strings(biguints: &[BigUint]) -> Vec<String> {
     biguints.iter().map(|biguint| format!("0x{:064x}", biguint)).collect()
@@ -252,6 +253,6 @@ pub unsafe fn acir_proof_as_fields_ultra_honk(proof_buf: &[u8]) -> Vec<String> {
     from_biguints_to_hex_strings(&pack_proof_into_biguints(&proof_buf))
 }
 
-pub unsafe fn acir_vk_as_fields_ultra_honk(vk_buf: &[u8]) -> Vec<String> {
+/*pub unsafe fn acir_vk_as_fields_ultra_honk(vk_buf: &[u8]) -> Vec<String> {
     from_biguints_to_hex_strings(&pack_vk_into_biguints(&vk_buf))
-}
+}*/

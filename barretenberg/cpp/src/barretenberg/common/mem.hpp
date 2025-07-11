@@ -64,9 +64,8 @@ inline void aligned_free(void* mem)
 #endif
     free(mem);
 }
-#endif
 
-#if defined(__linux__) || defined(__wasm__)
+#elif defined(__linux__) || defined(__wasm__)
 inline void* protected_aligned_alloc(size_t alignment, size_t size)
 {
     size += (size % alignment);

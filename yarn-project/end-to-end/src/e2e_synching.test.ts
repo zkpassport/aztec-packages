@@ -45,7 +45,7 @@ import {
   createLogger,
   sleep,
 } from '@aztec/aztec.js';
-import { AnvilTestWatcher } from '@aztec/aztec.js/testing';
+import { AnvilTestWatcher } from '@aztec/aztec/testing';
 import { createBlobSinkClient } from '@aztec/blob-sink/client';
 import { EpochCache } from '@aztec/epoch-cache';
 import {
@@ -202,8 +202,8 @@ class TestVariant {
         this.contractAddresses.push(accountManager.getAddress());
         const tx = accountManager.deploy({
           deployWallet,
-          skipClassRegistration: true,
-          skipPublicDeployment: true,
+          skipClassPublication: true,
+          skipInstancePublication: true,
         });
         txs.push(tx);
       }

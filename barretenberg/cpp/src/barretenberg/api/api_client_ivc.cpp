@@ -60,10 +60,8 @@ void write_standalone_vk(const std::string& output_data_type,
 
     acir_format::AcirProgram program{ get_constraint_system(bytecode_path), /*witness=*/{} };
     std::shared_ptr<ClientIVC::DeciderProvingKey> proving_key = get_acir_program_decider_proving_key(program);
-    auto verification_key = std::make_shared<ClientIVC::MegaVerificationKey>(proving_key->proving_key);
-    PubInputsProofAndKey<ClientIVC::MegaVerificationKey> to_write{ PublicInputsVector{},
-                                                                   HonkProof{},
-                                                                   verification_key };
+    auto verification_key = std::make_shared<ClientIVC::MegaVerificationKey>(proving_key->get_precomputed());
+    PubInputsProofAndKey<ClientIVC::MegaVerificationKey> to_write{ .key = verification_key };
 
     write(to_write, output_data_type, "vk", output_path);
 }
@@ -82,7 +80,7 @@ void write_vk_for_ivc(const std::string& output_format,
     if (output_format != "bytes") {
         throw_or_abort("Unsupported output format for ClientIVC vk: " + output_format);
     }
-    ClientIVC ivc{ { AZTEC_TRACE_STRUCTURE } };
+    ClientIVC ivc{ /*num_circuits=*/2, { AZTEC_TRACE_STRUCTURE } };
     ClientIVCMockCircuitProducer circuit_producer;
 
     // Initialize the IVC with an arbitrary circuit
@@ -183,8 +181,7 @@ bool ClientIVCAPI::prove_and_verify(const std::filesystem::path& input_path)
     return verified;
 }
 
-void ClientIVCAPI::gates([[maybe_unused]] const Flags& flags,
-                         [[maybe_unused]] const std::filesystem::path& bytecode_path)
+void ClientIVCAPI::gates(const Flags& flags, const std::filesystem::path& bytecode_path)
 {
     gate_count_for_ivc(bytecode_path, flags.include_gates_per_opcode);
 }
@@ -209,7 +206,7 @@ bool ClientIVCAPI::check_precomputed_vks(const std::filesystem::path& input_path
             return false;
         }
         std::shared_ptr<ClientIVC::DeciderProvingKey> proving_key = get_acir_program_decider_proving_key(program);
-        auto computed_vk = std::make_shared<ClientIVC::MegaVerificationKey>(proving_key->proving_key);
+        auto computed_vk = std::make_shared<ClientIVC::MegaVerificationKey>(proving_key->get_precomputed());
         std::string error_message = "FAIL: Precomputed vk does not match computed vk for function " + function_name;
         if (!msgpack::msgpack_check_eq(*computed_vk, *precomputed_vk, error_message)) {
             return false;
@@ -299,11 +296,11 @@ void gate_count_for_ivc(const std::string& bytecode_path, bool include_gates_per
 void write_arbitrary_valid_client_ivc_proof_and_vk_to_file(const std::filesystem::path& output_dir)
 {
 
-    ClientIVC ivc{ { AZTEC_TRACE_STRUCTURE } };
+    const size_t NUM_CIRCUITS = 2;
+    ClientIVC ivc{ NUM_CIRCUITS, { AZTEC_TRACE_STRUCTURE } };
 
     // Construct and accumulate a series of mocked private function execution circuits
     PrivateFunctionExecutionMockCircuitProducer circuit_producer;
-    size_t NUM_CIRCUITS = 2;
     for (size_t idx = 0; idx < NUM_CIRCUITS; ++idx) {
         auto circuit = circuit_producer.create_next_circuit(ivc);
         ivc.accumulate(circuit);

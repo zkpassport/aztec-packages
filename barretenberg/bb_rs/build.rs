@@ -230,7 +230,7 @@ fn main() {
         .allowlist_function("acir_get_circuit_sizes")
         .allowlist_function("acir_serialize_proof_into_fields")
         .allowlist_function("acir_serialize_verification_key_into_fields")
-        .allowlist_function("acir_prove_ultra_honk")
+        .allowlist_function("acir_prove_ultra_zk_honk")
         .allowlist_function("acir_prove_ultra_keccak_honk")
         .allowlist_function("acir_prove_ultra_keccak_zk_honk")
         .allowlist_function("acir_prove_aztec_client")
@@ -238,7 +238,7 @@ fn main() {
         // for the build process.
         //.allowlist_function("acir_prove_ultra_starknet_honk")
         //.allowlist_function("acir_prove_ultra_starknet_zk_honk")
-        .allowlist_function("acir_verify_ultra_honk")
+        .allowlist_function("acir_verify_ultra_zk_honk")
         .allowlist_function("acir_verify_ultra_keccak_honk")
         .allowlist_function("acir_verify_ultra_keccak_zk_honk")
         .allowlist_function("acir_verify_aztec_client")

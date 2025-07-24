@@ -6,7 +6,9 @@ void* operator new(std::size_t count)
     // NOLINTBEGIN(cppcoreguidelines-no-malloc)
     void* ptr = malloc(count);
     // NOLINTEND(cppcoreguidelines-no-malloc)
+#ifdef TRACY_ALLOC
     TRACY_ALLOC(ptr, count);
+#endif
     return ptr;
 }
 
@@ -15,13 +17,17 @@ void* operator new[](std::size_t count)
     // NOLINTBEGIN(cppcoreguidelines-no-malloc)
     void* ptr = malloc(count);
     // NOLINTEND(cppcoreguidelines-no-malloc)
+#ifdef TRACY_ALLOC
     TRACY_ALLOC(ptr, count);
+#endif
     return ptr;
 }
 
 void operator delete(void* ptr) noexcept
 {
+#ifdef TRACY_FREE
     TRACY_FREE(ptr);
+#endif
     // NOLINTBEGIN(cppcoreguidelines-no-malloc)
     free(ptr);
     // NOLINTEND(cppcoreguidelines-no-malloc)
@@ -29,7 +35,9 @@ void operator delete(void* ptr) noexcept
 
 void operator delete(void* ptr, std::size_t) noexcept
 {
+#ifdef TRACY_FREE
     TRACY_FREE(ptr);
+#endif
     // NOLINTBEGIN(cppcoreguidelines-no-malloc)
     free(ptr);
     // NOLINTEND(cppcoreguidelines-no-malloc)
@@ -37,7 +45,9 @@ void operator delete(void* ptr, std::size_t) noexcept
 
 void operator delete[](void* ptr) noexcept
 {
+#ifdef TRACY_FREE
     TRACY_FREE(ptr);
+#endif
     // NOLINTBEGIN(cppcoreguidelines-no-malloc)
     free(ptr);
     // NOLINTEND(cppcoreguidelines-no-malloc)
@@ -45,7 +55,9 @@ void operator delete[](void* ptr) noexcept
 
 void operator delete[](void* ptr, std::size_t) noexcept
 {
+#ifdef TRACY_FREE
     TRACY_FREE(ptr);
+#endif
     // NOLINTBEGIN(cppcoreguidelines-no-malloc)
     free(ptr);
     // NOLINTEND(cppcoreguidelines-no-malloc)

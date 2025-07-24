@@ -1,6 +1,7 @@
 use super::{bindgen, models::Ptr, traits::SerializeBuffer, Buffer};
 use std::ptr;
 use std::fmt::Write;
+use std::env;
 use num_bigint::BigUint;
 
 #[derive(Debug)]
@@ -65,9 +66,12 @@ pub unsafe fn acir_prove_ultra_honk(
     constraint_system_buf: &[u8],
     witness_buf: &[u8],
     vkey_buf: &[u8],
+    slow_low_memory: bool,
 ) -> Vec<u8> {
+    acir_set_slow_low_memory(slow_low_memory);
+
     let mut out_ptr = ptr::null_mut();
-    bindgen::acir_prove_ultra_honk(
+    bindgen::acir_prove_ultra_zk_honk(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
         witness_buf.to_buffer().as_slice().as_ptr(),
         vkey_buf.as_ptr(),
@@ -88,7 +92,10 @@ pub unsafe fn acir_prove_ultra_keccak_honk(
     constraint_system_buf: &[u8],
     witness_buf: &[u8],
     vkey_buf: &[u8],
+    slow_low_memory: bool,
 ) -> Vec<u8> {
+    acir_set_slow_low_memory(slow_low_memory);
+
     let mut out_ptr = ptr::null_mut();
     bindgen::acir_prove_ultra_keccak_honk(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
@@ -111,7 +118,10 @@ pub unsafe fn acir_prove_ultra_keccak_zk_honk(
     constraint_system_buf: &[u8],
     witness_buf: &[u8],
     vkey_buf: &[u8],
+    slow_low_memory: bool,
 ) -> Vec<u8> {
+    acir_set_slow_low_memory(slow_low_memory);
+
     let mut out_ptr = ptr::null_mut();
     bindgen::acir_prove_ultra_keccak_zk_honk(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
@@ -183,7 +193,7 @@ pub unsafe fn acir_get_ultra_honk_keccak_zk_verification_key(constraint_system_b
 
 pub unsafe fn acir_verify_ultra_honk(proof_buf: &[u8], vkey_buf: &[u8]) -> bool {
     let mut result = false;
-    bindgen::acir_verify_ultra_honk(
+    bindgen::acir_verify_ultra_zk_honk(
         proof_buf.to_buffer().as_ptr(),
         vkey_buf.as_ptr(),
         &mut result,
@@ -251,6 +261,18 @@ pub unsafe fn acir_serialize_verification_key_into_fields(
 
 pub unsafe fn acir_proof_as_fields_ultra_honk(proof_buf: &[u8]) -> Vec<String> {
     from_biguints_to_hex_strings(&pack_proof_into_biguints(&proof_buf))
+}
+
+pub fn acir_set_slow_low_memory(enabled: bool) {
+    if enabled {
+        env::set_var("BB_SLOW_LOW_MEMORY", "1");
+    } else {
+        env::remove_var("BB_SLOW_LOW_MEMORY");
+    }
+}
+
+pub fn acir_get_slow_low_memory() -> bool {
+    env::var("BB_SLOW_LOW_MEMORY").map_or(false, |val| val == "1")
 }
 
 /*pub unsafe fn acir_vk_as_fields_ultra_honk(vk_buf: &[u8]) -> Vec<String> {

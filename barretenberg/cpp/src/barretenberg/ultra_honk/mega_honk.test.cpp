@@ -72,36 +72,24 @@ template <typename Flavor> class MegaHonkTests : public ::testing::Test {
         return verified;
     }
 
-    RefArray<typename Flavor::Commitment, Flavor::NUM_WIRES> construct_subtable_commitments_from_op_queue(
-        auto& op_queue,
-        const MergeProver& merge_prover,
-        std::array<typename Flavor::Commitment, Flavor::NUM_WIRES>& t_commitments_val)
-    {
-        std::array<typename Flavor::Polynomial, Flavor::NUM_WIRES> t_current =
-            op_queue->construct_current_ultra_ops_subtable_columns();
-        for (size_t idx = 0; idx < Flavor::NUM_WIRES; idx++) {
-            t_commitments_val[idx] = merge_prover.pcs_commitment_key.commit(t_current[idx]);
-        }
-
-        RefArray<typename Flavor::Commitment, Flavor::NUM_WIRES> t_commitments(t_commitments_val);
-
-        return t_commitments;
-    }
-
     /**
      * @brief Construct and verify a Goblin ECC op queue merge proof
      *
      */
-    bool construct_and_verify_merge_proof(auto& op_queue)
+    bool construct_and_verify_merge_proof(auto& op_queue, MergeSettings settings = MergeSettings::PREPEND)
     {
-        MergeProver merge_prover{ op_queue };
-        MergeVerifier merge_verifier;
-        merge_verifier.settings = op_queue->get_current_settings();
+        MergeProver merge_prover{ op_queue, settings };
+        MergeVerifier merge_verifier{ settings };
         auto merge_proof = merge_prover.construct_proof();
-        std::array<typename Flavor::Commitment, Flavor::NUM_WIRES> t_commitments_val;
 
-        bool verified = merge_verifier.verify_proof(
-            merge_proof, this->construct_subtable_commitments_from_op_queue(op_queue, merge_prover, t_commitments_val));
+        // Construct Merge commitments
+        MergeVerifier::WitnessCommitments merge_commitments;
+        auto t_current = op_queue->construct_current_ultra_ops_subtable_columns();
+        for (size_t idx = 0; idx < Flavor::NUM_WIRES; idx++) {
+            merge_commitments.t_commitments[idx] = merge_prover.pcs_commitment_key.commit(t_current[idx]);
+        }
+
+        bool verified = merge_verifier.verify_proof(merge_proof, merge_commitments, merge_commitments.T_commitments);
 
         return verified;
     }
@@ -310,24 +298,6 @@ TYPED_TEST(MegaHonkTests, MultipleCircuitsMergeOnly)
     }
 }
 
-TYPED_TEST(MegaHonkTests, MultipleCircuitsMergeOnlyAppend)
-{
-    using Flavor = TypeParam;
-    // Instantiate EccOpQueue. This will be shared across all circuits in the series
-    auto op_queue = std::make_shared<bb::ECCOpQueue>();
-    // Construct multiple test circuits that share an ECC op queue. Generate and verify a proof for each.
-    size_t NUM_CIRCUITS = 3;
-    for (size_t i = 0; i < NUM_CIRCUITS; ++i) {
-        auto builder = typename Flavor::CircuitBuilder{ op_queue, MergeSettings::APPEND };
-
-        GoblinMockCircuits::construct_simple_circuit(builder);
-
-        // Construct and verify Goblin ECC op queue Merge proof
-        auto merge_verified = this->construct_and_verify_merge_proof(op_queue);
-        EXPECT_TRUE(merge_verified);
-    }
-}
-
 TYPED_TEST(MegaHonkTests, MultipleCircuitsMergeOnlyPrependThenAppend)
 {
     using Flavor = TypeParam;
@@ -346,12 +316,12 @@ TYPED_TEST(MegaHonkTests, MultipleCircuitsMergeOnlyPrependThenAppend)
     }
 
     // Construct a final circuit and append its ecc ops to the op queue
-    auto builder = typename Flavor::CircuitBuilder{ op_queue, MergeSettings::APPEND };
+    auto builder = typename Flavor::CircuitBuilder{ op_queue };
 
     GoblinMockCircuits::construct_simple_circuit(builder);
 
     // Construct and verify Goblin ECC op queue Merge proof
-    auto merge_verified = this->construct_and_verify_merge_proof(op_queue);
+    auto merge_verified = this->construct_and_verify_merge_proof(op_queue, MergeSettings::APPEND);
     EXPECT_TRUE(merge_verified);
 }
 
@@ -370,12 +340,12 @@ TYPED_TEST(MegaHonkTests, MultipleCircuitsHonkOnly)
     size_t NUM_CIRCUITS = 3;
     for (size_t i = 0; i < NUM_CIRCUITS; ++i) {
         auto builder = typename Flavor::CircuitBuilder{ op_queue };
-
         GoblinMockCircuits::construct_simple_circuit(builder);
-
         // Construct and verify Honk proof
         bool honk_verified = this->construct_and_verify_honk_proof(builder);
         EXPECT_TRUE(honk_verified);
+        // Artificially merge the op queue sincer we're not running the merge protocol in this test
+        builder.op_queue->merge();
     }
 }
 
@@ -407,7 +377,7 @@ TYPED_TEST(MegaHonkTests, MultipleCircuitsHonkAndMerge)
     }
 
     // Construct a final circuit whose ecc ops will be appended rather than prepended to the op queue
-    auto builder = typename Flavor::CircuitBuilder{ op_queue, MergeSettings::APPEND };
+    auto builder = typename Flavor::CircuitBuilder{ op_queue };
 
     GoblinMockCircuits::construct_simple_circuit(builder);
 
@@ -416,7 +386,7 @@ TYPED_TEST(MegaHonkTests, MultipleCircuitsHonkAndMerge)
     EXPECT_TRUE(honk_verified);
 
     // Construct and verify Goblin ECC op queue Merge proof
-    auto merge_verified = this->construct_and_verify_merge_proof(op_queue);
+    auto merge_verified = this->construct_and_verify_merge_proof(op_queue, MergeSettings::APPEND);
     EXPECT_TRUE(merge_verified);
 }
 

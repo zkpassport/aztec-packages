@@ -589,7 +589,7 @@ int parse_and_run_cli_command(int argc, char* argv[])
     }
     debug_logging = flags.debug;
     verbose_logging = debug_logging || flags.verbose;
-    slow_low_memory = flags.slow_low_memory;
+    set_slow_low_memory(flags.slow_low_memory);
 
     print_active_subcommands(app);
     info("Scheme is: ", flags.scheme, ", num threads: ", get_num_cpus());

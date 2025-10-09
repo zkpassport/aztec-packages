@@ -85,7 +85,9 @@ function(barretenberg_module MODULE_NAME)
     endif()
 
     file(GLOB_RECURSE TEST_SOURCE_FILES *.test.cpp)
+    # Only build tests if BUILD_TESTING is not explicitly OFF
     if(TEST_SOURCE_FILES AND NOT FUZZING)
+        if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         add_library(
             ${MODULE_NAME}_test_objects
             OBJECT
@@ -170,7 +172,8 @@ function(barretenberg_module MODULE_NAME)
             # Currently haven't found a way to easily wrap the calls in wasmtime when run from ctest.
             gtest_discover_tests(${MODULE_NAME}_tests WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TEST_FILTER -*_SKIP_CI*)
         endif()
-    endif()
+        endif() # Close BUILD_TESTING check
+    endif() # Close TEST_SOURCE_FILES AND NOT FUZZING check
 
     file(GLOB_RECURSE FUZZERS_SOURCE_FILES *.fuzzer.cpp)
     if(FUZZING AND FUZZERS_SOURCE_FILES)
@@ -203,7 +206,9 @@ function(barretenberg_module MODULE_NAME)
     endif()
 
     file(GLOB_RECURSE BENCH_SOURCE_FILES *.bench.cpp)
+    # Only build benchmarks if BUILD_TESTING is not explicitly OFF
     if(BENCH_SOURCE_FILES AND NOT FUZZING)
+        if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         foreach(BENCHMARK_SOURCE ${BENCH_SOURCE_FILES})
             get_filename_component(BENCHMARK_NAME ${BENCHMARK_SOURCE} NAME_WE) # extract name without extension
             add_library(
@@ -264,6 +269,7 @@ function(barretenberg_module MODULE_NAME)
                 WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
             )
         endforeach()
+        endif() # Close BUILD_TESTING check
     endif()
 
     set(${MODULE_NAME}_lib_targets ${lib_targets} PARENT_SCOPE)

@@ -30,31 +30,26 @@ def fix_duplicate_types(bindings_file_path):
 
         # Track seen type definitions
         seen_types = set()
-        lines = content.split('\n')
-        cleaned_lines = []
-
-        # Pattern to match type definitions like: pub type <name> = <definition>;
-        type_def_pattern = re.compile(r'^pub type\s+(\w+)\s*=')
-
-        for line in lines:
-            match = type_def_pattern.match(line.strip())
-
-            if match:
-                type_name = match.group(1)
-                if type_name in seen_types:
-                    # Skip this duplicate type definition
-                    print(f"  Removing duplicate type definition: {type_name}")
-                    continue
-                else:
-                    # Keep this type definition and mark it as seen
-                    seen_types.add(type_name)
-                    cleaned_lines.append(line)
+        
+        # Pattern to match type definitions inline: pub type <name> = <definition>;
+        # This handles both multiline and inline type definitions
+        type_def_pattern = re.compile(r'pub\s+type\s+(\w+)\s*=\s*([^;]+);')
+        
+        def replacer(match):
+            type_name = match.group(1)
+            if type_name in seen_types:
+                # Remove this duplicate type definition
+                print(f"  Removing duplicate type definition: {type_name}")
+                return ''  # Remove the entire match
             else:
-                # Keep non-type-definition lines
-                cleaned_lines.append(line)
+                # Keep this type definition and mark it as seen
+                seen_types.add(type_name)
+                return match.group(0)  # Keep the original match
+        
+        # Replace duplicates
+        cleaned_content = type_def_pattern.sub(replacer, content)
 
         # Write the cleaned content back
-        cleaned_content = '\n'.join(cleaned_lines)
         with open(bindings_file_path, 'w') as f:
             f.write(cleaned_content)
 

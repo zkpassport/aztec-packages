@@ -20,7 +20,12 @@
 #include <utility>
 #include <vector>
 
+#ifndef NO_MULTITHREADING
 #include "barretenberg/common/thread_pool.hpp"
+#else
+// Forward declare ThreadPool when multithreading is disabled
+namespace bb { class ThreadPool; }
+#endif
 #include "barretenberg/crypto/merkle_tree/hash_path.hpp"
 #include "barretenberg/crypto/merkle_tree/indexed_tree/indexed_leaf.hpp"
 #include "barretenberg/crypto/merkle_tree/lmdb_store/lmdb_tree_store.hpp"

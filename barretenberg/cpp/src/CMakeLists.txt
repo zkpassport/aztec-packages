@@ -102,8 +102,14 @@ add_subdirectory(barretenberg/translator_vm)
 add_subdirectory(barretenberg/ultra_honk)
 add_subdirectory(barretenberg/wasi)
 if(NOT FUZZING)
-    add_subdirectory(barretenberg/world_state)
-    add_subdirectory(barretenberg/vm2)
+    # world_state requires ThreadPool (multithreading)
+    if(MULTITHREADING)
+        add_subdirectory(barretenberg/world_state)
+    endif()
+    # vm2 is the Aztec VM
+    if(NOT DISABLE_AZTEC_VM)
+        add_subdirectory(barretenberg/vm2)
+    endif()
 endif()
 
 if(SMT)
@@ -114,7 +120,10 @@ if(SMT AND ACIR_FORMAL_PROOFS)
     add_subdirectory(barretenberg/acir_formal_proofs)
 endif()
 
-add_subdirectory(barretenberg/benchmark)
+# Benchmarks are only built when testing is enabled
+if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
+    add_subdirectory(barretenberg/benchmark)
+endif()
 
 include(GNUInstallDirs)
 

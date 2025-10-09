@@ -8,6 +8,26 @@ use std::process::Command;
 /// if they are defined in multiple templates.
 /// It's easier to just post-process the bindings file to remove the duplicate type definitions,
 /// rather than trying to patch for it in the C++ code.
+/// Fix unsafe extern blocks for Rust 1.71.1 compatibility
+/// Rust 1.71.1 doesn't support "unsafe extern" blocks, so we need to convert them
+/// to regular "extern" blocks. Functions inside extern "C" blocks are implicitly unsafe.
+fn fix_unsafe_extern_blocks(bindings_file: &PathBuf) {
+    println!("cargo:warning=Fixing unsafe extern blocks for Rust 1.71.1 compatibility...");
+    
+    let content = std::fs::read_to_string(bindings_file)
+        .expect("Failed to read bindings file");
+    
+    // Simply replace "unsafe extern \"C\" {" with "extern \"C\" {"
+    // Functions inside extern "C" blocks are implicitly unsafe to call in Rust,
+    // so we don't need to add "unsafe" to individual function declarations
+    let fixed_content = content.replace("unsafe extern \"C\" {", "extern \"C\" {");
+    
+    std::fs::write(bindings_file, fixed_content)
+        .expect("Failed to write fixed bindings file");
+    
+    println!("cargo:warning=Successfully fixed unsafe extern blocks");
+}
+
 fn fix_duplicate_bindings(bindings_file: &PathBuf) {
     println!("cargo:warning=Fixing duplicate type definitions in bindings...");
     
@@ -69,19 +89,92 @@ fn main() {
     // cfg!(target_os = "<os>") does not work so we get the value
     // of the target_os environment variable to determine the target OS.
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    
+    // Get absolute path to barretenberg C++ source (relative to bb_rs/)
+    let cpp_src_path = PathBuf::from("../cpp/src").canonicalize().unwrap();
 
+    // Read parallel jobs from environment (for iOS builds only)
+    // Default to 1 if not set to maintain safe defaults
+    let build_jobs = env::var("CARGO_BUILD_JOBS").unwrap_or_else(|_| "1".to_string());
+    
+    // Determine build type from Cargo profile (debug or release)
+    // PROFILE env var is set by Cargo: "debug" or "release"
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let cmake_build_type = match profile.as_str() {
+        "release" => "Release",
+        _ => "Debug",
+    };
+    
+    // Check if Aztec VM should be disabled (default: OFF, can be enabled via env var)
+    // Set DISABLE_AZTEC_VM=1 in your build script to skip VM2 compilation
+    let disable_aztec_vm = env::var("DISABLE_AZTEC_VM")
+        .map(|v| v == "1" || v.to_lowercase() == "true" || v.to_lowercase() == "on")
+        .unwrap_or(false);
+    
+    // Debug output to see what's happening
+    println!("cargo:warning=🔍 DISABLE_AZTEC_VM env var: {:?}", env::var("DISABLE_AZTEC_VM"));
+    println!("cargo:warning=🔍 disable_aztec_vm parsed: {}", disable_aztec_vm);
+    
+    // Check if testing should be disabled (default: ON, set BB_DISABLE_TESTING=1 to disable)
+    let disable_testing = env::var("BB_DISABLE_TESTING")
+        .map(|v| v == "1" || v.to_lowercase() == "true" || v.to_lowercase() == "on")
+        .unwrap_or(false);
+    
+    // Check if multithreading should be disabled (default: ON, set BB_DISABLE_MULTITHREADING=1 to disable)
+    let disable_multithreading = env::var("BB_DISABLE_MULTITHREADING")
+        .map(|v| v == "1" || v.to_lowercase() == "true" || v.to_lowercase() == "on")
+        .unwrap_or(false);
+    
+    // Check which build target to use (default: "bb", set BB_BUILD_TARGET=barretenberg for library only)
+    let build_target = env::var("BB_BUILD_TARGET").unwrap_or_else(|_| "bb".to_string());
+    
+    if disable_aztec_vm {
+        println!("cargo:warning=⚠️  Aztec VM (VM2) compilation is DISABLED");
+    }
+    if disable_testing {
+        println!("cargo:warning=⚠️  Testing suite compilation is DISABLED");
+    }
+    if disable_multithreading {
+        println!("cargo:warning=⚠️  Multithreading is DISABLED");
+    }
+    if build_target != "bb" {
+        println!("cargo:warning=📦 Building target: {}", build_target);
+    }
+    
     // Build the C++ code using CMake and get the build directory path.
     let dst;
-    // iOS
+    // iOS - Enable parallelism (iOS doesn't have the macOS linker issues)
     if target_os == "ios" {
-        dst = Config::new("../cpp")
+        println!("cargo:warning=🚀 Building for iOS with {} parallel jobs ({})", build_jobs, cmake_build_type);
+        let mut config = Config::new("../cpp");
+        config
             .generator("Ninja")
-            .configure_arg("-DCMAKE_BUILD_TYPE=Release")
+            .configure_arg(format!("-DCMAKE_BUILD_TYPE={}", cmake_build_type))
             .configure_arg("-DPLATFORM=OS64")
-            .configure_arg("-DDEPLOYMENT_TARGET=15.0")
+            .configure_arg("-DDEPLOYMENT_TARGET=15.1")
             .configure_arg("--toolchain=../bb_rs/ios.toolchain.cmake")
-            .configure_arg("-DTRACY_ENABLE=OFF")
-            .build_target("bb")
+            .configure_arg("-DTRACY_ENABLE=OFF");
+        
+        // Apply optional optimizations
+        if disable_aztec_vm {
+            println!("cargo:warning=🔧 Adding -DDISABLE_AZTEC_VM=ON to CMake config");
+            config.configure_arg("-DDISABLE_AZTEC_VM=ON");
+        } else {
+            println!("cargo:warning=⚠️  NOT adding DISABLE_AZTEC_VM - VM2 will be compiled!");
+        }
+        if disable_testing {
+            config.configure_arg("-DBUILD_TESTING=OFF");
+        }
+        if disable_multithreading {
+            config.configure_arg("-DMULTITHREADING=OFF");
+        }
+        
+        // For iOS, we need to build libdeflate_static and the main target
+        // Build all targets to ensure dependencies are built
+        dst = config
+            .build_arg(format!("-j{}", build_jobs))
+            .build_arg("libdeflate_static")
+            .build_arg(&build_target)
             .build();
     }
     // Android
@@ -89,24 +182,53 @@ fn main() {
         let android_home = option_env!("ANDROID_HOME").expect("ANDROID_HOME not set");
         let ndk_version = option_env!("NDK_VERSION").expect("NDK_VERSION not set");
 
-        dst = Config::new("../cpp")
-        .generator("Ninja")
-        .configure_arg("-DCMAKE_BUILD_TYPE=Release")
-        .configure_arg("-DANDROID_ABI=arm64-v8a")
-        .configure_arg("-DANDROID_PLATFORM=android-33")
-        .configure_arg(&format!("--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake", android_home, ndk_version))
-        .configure_arg("-DTRACY_ENABLE=OFF")
-        .build_target("bb")
-        .build();
+        let mut config = Config::new("../cpp");
+        config
+            .generator("Ninja")
+            .configure_arg("-DCMAKE_BUILD_TYPE=Release")
+            .configure_arg("-DANDROID_ABI=arm64-v8a")
+            .configure_arg("-DANDROID_PLATFORM=android-33")
+            .configure_arg(&format!("--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake", android_home, ndk_version))
+            .configure_arg("-DTRACY_ENABLE=OFF");
+        
+        // Apply optional optimizations
+        if disable_aztec_vm {
+            config.configure_arg("-DDISABLE_AZTEC_VM=ON");
+        }
+        if disable_testing {
+            config.configure_arg("-DBUILD_TESTING=OFF");
+        }
+        if disable_multithreading {
+            config.configure_arg("-DMULTITHREADING=OFF");
+        }
+        
+        dst = config
+            .build_target(&build_target)
+            .build();
     }
     // MacOS and other platforms
     else {
-        dst = Config::new("../cpp")
-        .generator("Ninja")
-        .configure_arg("-DCMAKE_BUILD_TYPE=Release")            
-        .configure_arg("-DTRACY_ENABLE=OFF")
-        .build_target("bb")
-        .build();
+        println!("cargo:warning=🔨 Building for {} ({})", target_os, cmake_build_type);
+        let mut config = Config::new("../cpp");
+        config
+            .generator("Ninja")
+            .configure_arg(format!("-DCMAKE_BUILD_TYPE={}", cmake_build_type))
+            .configure_arg("-DTRACY_ENABLE=OFF");
+        
+        // Apply optional optimizations
+        if disable_aztec_vm {
+            config.configure_arg("-DDISABLE_AZTEC_VM=ON");
+        }
+        if disable_testing {
+            config.configure_arg("-DBUILD_TESTING=OFF");
+        }
+        if disable_multithreading {
+            config.configure_arg("-DMULTITHREADING=OFF");
+        }
+        
+        dst = config
+            .build_target(&build_target)
+            .build();
     }
 
     // Add the library search path for Rust to find during linking.
@@ -153,17 +275,37 @@ fn main() {
             &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/aarch64-linux-android", android_home, ndk_version, host_tag)
         ]);
     } else if target_os == "ios" {
+        // Detect iOS Simulator vs Device target
+        let target = env::var("TARGET").unwrap_or_default();
+        let (platform, sdk) = if target.contains("sim") {
+            ("iPhoneSimulator", "iPhoneSimulator.sdk")
+        } else {
+            ("iPhoneOS", "iPhoneOS.sdk")
+        };
+        
+        // Read iOS deployment target from environment (set by build-dev-cache.sh)
+        let ios_version = env::var("IPHONEOS_DEPLOYMENT_TARGET").unwrap_or_else(|_| "15.1".to_string());
+        println!("cargo:warning=📱 iOS deployment target: {}", ios_version);
+        
         builder = builder
         // Add the include path for headers.
         .clang_args([
             "-std=c++20",
             "-xc++",
             &format!("-I{}/build/include", dst.display()),
+            // Add barretenberg source directory for actual header files (absolute path)
+            &format!("-I{}", cpp_src_path.display()),
             // Dependencies' include paths needs to be added manually.
             &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
+            &format!("-I{}/build/include/barretenberg", dst.display()),
             //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
-            "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include/c++/v1",
-            "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include"
+            &format!("-I/Applications/Xcode.app/Contents/Developer/Platforms/{}.platform/Developer/SDKs/{}/usr/include/c++/v1", platform, sdk),
+            &format!("-I/Applications/Xcode.app/Contents/Developer/Platforms/{}.platform/Developer/SDKs/{}/usr/include", platform, sdk),
+            // Fix for iOS system type issues
+            "-D_LIBCPP_DISABLE_AVAILABILITY",
+            &format!("--sysroot=/Applications/Xcode.app/Contents/Developer/Platforms/{}.platform/Developer/SDKs/{}", platform, sdk),
+            // Set iOS deployment target for bindgen
+            &format!("-miphoneos-version-min={}", ios_version),
         ]);
     } else if target_os == "macos" {
         builder = builder
@@ -181,7 +323,7 @@ fn main() {
                 "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include",
                 // Fix for macOS system type issues
                 "-D_LIBCPP_DISABLE_AVAILABILITY",
-                "-target", "arm64-apple-macosx15.0",
+                "-target", "arm64-apple-macosx15.1",
                 "--sysroot=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
             ]);
     } else {
@@ -198,7 +340,26 @@ fn main() {
     }
 
     let bindings = builder
+        // Generate bindings compatible with Rust 1.71.1 (no unsafe extern blocks)
+        .rustfmt_bindings(false)
+        .layout_tests(false)
+        .derive_debug(false)
+        .derive_default(false)
+        .derive_copy(false)
+        .derive_eq(false)
+        .derive_partialeq(false)
+        .derive_partialord(false)
+        .derive_ord(false)
+        .derive_hash(false)
+        // Use older bindgen syntax for Rust 1.71.1 compatibility
+        .use_core()
+        .ctypes_prefix("::std::os::raw")
         // The input header we would like to generate bindings for.
+
+        // #include <barretenberg/ecc/curves/secp256k1/c_bind.hpp>
+        // #include <barretenberg/ecc/curves/grumpkin/c_bind.hpp>
+        // #include <barretenberg/ecc/curves/bn254/c_bind.hpp>
+
         .header_contents(
             "wrapper.hpp",
             r#"
@@ -209,22 +370,14 @@ fn main() {
                 #include <barretenberg/crypto/aes128/c_bind.hpp>
                 #include <barretenberg/crypto/schnorr/c_bind.hpp>
                 #include <barretenberg/crypto/ecdsa/c_bind.h>
+                #include <barretenberg/ecc/curves/grumpkin/c_bind.hpp>
                 #include <barretenberg/ecc/curves/secp256k1/c_bind.hpp>
+                #include <barretenberg/ecc/curves/bn254/c_bind.hpp>
                 #include <barretenberg/srs/c_bind.hpp>
                 #include <barretenberg/common/c_bind.hpp>
                 #include <barretenberg/dsl/acir_proofs/c_bind.hpp>
                 
-                // Grumpkin function declarations (no header file exists)
-                extern "C" {
-                    void ecc_grumpkin__mul(uint8_t const* point_buf, uint8_t const* scalar_buf, uint8_t* result);
-                    void ecc_grumpkin__add(uint8_t const* point_a_buf, uint8_t const* point_b_buf, uint8_t* result);
-                    void ecc_grumpkin__batch_mul(uint8_t const* point_buf, uint8_t const* scalar_buf, uint32_t num_points, uint8_t* result);
-                    void ecc_grumpkin__get_random_scalar_mod_circuit_modulus(uint8_t* result);
-                    void ecc_grumpkin__reduce512_buffer_mod_circuit_modulus(uint8_t* input, uint8_t* result);
-                    
-                    // BN254 function declarations (no header file exists)
-                    void bn254_fr_sqrt(uint8_t const* input, uint8_t* result);
-                }
+
             "#,
         )
         .allowlist_function("pedersen_commit")
@@ -314,4 +467,7 @@ fn main() {
 
     // Fix duplicate type definitions in the generated bindings
     fix_duplicate_bindings(&bindings_file);
+    
+    // Fix unsafe extern blocks for Rust 1.71.1 compatibility
+    fix_unsafe_extern_blocks(&bindings_file);
 }

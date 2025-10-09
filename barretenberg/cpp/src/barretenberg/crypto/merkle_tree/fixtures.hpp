@@ -6,7 +6,12 @@
 
 #pragma once
 
+#ifndef NO_MULTITHREADING
 #include "barretenberg/common/thread_pool.hpp"
+#else
+// Forward declare ThreadPool when multithreading is disabled
+namespace bb { class ThreadPool; }
+#endif
 #include "barretenberg/crypto/merkle_tree/lmdb_store/lmdb_tree_store.hpp"
 #include "barretenberg/ecc/curves/bn254/fr.hpp"
 #include "barretenberg/numeric/random/engine.hpp"

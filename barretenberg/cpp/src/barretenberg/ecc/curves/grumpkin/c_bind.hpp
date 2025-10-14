@@ -22,3 +22,4 @@ WASM_EXPORT void ecc_grumpkin__get_random_scalar_mod_circuit_modulus(uint8_t* re
 WASM_EXPORT void ecc_grumpkin__reduce512_buffer_mod_circuit_modulus(uint8_t* input, uint8_t* result);
 // NOLINTEND(cert-dcl37-c, cert-dcl51-cpp, bugprone-reserved-identifier)
 
+

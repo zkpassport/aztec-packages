@@ -11,3 +11,4 @@
 WASM_EXPORT void bn254_fr_sqrt(uint8_t const* input, uint8_t* result);
 // NOLINTEND(cert-dcl37-c, cert-dcl51-cpp, bugprone-reserved-identifier)
 
+

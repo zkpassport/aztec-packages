@@ -67,8 +67,10 @@ pub unsafe fn acir_prove_ultra_honk(
     witness_buf: &[u8],
     vkey_buf: &[u8],
     slow_low_memory: bool,
+    max_storage_usage: Option<u64>,
 ) -> Vec<u8> {
     acir_set_slow_low_memory(slow_low_memory);
+    acir_set_storage_budget(max_storage_usage.unwrap_or(0));
 
     let mut out_ptr = ptr::null_mut();
     bindgen::acir_prove_ultra_zk_honk(
@@ -93,8 +95,10 @@ pub unsafe fn acir_prove_ultra_keccak_honk(
     witness_buf: &[u8],
     vkey_buf: &[u8],
     slow_low_memory: bool,
+    max_storage_usage: Option<u64>,
 ) -> Vec<u8> {
     acir_set_slow_low_memory(slow_low_memory);
+    acir_set_storage_budget(max_storage_usage.unwrap_or(0));
 
     let mut out_ptr = ptr::null_mut();
     bindgen::acir_prove_ultra_keccak_honk(
@@ -119,8 +123,10 @@ pub unsafe fn acir_prove_ultra_keccak_zk_honk(
     witness_buf: &[u8],
     vkey_buf: &[u8],
     slow_low_memory: bool,
+    max_storage_usage: Option<u64>,
 ) -> Vec<u8> {
     acir_set_slow_low_memory(slow_low_memory);
+    acir_set_storage_budget(max_storage_usage.unwrap_or(0));
 
     let mut out_ptr = ptr::null_mut();
     bindgen::acir_prove_ultra_keccak_zk_honk(
@@ -259,28 +265,6 @@ pub unsafe fn acir_serialize_verification_key_into_fields(
     (Buffer::from_ptr(out_vkey).unwrap().to_vec(), out_key_hash)
 }
 
-pub unsafe fn acir_proof_as_fields_ultra_honk(proof_buf: &[u8]) -> Vec<String> {
-    from_biguints_to_hex_strings(&pack_proof_into_biguints(&proof_buf))
-}
-
-pub unsafe fn acir_vk_as_fields_ultra_honk(vk_buf: &[u8]) -> Vec<u8> {
-    let mut out_ptr = ptr::null_mut();
-    bindgen::acir_vk_as_fields_ultra_honk(
-        vk_buf.as_ptr(),
-        &mut out_ptr,
-    );
-    Buffer::from_ptr(out_ptr).unwrap().to_vec()
-}
-
-pub unsafe fn acir_vk_as_fields_mega_honk(vk_buf: &[u8]) -> Vec<u8> {
-    let mut out_ptr = ptr::null_mut();
-    bindgen::acir_vk_as_fields_mega_honk(
-        vk_buf.as_ptr(),
-        &mut out_ptr,
-    );
-    Buffer::from_ptr(out_ptr).unwrap().to_vec()
-}
-
 pub fn acir_set_slow_low_memory(enabled: bool) {
     if enabled {
         env::set_var("BB_SLOW_LOW_MEMORY", "1");
@@ -293,4 +277,32 @@ pub fn acir_get_slow_low_memory() -> bool {
     env::var("BB_SLOW_LOW_MEMORY").map_or(false, |val| val == "1")
 }
 
+pub fn acir_set_storage_budget(max_bytes: u64) {
+    if max_bytes == 0 {
+        env::remove_var("BB_STORAGE_BUDGET");
+        return;
+    }
+
+    // Use the max bytes directly for better precision
+    env::set_var("BB_STORAGE_BUDGET", max_bytes.to_string());
+
+    // This could be a way to do it, but it's not as precise
+    // as the rounding gets too rough in the gigabytes
+    /*if max_bytes < 1024 {
+        env::set_var("BB_STORAGE_BUDGET", max_bytes.to_string());
+    } else if max_bytes < 1024 * 1024 {
+        let formatted_max_bytes = format!("{}k", max_bytes / 1024);
+        env::set_var("BB_STORAGE_BUDGET", formatted_max_bytes);
+    } else if max_bytes < 1024 * 1024 * 1024 {
+        let formatted_max_bytes = format!("{}m", max_bytes / 1024 / 1024);
+        env::set_var("BB_STORAGE_BUDGET", formatted_max_bytes);
+    } else {
+        let formatted_max_bytes = format!("{}g", max_bytes / 1024 / 1024 / 1024);
+        env::set_var("BB_STORAGE_BUDGET", formatted_max_bytes);
+    }*/
+}
+
+pub fn acir_set_storage_budget_from_string(budget_str: &str) {
+    env::set_var("BB_STORAGE_BUDGET", budget_str);
+}
 

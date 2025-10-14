@@ -240,6 +240,9 @@ fn main() {
     // Link the `barretenberg` static library.
     println!("cargo:rustc-link-lib=static=barretenberg");
 
+    // Link the `env` static library
+    println!("cargo:rustc-link-lib=static=env");
+
     // Link the `libdeflate` static library.
     println!("cargo:rustc-link-lib=static=deflate");
 
@@ -306,6 +309,10 @@ fn main() {
             &format!("--sysroot=/Applications/Xcode.app/Contents/Developer/Platforms/{}.platform/Developer/SDKs/{}", platform, sdk),
             // Set iOS deployment target for bindgen
             &format!("-miphoneos-version-min={}", ios_version),
+            // "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include/c++/v1",
+            // "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include",
+            // "-target", "arm64-apple-ios15.0",
+            // "--sysroot=/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
         ]);
     } else if target_os == "macos" {
         builder = builder
@@ -376,6 +383,7 @@ fn main() {
                 #include <barretenberg/srs/c_bind.hpp>
                 #include <barretenberg/common/c_bind.hpp>
                 #include <barretenberg/dsl/acir_proofs/c_bind.hpp>
+                #include <barretenberg/bbapi/c_bind.hpp>
                 
 
             "#,
@@ -448,10 +456,8 @@ fn main() {
         //.allowlist_function("acir_write_vk_ultra_starknet_honk")
         //.allowlist_function("acir_write_vk_ultra_starknet_zk_honk")
         .allowlist_function("acir_prove_and_verify_ultra_honk")
-        .allowlist_function("acir_proof_as_fields_ultra_honk")
-        .allowlist_function("acir_vk_as_fields_ultra_honk")
-        .allowlist_function("acir_vk_as_fields_mega_honk")
         // Tell cargo to invalidate the built crate whenever any of the included header files changed.
+        .allowlist_function("bbapi")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         // Finish the builder and generate the bindings.
         .generate()

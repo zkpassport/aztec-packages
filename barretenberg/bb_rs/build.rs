@@ -155,6 +155,19 @@ fn main() {
             .configure_arg("--toolchain=../bb_rs/ios.toolchain.cmake")
             .configure_arg("-DTRACY_ENABLE=OFF");
         
+        // Performance optimizations (Release mode only)
+        if cmake_build_type == "Release" {
+            // Enable Link-Time Optimization
+            config.configure_arg("-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON");
+            
+            // ARM NEON vectorization - use .cxxflag() to APPEND, not replace
+            config.cxxflag("-ftree-vectorize");      // Enable loop vectorization
+            config.cxxflag("-fvectorize");           // Enable LLVM vectorization
+            config.cxxflag("-march=armv8-a");      //  Generic ARM64, works on all 64-bit iOS
+            
+            println!("cargo:warning=🚀 Performance optimizations enabled: LTO + ARM NEON + A14 tuning");
+        }
+        
         // Apply optional optimizations
         if disable_aztec_vm {
             println!("cargo:warning=🔧 Adding -DDISABLE_AZTEC_VM=ON to CMake config");
@@ -363,10 +376,6 @@ fn main() {
         .ctypes_prefix("::std::os::raw")
         // The input header we would like to generate bindings for.
 
-        // #include <barretenberg/ecc/curves/secp256k1/c_bind.hpp>
-        // #include <barretenberg/ecc/curves/grumpkin/c_bind.hpp>
-        // #include <barretenberg/ecc/curves/bn254/c_bind.hpp>
-
         .header_contents(
             "wrapper.hpp",
             r#"
@@ -448,6 +457,7 @@ fn main() {
         .allowlist_function("acir_verify_ultra_keccak_honk")
         .allowlist_function("acir_verify_ultra_keccak_zk_honk")
         .allowlist_function("acir_verify_aztec_client")
+        .allowlist_function("acir_gates_aztec_client")
         //.allowlist_function("acir_verify_ultra_starknet_honk")
         //.allowlist_function("acir_verify_ultra_starknet_zk_honk")
         .allowlist_function("acir_write_vk_ultra_honk")

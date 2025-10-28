@@ -104,10 +104,18 @@ add_subdirectory(barretenberg/transcript)
 add_subdirectory(barretenberg/translator_vm)
 add_subdirectory(barretenberg/ultra_honk)
 add_subdirectory(barretenberg/wasi)
+
+# DISABLED: world_state causes iOS compilation issues
+# if(NOT FUZZING)
+#     # world_state requires ThreadPool (multithreading)
+#     if(MULTITHREADING)
+#         add_subdirectory(barretenberg/world_state)
+#     endif()
 if(NOT FUZZING)
     # world_state requires ThreadPool (multithreading)
     if(MULTITHREADING)
-        add_subdirectory(barretenberg/world_state)
+        # DISABLED: world_state causes iOS compilation issues
+        # add_subdirectory(barretenberg/world_state)
     endif()
     # vm2 is the Aztec VM
     if(NOT DISABLE_AZTEC_VM)

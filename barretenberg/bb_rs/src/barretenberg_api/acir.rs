@@ -146,6 +146,45 @@ pub unsafe fn acir_prove_ultra_keccak_zk_honk(
     .to_vec()
 }
 
+// Client IVC prove (proof + vk)
+pub unsafe fn acir_prove_aztec_client(ivc_inputs_buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut proof_out_ptr = ptr::null_mut();
+    let mut vk_out_ptr = ptr::null_mut();
+    bindgen::acir_prove_aztec_client(
+        ivc_inputs_buf.to_buffer().as_slice().as_ptr(),
+        &mut proof_out_ptr,
+        &mut vk_out_ptr,
+    );
+    let proof = Buffer::from_ptr(Buffer::from_ptr(proof_out_ptr).unwrap().to_vec().as_slice().as_ptr())
+        .unwrap()
+        .to_vec();
+    let vk = Buffer::from_ptr(Buffer::from_ptr(vk_out_ptr).unwrap().to_vec().as_slice().as_ptr())
+        .unwrap()
+        .to_vec();
+    (proof, vk)
+}
+
+// Client IVC verify
+pub unsafe fn acir_verify_aztec_client(proof_buf: &[u8], vkey_buf: &[u8]) -> bool {
+    let mut result = false;
+    bindgen::acir_verify_aztec_client(
+        proof_buf.to_buffer().as_ptr(),
+        vkey_buf.as_ptr(),
+        &mut result,
+    );
+    result
+}
+
+// Client IVC gates API (big-endian u32 array)
+pub unsafe fn acir_gates_aztec_client(ivc_inputs_buf: &[u8]) -> Vec<u8> {
+    let mut out_ptr = ptr::null_mut();
+    bindgen::acir_gates_aztec_client(
+        ivc_inputs_buf.to_buffer().as_slice().as_ptr(),
+        &mut out_ptr,
+    );
+    Buffer::from_ptr(out_ptr).unwrap().to_vec()
+}
+
 pub unsafe fn acir_get_ultra_honk_verification_key(constraint_system_buf: &[u8]) -> Vec<u8> {
     let mut out_ptr = ptr::null_mut();
     bindgen::acir_write_vk_ultra_honk(

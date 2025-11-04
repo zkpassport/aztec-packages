@@ -6,8 +6,8 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <unistd.h>
 #include <thread>
+#include <unistd.h>
 
 #pragma GCC diagnostic ignored "-Wunused-result" // GCC13 hits this
 

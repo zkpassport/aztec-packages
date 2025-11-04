@@ -5,8 +5,8 @@
 #include <barretenberg/numeric/bitop/get_msb.hpp>
 #include <functional>
 #include <iostream>
-#include <vector>
 #include <thread>
+#include <vector>
 
 namespace bb {
 

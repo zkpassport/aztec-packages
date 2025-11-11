@@ -176,7 +176,11 @@ fn main() {
             println!("cargo:warning=⚠️  NOT adding DISABLE_AZTEC_VM - VM2 will be compiled!");
         }
         if disable_testing {
+            println!("cargo:warning=🔧 DISABLING tests with multiple CMake flags");
             config.configure_arg("-DBUILD_TESTING=OFF");
+            config.configure_arg("-DENABLE_TESTING=OFF");
+            // Explicitly disable test targets
+            config.configure_arg("-DBUILD_TESTS=OFF");
         }
         if disable_multithreading {
             config.configure_arg("-DMULTITHREADING=OFF");
@@ -209,7 +213,10 @@ fn main() {
             config.configure_arg("-DDISABLE_AZTEC_VM=ON");
         }
         if disable_testing {
+            println!("cargo:warning=🔧 DISABLING tests with multiple CMake flags");
             config.configure_arg("-DBUILD_TESTING=OFF");
+            config.configure_arg("-DENABLE_TESTING=OFF");
+            config.configure_arg("-DBUILD_TESTS=OFF");
         }
         if disable_multithreading {
             config.configure_arg("-DMULTITHREADING=OFF");
@@ -233,7 +240,10 @@ fn main() {
             config.configure_arg("-DDISABLE_AZTEC_VM=ON");
         }
         if disable_testing {
+            println!("cargo:warning=🔧 DISABLING tests with multiple CMake flags");
             config.configure_arg("-DBUILD_TESTING=OFF");
+            config.configure_arg("-DENABLE_TESTING=OFF");
+            config.configure_arg("-DBUILD_TESTS=OFF");
         }
         if disable_multithreading {
             config.configure_arg("-DMULTITHREADING=OFF");
@@ -250,6 +260,9 @@ fn main() {
     // Add the library search path for libdeflate
     println!("cargo:rustc-link-search={}/build/_deps/libdeflate-build", dst.display());
 
+    // Add the library search path for LMDB
+    println!("cargo:rustc-link-search={}/build/_deps/lmdb/src/lmdb_repo/libraries/liblmdb", dst.display());
+
     // Link the `barretenberg` static library.
     println!("cargo:rustc-link-lib=static=barretenberg");
 
@@ -258,6 +271,9 @@ fn main() {
 
     // Link the `libdeflate` static library.
     println!("cargo:rustc-link-lib=static=deflate");
+
+    // Link the `lmdb` static library.
+    println!("cargo:rustc-link-lib=static=lmdb");
 
     // Link the C++ standard library.
     if cfg!(target_os = "macos") || cfg!(target_os = "ios") {

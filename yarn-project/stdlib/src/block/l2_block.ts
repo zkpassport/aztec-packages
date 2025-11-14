@@ -4,10 +4,12 @@ import { bufferToHex, hexToBuffer } from '@aztec/foundation/string';
 
 import { z } from 'zod';
 
+import { getCheckpointBlobFields } from '../checkpoint/checkpoint_body.js';
 import { AppendOnlyTreeSnapshot } from '../trees/append_only_tree_snapshot.js';
-import { BlockHeader } from '../tx/block_header.js';
+import type { BlockHeader } from '../tx/block_header.js';
 import { Body } from './body.js';
-import { makeAppendOnlyTreeSnapshot, makeHeader } from './l2_block_code_to_purge.js';
+import { makeAppendOnlyTreeSnapshot, makeL2BlockHeader } from './l2_block_code_to_purge.js';
+import { L2BlockHeader } from './l2_block_header.js';
 import type { L2BlockInfo } from './l2_block_info.js';
 
 /**
@@ -18,7 +20,7 @@ export class L2Block {
     /** Snapshot of archive tree after the block is applied. */
     public archive: AppendOnlyTreeSnapshot,
     /** L2 block header. */
-    public header: BlockHeader,
+    public header: L2BlockHeader,
     /** L2 block body. */
     public body: Body,
     private blockHash: Fr | undefined = undefined,
@@ -28,7 +30,7 @@ export class L2Block {
     return z
       .object({
         archive: AppendOnlyTreeSnapshot.schema,
-        header: BlockHeader.schema,
+        header: L2BlockHeader.schema,
         body: Body.schema,
       })
       .transform(({ archive, header, body }) => new L2Block(archive, header, body));
@@ -40,7 +42,7 @@ export class L2Block {
    */
   static fromBuffer(buf: Buffer | BufferReader) {
     const reader = BufferReader.asReader(buf);
-    const header = reader.readObject(BlockHeader);
+    const header = reader.readObject(L2BlockHeader);
     const archive = reader.readObject(AppendOnlyTreeSnapshot);
     const body = reader.readObject(Body);
 
@@ -94,7 +96,7 @@ export class L2Block {
 
     return new L2Block(
       makeAppendOnlyTreeSnapshot(l2BlockNum + 1),
-      makeHeader(0, l2BlockNum, slotNumber ?? l2BlockNum, inHash),
+      makeL2BlockHeader(0, l2BlockNum, slotNumber ?? l2BlockNum, {}, inHash),
       body,
     );
   }
@@ -104,7 +106,7 @@ export class L2Block {
    * @returns The L2 block.
    */
   static empty(): L2Block {
-    return new L2Block(AppendOnlyTreeSnapshot.empty(), BlockHeader.empty(), Body.empty());
+    return new L2Block(AppendOnlyTreeSnapshot.empty(), L2BlockHeader.empty(), Body.empty());
   }
 
   get number(): number {
@@ -125,9 +127,32 @@ export class L2Block {
    */
   public async hash(): Promise<Fr> {
     if (this.blockHash === undefined) {
-      this.blockHash = await this.header.hash();
+      this.blockHash = await this.getBlockHeader().hash();
     }
     return this.blockHash;
+  }
+
+  /**
+   * @deprecated
+   * This only works when there's one block per checkpoint.
+   * TODO(#17027): Remove this method from L2Block and create a dedicated Checkpoint class.
+   */
+  public getCheckpointHeader() {
+    return this.header.toCheckpointHeader();
+  }
+
+  // Temporary helper to get the actual block header.
+  public getBlockHeader(): BlockHeader {
+    return this.header.toBlockHeader();
+  }
+
+  /**
+   * @deprecated
+   * This only works when there's one block per checkpoint.
+   * TODO(#17027): Remove this method from L2Block and create a dedicated Checkpoint class.
+   */
+  public getCheckpointBlobFields() {
+    return getCheckpointBlobFields([this.body.txEffects]);
   }
 
   /**

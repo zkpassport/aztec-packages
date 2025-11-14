@@ -5,7 +5,7 @@ import { serializeWitness } from '@aztec/noir-noirc_abi';
 import type { ArtifactProvider } from '@aztec/noir-protocol-circuits-types/types';
 import type { CircuitSimulator } from '@aztec/simulator/client';
 import type { PrivateExecutionStep } from '@aztec/stdlib/kernel';
-import { ClientIvcProof } from '@aztec/stdlib/proofs';
+import { ClientIvcProofWithPublicInputs } from '@aztec/stdlib/proofs';
 
 import { ungzip } from 'pako';
 
@@ -21,7 +21,9 @@ export abstract class BBWASMPrivateKernelProver extends BBPrivateKernelProver {
     super(artifactProvider, simulator, log);
   }
 
-  public override async createClientIvcProof(executionSteps: PrivateExecutionStep[]): Promise<ClientIvcProof> {
+  public override async createClientIvcProof(
+    executionSteps: PrivateExecutionStep[],
+  ): Promise<ClientIvcProofWithPublicInputs> {
     const timer = new Timer();
     this.log.info(`Generating ClientIVC proof...`);
     const backend = new AztecClientBackend(
@@ -29,9 +31,7 @@ export abstract class BBWASMPrivateKernelProver extends BBPrivateKernelProver {
       { threads: this.threads, logger: this.log.verbose, wasmPath: process.env.BB_WASM_PATH },
     );
 
-    // TODO(https://github.com/AztecProtocol/barretenberg/issues/1297): the vk is not provided to the network anymore.
-    // Move this sanity check inside the wasm code and remove the vk from the return value.
-    const [proof, _vk] = await backend.prove(
+    const [proof] = await backend.prove(
       executionSteps.map(step => ungzip(serializeWitness(step.witness))),
       executionSteps.map(step => step.vk),
     );
@@ -41,7 +41,7 @@ export abstract class BBWASMPrivateKernelProver extends BBPrivateKernelProver {
       duration: timer.ms(),
       proofSize: proof.length,
     });
-    return new ClientIvcProof(Buffer.from(proof));
+    return ClientIvcProofWithPublicInputs.fromBufferArray(proof);
   }
 
   public override async computeGateCountForCircuit(_bytecode: Buffer, _circuitName: string): Promise<number> {

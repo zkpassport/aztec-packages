@@ -29,6 +29,7 @@ locals {
     ["--create-verification-json", "/tmp/l1-verify"],
     var.SALT != null ? ["--salt", tostring(var.SALT)] : [],
     var.SPONSORED_FPC ? ["--sponsored-fpc"] : [],
+    var.TEST_ACCOUNTS ? ["--test-accounts"] : [],
     var.REAL_VERIFIER ? ["--real-verifier"] : []
   )
 
@@ -41,12 +42,14 @@ locals {
     LOG_LEVEL       = "debug"
     BOOTSTRAP_NODES = "asdf"
     } : { for k, v in {
+      AZTEC_LAG_IN_EPOCHS                      = var.AZTEC_LAG_IN_EPOCHS
       AZTEC_SLOT_DURATION                      = var.AZTEC_SLOT_DURATION
       AZTEC_EPOCH_DURATION                     = var.AZTEC_EPOCH_DURATION
       AZTEC_TARGET_COMMITTEE_SIZE              = var.AZTEC_TARGET_COMMITTEE_SIZE
       AZTEC_PROOF_SUBMISSION_EPOCHS            = var.AZTEC_PROOF_SUBMISSION_EPOCHS
       AZTEC_ACTIVATION_THRESHOLD               = var.AZTEC_ACTIVATION_THRESHOLD
       AZTEC_EJECTION_THRESHOLD                 = var.AZTEC_EJECTION_THRESHOLD
+      AZTEC_LOCAL_EJECTION_THRESHOLD           = var.AZTEC_LOCAL_EJECTION_THRESHOLD
       AZTEC_SLASHING_QUORUM                    = var.AZTEC_SLASHING_QUORUM
       AZTEC_SLASHING_ROUND_SIZE                = var.AZTEC_SLASHING_ROUND_SIZE
       AZTEC_SLASHING_ROUND_SIZE_IN_EPOCHS      = var.AZTEC_SLASHING_ROUND_SIZE_IN_EPOCHS
@@ -100,9 +103,10 @@ resource "kubernetes_job_v1" "deploy_rollup_contracts" {
         restart_policy = "Never"
 
         container {
-          name    = "deploy-rollup-contracts"
-          image   = var.AZTEC_DOCKER_IMAGE
-          command = ["/bin/sh"]
+          name              = "deploy-rollup-contracts"
+          image             = var.AZTEC_DOCKER_IMAGE
+          image_pull_policy = "Always"
+          command           = ["/bin/sh"]
           args = concat(
             [
               "-lc",

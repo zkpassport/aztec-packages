@@ -33,11 +33,11 @@ using namespace bb;
  * @param key_fields
  * @param proof_fields
  */
-void create_dummy_vkey_and_proof(Builder& builder,
-                                 size_t proof_size,
-                                 size_t public_inputs_size,
-                                 const std::vector<field_ct>& key_fields,
-                                 const std::vector<field_ct>& proof_fields)
+static void create_dummy_vkey_and_proof(Builder& builder,
+                                        size_t proof_size,
+                                        size_t public_inputs_size,
+                                        const std::vector<field_ct>& key_fields,
+                                        const std::vector<field_ct>& proof_fields)
 {
     using ClientIVCRecursiveVerifier = stdlib::recursion::honk::ClientIVCRecursiveVerifier;
     using IO = stdlib::recursion::honk::HidingKernelIO<Builder>;
@@ -55,7 +55,7 @@ void create_dummy_vkey_and_proof(Builder& builder,
     // Set honk vk in builder
     size_t offset = 0;
     for (auto& vk_element : honk_vk->to_field_elements()) {
-        builder.set_variable(key_fields[offset].witness_index, vk_element);
+        builder.set_variable(key_fields[offset].get_witness_index(), vk_element);
         offset++;
     }
 
@@ -65,7 +65,7 @@ void create_dummy_vkey_and_proof(Builder& builder,
     // Set CIVC proof in builder
     offset = 0;
     for (auto& proof_element : civc_proof) {
-        builder.set_variable(proof_fields[offset].witness_index, proof_element);
+        builder.set_variable(proof_fields[offset].get_witness_index(), proof_element);
         offset++;
     }
 
@@ -111,9 +111,9 @@ create_civc_recursion_constraints(Builder& builder,
     }
 
     // Recursively verify CIVC proof
-    auto mega_vk = std::make_shared<VerificationKey>(builder, key_fields);
+    auto mega_vk = std::make_shared<VerificationKey>(key_fields);
     auto mega_vk_and_hash = std::make_shared<RecursiveVKAndHash>(mega_vk, vk_hash);
-    ClientIVCRecursiveVerifier::StdlibProof stdlib_proof(proof_fields);
+    ClientIVCRecursiveVerifier::StdlibProof stdlib_proof(proof_fields, input.public_inputs.size());
 
     ClientIVCRecursiveVerifier verifier(&builder, mega_vk_and_hash);
     ClientIVCRecursiveVerifier::Output verification_output = verifier.verify(stdlib_proof);

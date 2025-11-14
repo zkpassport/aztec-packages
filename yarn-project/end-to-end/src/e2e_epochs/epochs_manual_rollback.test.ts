@@ -1,5 +1,7 @@
-import { type AztecNode, type Logger, retryUntil } from '@aztec/aztec.js';
+import type { Logger } from '@aztec/aztec.js/log';
+import type { AztecNode } from '@aztec/aztec.js/node';
 import type { RollupContract } from '@aztec/ethereum';
+import { retryUntil } from '@aztec/foundation/retry';
 
 import { jest } from '@jest/globals';
 
@@ -17,7 +19,7 @@ describe('e2e_epochs/manual_rollback', () => {
   let test: EpochsTestContext;
 
   const setup = async (opts: Partial<EpochsTestOpts> = {}) => {
-    test = await EpochsTestContext.setup({ ...opts, txPropagationMaxQueryAttempts: 1 });
+    test = await EpochsTestContext.setup({ ...opts });
     ({ context, logger, rollup } = test);
     ({ aztecNode: node } = context);
   };

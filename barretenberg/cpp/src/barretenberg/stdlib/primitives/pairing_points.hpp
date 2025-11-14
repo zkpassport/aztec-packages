@@ -9,9 +9,17 @@
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/stdlib/primitives/curves/bn254.hpp"
 #include "barretenberg/stdlib/primitives/field/field.hpp"
-#include "barretenberg/stdlib/transcript/transcript.hpp"
 
 namespace bb::stdlib::recursion {
+
+static constexpr bb::fq DEFAULT_PAIRING_POINTS_P0_X(
+    "0x031e97a575e9d05a107acb64952ecab75c020998797da7842ab5d6d1986846cf");
+static constexpr bb::fq DEFAULT_PAIRING_POINTS_P0_Y(
+    "0x178cbf4206471d722669117f9758a4c410db10a01750aebb5666547acf8bd5a4");
+static constexpr bb::fq DEFAULT_PAIRING_POINTS_P1_X(
+    "0x0f94656a2ca489889939f81e9c74027fd51009034b3357f0e91b8a11e7842c38");
+static constexpr bb::fq DEFAULT_PAIRING_POINTS_P1_Y(
+    "0x1b52c2020d7464a0c80c0da527a08193fe27776f50224bd6fb128b46c1ddb67f");
 
 /**
  * @brief An object storing two EC points that represent the inputs to a pairing check.
@@ -19,13 +27,15 @@ namespace bb::stdlib::recursion {
  * multiple sets of pairing points.
  *
  * TODO(https://github.com/AztecProtocol/barretenberg/issues/1421): Proper tests for `PairingPoints`
+ * TODO(https://github.com/AztecProtocol/barretenberg/issues/1571): Implement tagging mechanism
  * @tparam Builder_
  */
 template <typename Builder_> struct PairingPoints {
     using Builder = Builder_;
     using Curve = bn254<Builder>;
-    using Group = typename Curve::Group;
-    using Fr = typename Curve::ScalarField;
+    using Group = Curve::Group;
+    using Fq = Curve::BaseField;
+    using Fr = Curve::ScalarField;
     Group P0;
     Group P1;
 
@@ -49,17 +59,55 @@ template <typename Builder_> struct PairingPoints {
     typename Curve::bool_ct operator==(PairingPoints const& other) const { return P0 == other.P0 && P1 == other.P1; };
 
     /**
+     * @brief Aggregate multiple PairingPoints
+     *
+     * @details The pairing points are aggregated using challenges generated as the consecutive hashes of the pairing
+     * points being aggregated.
+     */
+    static PairingPoints aggregate_multiple(std::vector<PairingPoints>& pairing_points)
+    {
+        size_t num_points = pairing_points.size();
+        BB_ASSERT_GT(num_points, 1UL, "This method should be used only with more than one pairing point.");
+
+        std::vector<Group> first_components;
+        first_components.reserve(num_points);
+        std::vector<Group> second_components;
+        second_components.reserve(num_points);
+        for (const auto& points : pairing_points) {
+            first_components.emplace_back(points.P0);
+            second_components.emplace_back(points.P1);
+        }
+
+        // Fiat-Shamir
+        StdlibTranscript<Builder> transcript{};
+        std::vector<std::string> labels;
+        labels.reserve(num_points);
+        for (size_t idx = 0; auto [first, second] : zip_view(first_components, second_components)) {
+            transcript.add_to_hash_buffer("first_component_" + std::to_string(idx), first);
+            transcript.add_to_hash_buffer("second_component_" + std::to_string(idx), second);
+            labels.emplace_back("pp_aggregation_challenge_" + std::to_string(idx));
+            idx++;
+        }
+
+        std::vector<Fr> challenges = transcript.template get_challenges<Fr>(labels);
+
+        // Batch mul
+        auto P0 = Group::batch_mul(first_components, challenges);
+        auto P1 = Group::batch_mul(second_components, challenges);
+
+        return { P0, P1 };
+    }
+
+    /**
      * @brief Compute a linear combination of the present pairing points with an input set of pairing points
      * @details The linear combination is done with a recursion separator that is the hash of the two sets of pairing
      * points.
      * @param other
      * @param recursion_separator
      */
-    // TODO(https://github.com/AztecProtocol/barretenberg/issues/1376): Potentially switch a batch_mul approach to
-    // aggregation rather than individually aggregating 1 object at a time.
     void aggregate(PairingPoints const& other)
     {
-        ASSERT(other.has_data, "Cannot aggregate null pairing points.");
+        BB_ASSERT(other.has_data, "Cannot aggregate null pairing points.");
 
         // If LHS is empty, simply set it equal to the incoming pairing points
         if (!this->has_data && other.has_data) {
@@ -67,13 +115,12 @@ template <typename Builder_> struct PairingPoints {
             return;
         }
         // We use a Transcript because it provides us an easy way to hash to get a "random" separator.
-        BaseTranscript<stdlib::recursion::honk::StdlibTranscriptParams<Builder>> transcript{};
+        StdlibTranscript<Builder> transcript{};
         // TODO(https://github.com/AztecProtocol/barretenberg/issues/1375): Sometimes unnecesarily hashing constants
-
-        transcript.send_to_verifier("Accumulator_P0", P0);
-        transcript.send_to_verifier("Accumulator_P1", P1);
-        transcript.send_to_verifier("Aggregated_P0", other.P0);
-        transcript.send_to_verifier("Aggregated_P1", other.P1);
+        transcript.add_to_hash_buffer("Accumulator_P0", P0);
+        transcript.add_to_hash_buffer("Accumulator_P1", P1);
+        transcript.add_to_hash_buffer("Aggregated_P0", other.P0);
+        transcript.add_to_hash_buffer("Aggregated_P1", other.P1);
         auto recursion_separator =
             transcript.template get_challenge<typename Curve::ScalarField>("recursion_separator");
         // If Mega Builder is in use, the EC operations are deferred via Goblin
@@ -82,8 +129,7 @@ template <typename Builder_> struct PairingPoints {
             P0 = Group::batch_mul({ P0, other.P0 }, { 1, recursion_separator });
             P1 = Group::batch_mul({ P1, other.P1 }, { 1, recursion_separator });
         } else {
-            // Save gates using short scalars. We don't apply `bn254_endo_batch_mul` to the vector {1,
-            // recursion_separator} directly to avoid edge cases.
+            // Save gates using short scalars.
             Group point_to_aggregate = other.P0.scalar_mul(recursion_separator, 128);
             P0 += point_to_aggregate;
             point_to_aggregate = other.P1.scalar_mul(recursion_separator, 128);
@@ -98,9 +144,31 @@ template <typename Builder_> struct PairingPoints {
      */
     uint32_t set_public()
     {
-        ASSERT(this->has_data, "Calling set_public on empty pairing points.");
+        BB_ASSERT(this->has_data, "Calling set_public on empty pairing points.");
         uint32_t start_idx = P0.set_public();
         P1.set_public();
+
+        return start_idx;
+    }
+
+    /**
+     * @brief Set the witness indices for the default limbs of the pairing points to public.
+     *
+     * @return uint32_t The index into the public inputs array at which the representation is stored
+     */
+    static uint32_t set_default_to_public(Builder* builder)
+    {
+        uint32_t start_idx = 0;
+        for (size_t idx = 0; auto const& coordinate : { DEFAULT_PAIRING_POINTS_P0_X,
+                                                        DEFAULT_PAIRING_POINTS_P0_Y,
+                                                        DEFAULT_PAIRING_POINTS_P1_X,
+                                                        DEFAULT_PAIRING_POINTS_P1_Y }) {
+            bigfield<Builder, bb::Bn254FqParams> bigfield_coordinate(coordinate);
+            bigfield_coordinate.convert_constant_to_fixed_witness(builder);
+            uint32_t index = bigfield_coordinate.set_public();
+            start_idx = idx == 0 ? index : start_idx;
+            idx++;
+        }
 
         return start_idx;
     }
@@ -141,34 +209,23 @@ template <typename Builder_> struct PairingPoints {
     }
 
     /**
-     * @brief Adds default public inputs to the builder.
-     * @details This should cost exactly 20 gates because there's 4 bigfield elements and each have 5 total
-     * witnesses including the prime limb.
+     * @brief Construct default pairing points.
      *
      * @param builder
      */
-    static void add_default_to_public_inputs(Builder& builder)
+    static PairingPoints construct_default()
     {
         // TODO(https://github.com/AztecProtocol/barretenberg/issues/911): These are pairing points extracted from a
         // valid proof. This is a workaround because we can't represent the point at infinity in biggroup yet.
-        bigfield<Builder, bb::Bn254FqParams> x0(
-            fq("0x031e97a575e9d05a107acb64952ecab75c020998797da7842ab5d6d1986846cf"));
-        bigfield<Builder, bb::Bn254FqParams> y0(
-            fq("0x178cbf4206471d722669117f9758a4c410db10a01750aebb5666547acf8bd5a4"));
-        bigfield<Builder, bb::Bn254FqParams> x1(
-            fq("0x0f94656a2ca489889939f81e9c74027fd51009034b3357f0e91b8a11e7842c38"));
-        bigfield<Builder, bb::Bn254FqParams> y1(
-            fq("0x1b52c2020d7464a0c80c0da527a08193fe27776f50224bd6fb128b46c1ddb67f"));
+        Fq x0(DEFAULT_PAIRING_POINTS_P0_X);
+        Fq y0(DEFAULT_PAIRING_POINTS_P0_Y);
+        Fq x1(DEFAULT_PAIRING_POINTS_P1_X);
+        Fq y1(DEFAULT_PAIRING_POINTS_P1_Y);
 
-        x0.convert_constant_to_fixed_witness(&builder);
-        y0.convert_constant_to_fixed_witness(&builder);
-        x1.convert_constant_to_fixed_witness(&builder);
-        y1.convert_constant_to_fixed_witness(&builder);
+        Group P0(x0, y0);
+        Group P1(x1, y1);
 
-        x0.set_public();
-        y0.set_public();
-        x1.set_public();
-        y1.set_public();
+        return { P0, P1 };
     }
 };
 

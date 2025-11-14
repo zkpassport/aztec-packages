@@ -9,13 +9,13 @@ using namespace bb;
 class Poseidon2FailureTests : public ::testing::Test {
   public:
     using Flavor = UltraFlavor;
-    using DeciderProvingKey = DeciderProvingKey_<Flavor>;
+    using ProverInstance = ProverInstance_<Flavor>;
     using SumcheckProver = SumcheckProver<Flavor>;
     using SumcheckVerifier = SumcheckVerifier<Flavor>;
     using FF = Flavor::FF;
     using Builder = Flavor::CircuitBuilder;
     using Transcript = Flavor::Transcript;
-    using SubrelationSeparators = Flavor::SubrelationSeparators;
+    using SubrelationSeparator = Flavor::SubrelationSeparator;
     using RelationParameters = RelationParameters<FF>;
 
     void modify_selector(auto& selector)
@@ -77,16 +77,13 @@ class Poseidon2FailureTests : public ::testing::Test {
         [[maybe_unused]] auto hash = stdlib::poseidon2<Builder>::hash({ random_input });
     }
 
-    void prove_and_verify(const std::shared_ptr<DeciderProvingKey>& proving_key, bool expected_result)
+    void prove_and_verify(const std::shared_ptr<ProverInstance>& prover_instance, bool expected_result)
     {
         const size_t virtual_log_n = Flavor::VIRTUAL_LOG_N;
 
         // Random subrelation separators are needed here to make sure that the sumcheck is failing because of the wrong
         // Poseidon2 selector/witness values.
-        SubrelationSeparators subrelation_separators{};
-        for (auto& alpha : subrelation_separators) {
-            alpha = FF::random_element();
-        }
+        SubrelationSeparator subrelation_separator = FF::random_element();
 
         std::vector<FF> gate_challenges(virtual_log_n);
 
@@ -102,10 +99,10 @@ class Poseidon2FailureTests : public ::testing::Test {
         }
         auto prover_transcript = std::make_shared<Transcript>();
 
-        SumcheckProver sumcheck_prover(proving_key->dyadic_size(),
-                                       proving_key->polynomials,
+        SumcheckProver sumcheck_prover(prover_instance->dyadic_size(),
+                                       prover_instance->polynomials,
                                        prover_transcript,
-                                       subrelation_separators,
+                                       subrelation_separator,
                                        gate_challenges,
                                        relation_parameters,
                                        virtual_log_n);
@@ -114,7 +111,7 @@ class Poseidon2FailureTests : public ::testing::Test {
         auto verifier_transcript = std::make_shared<Transcript>();
         verifier_transcript->load_proof(prover_transcript->export_proof());
 
-        SumcheckVerifier verifier(verifier_transcript, subrelation_separators, virtual_log_n);
+        SumcheckVerifier verifier(verifier_transcript, subrelation_separator, virtual_log_n);
         auto result = verifier.verify(relation_parameters, gate_challenges, std::vector<FF>(virtual_log_n, 1));
         EXPECT_EQ(result.verified, expected_result);
     };
@@ -128,20 +125,20 @@ TEST_F(Poseidon2FailureTests, WrongSelectorValues)
     hash_single_input(builder);
 
     // Convert circuit to polynomials.
-    auto proving_key = std::make_shared<DeciderProvingKey_<Flavor>>(builder);
+    auto prover_instance = std::make_shared<ProverInstance_<Flavor>>(builder);
     {
         // Disable Poseidon2 External selector in the first active row
-        modify_selector(proving_key->polynomials.q_poseidon2_external);
+        modify_selector(prover_instance->polynomials.q_poseidon2_external);
 
         // Run sumcheck on the invalidated data
-        prove_and_verify(proving_key, false);
+        prove_and_verify(prover_instance, false);
     }
     {
         // Disable Poseidon2 Internal selector in the first active row
-        modify_selector(proving_key->polynomials.q_poseidon2_internal);
+        modify_selector(prover_instance->polynomials.q_poseidon2_internal);
 
         // Run sumcheck on the invalidated data
-        prove_and_verify(proving_key, false);
+        prove_and_verify(prover_instance, false);
     }
 }
 
@@ -151,14 +148,14 @@ TEST_F(Poseidon2FailureTests, WrongWitnessValues)
 
     hash_single_input(builder);
 
-    auto proving_key = std::make_shared<DeciderProvingKey_<Flavor>>(builder);
+    auto prover_instance = std::make_shared<ProverInstance_<Flavor>>(builder);
     {
-        modify_witness(proving_key->polynomials.q_poseidon2_external, proving_key->polynomials.w_l);
-        prove_and_verify(proving_key, false);
+        modify_witness(prover_instance->polynomials.q_poseidon2_external, prover_instance->polynomials.w_l);
+        prove_and_verify(prover_instance, false);
     }
     {
-        modify_witness(proving_key->polynomials.q_poseidon2_internal, proving_key->polynomials.w_r);
-        prove_and_verify(proving_key, false);
+        modify_witness(prover_instance->polynomials.q_poseidon2_internal, prover_instance->polynomials.w_r);
+        prove_and_verify(prover_instance, false);
     }
 }
 
@@ -168,16 +165,18 @@ TEST_F(Poseidon2FailureTests, TamperingWithShifts)
 
     hash_single_input(builder);
 
-    auto proving_key = std::make_shared<DeciderProvingKey_<Flavor>>(builder);
+    auto prover_instance = std::make_shared<ProverInstance_<Flavor>>(builder);
     {
         bool external_round = true;
-        tamper_with_shifts(proving_key->polynomials.q_poseidon2_external, proving_key->polynomials.w_l, external_round);
-        prove_and_verify(proving_key, false);
+        tamper_with_shifts(
+            prover_instance->polynomials.q_poseidon2_external, prover_instance->polynomials.w_l, external_round);
+        prove_and_verify(prover_instance, false);
     }
 
     {
         bool external_round = false;
-        tamper_with_shifts(proving_key->polynomials.q_poseidon2_internal, proving_key->polynomials.w_l, external_round);
-        prove_and_verify(proving_key, false);
+        tamper_with_shifts(
+            prover_instance->polynomials.q_poseidon2_internal, prover_instance->polynomials.w_l, external_round);
+        prove_and_verify(prover_instance, false);
     }
 }

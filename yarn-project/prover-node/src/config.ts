@@ -1,7 +1,12 @@
 import { type ArchiverConfig, archiverConfigMappings } from '@aztec/archiver/config';
 import type { ACVMConfig, BBConfig } from '@aztec/bb-prover/config';
 import { type GenesisStateConfig, genesisStateConfigMappings } from '@aztec/ethereum';
-import { type ConfigMappingsType, getConfigFromMappings, numberConfigHelper } from '@aztec/foundation/config';
+import {
+  type ConfigMappingsType,
+  booleanConfigHelper,
+  getConfigFromMappings,
+  numberConfigHelper,
+} from '@aztec/foundation/config';
 import { type DataStoreConfig, dataConfigMappings } from '@aztec/kv-store/config';
 import { type KeyStore, type KeyStoreConfig, ethPrivateKeySchema, keyStoreConfigMappings } from '@aztec/node-keystore';
 import { type SharedNodeConfig, sharedNodeConfigMappings } from '@aztec/node-lib/config';
@@ -38,6 +43,8 @@ export type SpecificProverNodeConfig = {
   proverNodePollingIntervalMs: number;
   proverNodeMaxParallelBlocksPerEpoch: number;
   proverNodeFailedEpochStore: string | undefined;
+  proverNodeEpochProvingDelayMs: number | undefined;
+  proverNodeDisableProofPublish?: boolean;
   txGatheringTimeoutMs: number;
   txGatheringIntervalMs: number;
   txGatheringBatchSize: number;
@@ -65,6 +72,10 @@ const specificProverNodeConfigMappings: ConfigMappingsType<SpecificProverNodeCon
     description: 'File store where to upload node state when an epoch fails to be proven',
     defaultValue: undefined,
   },
+  proverNodeEpochProvingDelayMs: {
+    description: 'Optional delay in milliseconds to wait before proving a new epoch',
+    defaultValue: undefined,
+  },
   txGatheringIntervalMs: {
     env: 'PROVER_NODE_TX_GATHERING_INTERVAL_MS',
     description: 'How often to check that tx data is available',
@@ -84,6 +95,11 @@ const specificProverNodeConfigMappings: ConfigMappingsType<SpecificProverNodeCon
     env: 'PROVER_NODE_TX_GATHERING_TIMEOUT_MS',
     description: 'How long to wait for tx data to be available before giving up',
     ...numberConfigHelper(120_000),
+  },
+  proverNodeDisableProofPublish: {
+    env: 'PROVER_NODE_DISABLE_PROOF_PUBLISH',
+    description: 'Whether the prover node skips publishing proofs to L1',
+    ...booleanConfigHelper(false),
   },
 };
 
@@ -118,7 +134,7 @@ export function getProverNodeAgentConfigFromEnv(): ProverAgentConfig & BBConfig 
   };
 }
 
-function createKeyStoreFromWeb3Signer(config: ProverNodeConfig) {
+function createKeyStoreFromWeb3Signer(config: ProverNodeConfig): KeyStore | undefined {
   // If we don't have a valid prover Id then we can't build a valid key store with remote signers
   if (config.proverId === undefined) {
     return undefined;
@@ -144,7 +160,7 @@ function createKeyStoreFromWeb3Signer(config: ProverNodeConfig) {
   return keyStore;
 }
 
-function createKeyStoreFromPublisherKeys(config: ProverNodeConfig) {
+function createKeyStoreFromPublisherKeys(config: ProverNodeConfig): KeyStore | undefined {
   // Extract the publisher keys from the provided config.
   const publisherKeys = config.publisherPrivateKeys
     ? config.publisherPrivateKeys.map(k => ethPrivateKeySchema.parse(k.getValue()))
@@ -174,7 +190,7 @@ function createKeyStoreFromPublisherKeys(config: ProverNodeConfig) {
   return keyStore;
 }
 
-export function createKeyStoreForProver(config: ProverNodeConfig) {
+export function createKeyStoreForProver(config: ProverNodeConfig): KeyStore | undefined {
   if (config.web3SignerUrl !== undefined && config.web3SignerUrl.length > 0) {
     return createKeyStoreFromWeb3Signer(config);
   }

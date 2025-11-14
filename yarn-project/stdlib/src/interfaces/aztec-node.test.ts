@@ -53,6 +53,7 @@ import { TxHash } from '../tx/tx_hash.js';
 import { TxReceipt } from '../tx/tx_receipt.js';
 import type { TxValidationResult } from '../tx/validator/tx_validator.js';
 import type { SingleValidatorStats, ValidatorsStats } from '../validators/types.js';
+import type { AllowedElement } from './allowed_element.js';
 import { MAX_RPC_LEN } from './api_limit.js';
 import { type AztecNode, AztecNodeApiSchema } from './aztec-node.js';
 import type { SequencerConfig } from './configs.js';
@@ -172,6 +173,26 @@ describe('AztecNodeApiSchema', () => {
   it('getBlock', async () => {
     const response = await context.client.getBlock(1);
     expect(response).toBeInstanceOf(L2Block);
+  });
+
+  it('getBlockByHash', async () => {
+    const response = await context.client.getBlockByHash(Fr.random());
+    expect(response).toBeInstanceOf(L2Block);
+  });
+
+  it('getBlockByArchive', async () => {
+    const response = await context.client.getBlockByArchive(Fr.random());
+    expect(response).toBeInstanceOf(L2Block);
+  });
+
+  it('getBlockHeaderByHash', async () => {
+    const response = await context.client.getBlockHeaderByHash(Fr.random());
+    expect(response).toBeInstanceOf(BlockHeader);
+  });
+
+  it('getBlockHeaderByArchive', async () => {
+    const response = await context.client.getBlockHeaderByArchive(Fr.random());
+    expect(response).toBeInstanceOf(BlockHeader);
   });
 
   it('getCurrentBaseFees', async () => {
@@ -464,6 +485,11 @@ describe('AztecNodeApiSchema', () => {
     expect(response).toBe('enr:-');
   });
 
+  it('getAllowedPublicSetup', async () => {
+    const response = await context.client.getAllowedPublicSetup();
+    expect(response).toEqual([]);
+  });
+
   it('getWorldStateSyncStatus', async () => {
     const response = await context.client.getWorldStateSyncStatus();
     expect(response).toEqual(await handler.getWorldStateSyncStatus());
@@ -584,6 +610,18 @@ class MockAztecNode implements AztecNode {
   }
   getBlock(number: number): Promise<L2Block | undefined> {
     return Promise.resolve(L2Block.random(number));
+  }
+  getBlockByHash(_blockHash: Fr): Promise<L2Block | undefined> {
+    return Promise.resolve(L2Block.random(1));
+  }
+  getBlockByArchive(_archive: Fr): Promise<L2Block | undefined> {
+    return Promise.resolve(L2Block.random(1));
+  }
+  getBlockHeaderByHash(_blockHash: Fr): Promise<BlockHeader | undefined> {
+    return Promise.resolve(BlockHeader.empty());
+  }
+  getBlockHeaderByArchive(_archive: Fr): Promise<BlockHeader | undefined> {
+    return Promise.resolve(BlockHeader.empty());
   }
   getCurrentBaseFees(): Promise<GasFees> {
     return Promise.resolve(GasFees.empty());
@@ -758,5 +796,8 @@ class MockAztecNode implements AztecNode {
   }
   getEncodedEnr(): Promise<string | undefined> {
     return Promise.resolve('enr:-');
+  }
+  getAllowedPublicSetup(): Promise<AllowedElement[]> {
+    return Promise.resolve([]);
   }
 }

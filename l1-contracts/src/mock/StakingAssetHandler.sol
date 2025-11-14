@@ -7,7 +7,7 @@ import {IMintableERC20} from "@aztec/shared/interfaces/IMintableERC20.sol";
 import {G1Point, G2Point} from "@aztec/shared/libraries/BN254Lib.sol";
 import {Ownable} from "@oz/access/Ownable.sol";
 import {MerkleProof} from "@oz/utils/cryptography/MerkleProof.sol";
-import {ZKPassportVerifier, ProofVerificationParams, ProofType} from "@zkpassport/ZKPassportVerifier.sol";
+import {ZKPassportVerifier, ProofVerificationParams} from "@zkpassport/ZKPassportVerifier.sol";
 
 /**
  * @title StakingAssetHandler
@@ -32,6 +32,7 @@ import {ZKPassportVerifier, ProofVerificationParams, ProofType} from "@zkpasspor
 interface IStakingAssetHandler {
   event ToppedUp(uint256 _amount);
   event ValidatorAdded(address indexed _rollup, address indexed _attester, address _withdrawer);
+  event ValidatorsToFlushUpdated(uint256 _validatorsToFlush);
   event IntervalUpdated(uint256 _interval);
   event DepositsPerMintUpdated(uint256 _depositsPerMint);
   event WithdrawerUpdated(address indexed _withdrawer);
@@ -50,13 +51,8 @@ interface IStakingAssetHandler {
   error InvalidProof();
   error InvalidScope();
   error InvalidDomain();
-  error InvalidBoundAddress(address _expected, address _received);
-  error InvalidChainId(uint256 _expected, uint256 _received);
-  error InvalidAge();
-  error InvalidCountry();
-  error InvalidCurrentDate();
-  error InvalidValidityPeriod();
-  error ExtraDiscloseDataNonZero();
+  error ProofNotBoundToAddress(address _expected, address _received);
+  error ProofNotBoundToChainId(uint256 _expected, uint256 _received);
   error SybilDetected(bytes32 _nullifier);
   error AttesterDoesNotExist(address _attester);
   error NoNullifier();
@@ -79,6 +75,7 @@ interface IStakingAssetHandler {
   ) external;
 
   // Admin methods
+  function setValidatorsToFlush(uint256 _validatorsToFlush) external;
   function setMintInterval(uint256 _interval) external;
   function setDepositsPerMint(uint256 _depositsPerMint) external;
   function setWithdrawer(address _withdrawer) external;
@@ -101,6 +98,7 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
     address stakingAsset;
     IRegistry registry;
     address withdrawer;
+    uint256 validatorsToFlush;
     uint256 mintInterval;
     uint256 depositsPerMint;
     bytes32 depositMerkleRoot;
@@ -111,6 +109,18 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
     bool skipBindCheck;
     bool skipMerkleCheck;
   }
+
+  // Excluded countries list
+  string internal constant PKR = "PRK";
+  string internal constant UKR = "UKR";
+  string internal constant IRN = "IRN";
+  string internal constant CUB = "CUB";
+
+  // Minimum age
+  uint8 public constant MIN_AGE = 18;
+
+  // Validity period in seconds
+  uint256 public constant VALIDITY_PERIOD = 7 days;
 
   IMintableERC20 public immutable STAKING_ASSET;
   IRegistry public immutable REGISTRY;
@@ -124,6 +134,7 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
   mapping(bytes32 nullifier => bool exists) public nullifiers;
   mapping(address attester => bytes32 nullifier) public attesterToNullifier;
 
+  uint256 public validatorsToFlush;
   uint256 public lastMintTimestamp;
   uint256 public mintInterval;
   uint256 public depositsPerMint;
@@ -152,6 +163,9 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
 
     withdrawer = _args.withdrawer;
     emit WithdrawerUpdated(_args.withdrawer);
+
+    validatorsToFlush = _args.validatorsToFlush;
+    emit ValidatorsToFlushUpdated(_args.validatorsToFlush);
 
     mintInterval = _args.mintInterval;
     emit IntervalUpdated(_args.mintInterval);
@@ -237,6 +251,11 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
     _triggerDeposit(rollup, activationThreshold, _attester, _publicKeyG1, _publicKeyG2, _signature);
   }
 
+  function setValidatorsToFlush(uint256 _validatorsToFlush) external override(IStakingAssetHandler) onlyOwner {
+    validatorsToFlush = _validatorsToFlush;
+    emit ValidatorsToFlushUpdated(_validatorsToFlush);
+  }
+
   function setMintInterval(uint256 _interval) external override(IStakingAssetHandler) onlyOwner {
     mintInterval = _interval;
     emit IntervalUpdated(_interval);
@@ -306,10 +325,11 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
   function _validatePassportProof(address _attester, ProofVerificationParams calldata _params) internal {
     // Must NOT be using dev mode - https://docs.zkpassport.id/getting-started/dev-mode
     // If active, nullifiers will end up being zero, but it is user provided input, so we are sanity checking it
-    require(_params.devMode == false, InvalidProof());
+    require(_params.serviceConfig.devMode == false, InvalidProof());
 
-    require(keccak256(bytes(_params.domain)) == keccak256(bytes(validDomain)), InvalidDomain());
-    require(keccak256(bytes(_params.scope)) == keccak256(bytes(validScope)), InvalidScope());
+    require(keccak256(bytes(_params.serviceConfig.domain)) == keccak256(bytes(validDomain)), InvalidDomain());
+    require(keccak256(bytes(_params.serviceConfig.scope)) == keccak256(bytes(validScope)), InvalidScope());
+    require(_params.serviceConfig.validityPeriodInSeconds == VALIDITY_PERIOD, InvalidValidityPeriod());
 
     (bool verified, bytes32 nullifier) = zkPassportVerifier.verifyProof(_params);
 
@@ -318,34 +338,13 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
 
     if (!skipBindCheck) {
       bytes memory data = zkPassportVerifier.getBindProofInputs(_params.committedInputs, _params.committedInputCounts);
-
-      (address boundAddress, uint256 chainId, string memory customData) = zkPassportVerifier.getBoundData(data);
+      // Use the getBoundData function to get the formatted data
+      // which includes the user's address, chainId and any custom data
+      (address boundAddress, uint256 chainId,) = zkPassportVerifier.getBoundData(data);
       // Make sure the bound user address is the same as the _attester
-      require(boundAddress == _attester, InvalidBoundAddress(boundAddress, _attester));
+      require(boundAddress == _attester, ProofNotBoundToAddress(boundAddress, _attester));
       // Make sure the chainId is the same as the current chainId
-      require(chainId == block.chainid, InvalidChainId(chainId, block.chainid));
-      // Make sure the custom data is empty
-      require(bytes(customData).length == 0, ExtraDiscloseDataNonZero());
-
-      // Validity period check
-      require(validValidityPeriodInSeconds == _params.validityPeriodInSeconds, InvalidValidityPeriod());
-
-      // Age check
-      (uint256 currentDate, uint8 minAge, uint8 maxAge) =
-        zkPassportVerifier.getAgeProofInputs(_params.committedInputs, _params.committedInputCounts);
-      require(block.timestamp >= currentDate, InvalidCurrentDate());
-      require(validMinAge == minAge && validMaxAge == maxAge, InvalidAge());
-
-      // Country exclusion check
-      string[] memory exclusionCountryList = zkPassportVerifier.getCountryProofInputs(
-        _params.committedInputs, _params.committedInputCounts, ProofType.NATIONALITY_EXCLUSION
-      );
-      require(keccak256(bytes(exclusionCountryList[0])) == cub, InvalidCountry());
-      require(keccak256(bytes(exclusionCountryList[1])) == irn, InvalidCountry());
-      require(keccak256(bytes(exclusionCountryList[2])) == pkr, InvalidCountry());
-      require(keccak256(bytes(exclusionCountryList[3])) == ukr, InvalidCountry());
-
-      zkPassportVerifier.enforceSanctionsRoot(_params.committedInputs, _params.committedInputCounts);
+      require(chainId == block.chainid, ProofNotBoundToChainId(chainId, block.chainid));
     }
 
     // Set nullifier to consumed
@@ -392,7 +391,7 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
 
     // Try to flush the entry queue, but don't let it revert the deposit
     // solhint-disable-next-line no-empty-blocks
-    try _rollup.flushEntryQueue() {
+    try _rollup.flushEntryQueue(validatorsToFlush) {
       // Flush succeeded, no action needed
       // solhint-disable-next-line no-empty-blocks
     } catch {

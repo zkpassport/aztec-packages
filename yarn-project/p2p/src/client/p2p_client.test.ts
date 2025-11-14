@@ -148,10 +148,11 @@ describe('P2P Client', () => {
     expect(txPool.deleteTxs).not.toHaveBeenCalled();
 
     await advanceToFinalizedBlock(5);
-    expect(txPool.deleteTxs).toHaveBeenCalledTimes(5);
+    expect(txPool.deleteTxs).toHaveBeenCalledTimes(1);
+    txPool.deleteTxs.mockClear();
 
     await advanceToFinalizedBlock(8);
-    expect(txPool.deleteTxs).toHaveBeenCalledTimes(8);
+    expect(txPool.deleteTxs).toHaveBeenCalledTimes(1);
     await client.stop();
   });
 
@@ -349,10 +350,10 @@ describe('P2P Client', () => {
       // then prune the chain back to block 90
       // only one tx should be deleted
       const goodTx = await mockTx();
-      goodTx.data.constants.historicalHeader.globalVariables.blockNumber = 90;
+      goodTx.data.constants.anchorBlockHeader.globalVariables.blockNumber = 90;
 
       const badTx = await mockTx();
-      badTx.data.constants.historicalHeader.globalVariables.blockNumber = 95;
+      badTx.data.constants.anchorBlockHeader.globalVariables.blockNumber = 95;
 
       txPool.getAllTxs.mockResolvedValue([goodTx, badTx]);
 
@@ -371,13 +372,13 @@ describe('P2P Client', () => {
       // then prune the chain back to block 90
       // only one tx should be deleted
       const goodButOldTx = await mockTx();
-      goodButOldTx.data.constants.historicalHeader.globalVariables.blockNumber = 89;
+      goodButOldTx.data.constants.anchorBlockHeader.globalVariables.blockNumber = 89;
 
       const goodTx = await mockTx();
-      goodTx.data.constants.historicalHeader.globalVariables.blockNumber = 90;
+      goodTx.data.constants.anchorBlockHeader.globalVariables.blockNumber = 90;
 
       const badTx = await mockTx();
-      badTx.data.constants.historicalHeader.globalVariables.blockNumber = 95;
+      badTx.data.constants.anchorBlockHeader.globalVariables.blockNumber = 95;
 
       txPool.getAllTxs.mockResolvedValue([goodButOldTx, goodTx, badTx]);
       txPool.getMinedTxHashes.mockResolvedValue([

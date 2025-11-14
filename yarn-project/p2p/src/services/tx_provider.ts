@@ -45,7 +45,7 @@ export class TxProvider implements ITxProvider {
       if (tx === undefined) {
         missingTxs.push(txHashes[i]);
       } else {
-        txs.push(tx.setTxHash(txHashes[i]));
+        txs.push(tx);
       }
     }
 
@@ -55,11 +55,12 @@ export class TxProvider implements ITxProvider {
   /** Gathers txs from the tx pool, proposal body, remote rpc nodes, and reqresp. */
   public getTxsForBlockProposal(
     blockProposal: BlockProposal,
+    blockNumber: number,
     opts: { pinnedPeer: PeerId | undefined; deadline: Date },
   ): Promise<{ txs: Tx[]; missingTxs: TxHash[] }> {
     return this.getOrderedTxsFromAllSources(
-      { type: 'proposal', blockProposal },
-      blockProposal.toBlockInfo(),
+      { type: 'proposal', blockProposal, blockNumber },
+      { ...blockProposal.toBlockInfo(), blockNumber },
       blockProposal.txHashes,
       { ...opts, pinnedPeer: opts.pinnedPeer },
     );

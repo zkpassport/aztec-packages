@@ -37,9 +37,6 @@
       "path": "../cli"
     },
     {
-      "path": "../cli-wallet"
-    },
-    {
       "path": "../constants"
     },
     {
@@ -89,6 +86,9 @@
     },
     {
       "path": "../telemetry-client"
+    },
+    {
+      "path": "../test-wallet"
     },
     {
       "path": "../txe"

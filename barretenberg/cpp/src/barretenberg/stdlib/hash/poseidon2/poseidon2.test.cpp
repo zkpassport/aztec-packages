@@ -3,7 +3,7 @@
 #include "barretenberg/common/test.hpp"
 #include "barretenberg/crypto/poseidon2/poseidon2.hpp"
 #include "barretenberg/numeric/random/engine.hpp"
-#include "barretenberg/ultra_honk/decider_proving_key.hpp"
+#include "barretenberg/ultra_honk/prover_instance.hpp"
 
 using namespace bb;
 namespace {
@@ -92,7 +92,7 @@ template <typename Builder> class StdlibPoseidon2 : public testing::Test {
             left = poseidon2::hash({ left, right });
         }
 
-        builder.set_public_input(left.witness_index);
+        left.set_public();
 
         info("num gates = ", builder.get_estimated_num_finalized_gates());
 

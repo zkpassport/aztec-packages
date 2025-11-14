@@ -12,6 +12,7 @@ import { EthAddress } from '@aztec/foundation/eth-address';
 import { Fr } from '@aztec/foundation/fields';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import { bufferToHex } from '@aztec/foundation/string';
+import { DateProvider } from '@aztec/foundation/timer';
 import { TallySlashingProposerAbi } from '@aztec/l1-artifacts/TallySlashingProposerAbi';
 
 import type { Anvil } from '@viem/anvil';
@@ -67,7 +68,7 @@ describe('TallySlashingProposer', () => {
       ...DefaultL1ContractsConfig,
       salt: undefined,
       vkTreeRoot: Fr.random(),
-      protocolContractTreeRoot: Fr.random(),
+      protocolContractsHash: Fr.random(),
       genesisArchiveRoot: Fr.random(),
       realVerifier: false,
       slasherFlavor: 'tally' as const,
@@ -82,7 +83,7 @@ describe('TallySlashingProposer', () => {
     };
 
     const deployed = await deployL1Contracts([rpcUrl], deployerPrivateKey, foundry, logger, testConfig);
-    cheatCodes = new EthCheatCodes([rpcUrl]);
+    cheatCodes = new EthCheatCodes([rpcUrl], new DateProvider());
     rollupCheatCodes = new RollupCheatCodes(cheatCodes, deployed.l1ContractAddresses);
 
     writeClient = createExtendedL1Client([rpcUrl], deployerPrivateKey);
@@ -160,7 +161,6 @@ describe('TallySlashingProposer', () => {
       const roundInfo = await tallySlashingProposer.getRound(0n);
 
       expect(typeof roundInfo.isExecuted).toBe('boolean');
-      expect(typeof roundInfo.readyToExecute).toBe('boolean');
       expect(typeof roundInfo.voteCount).toBe('bigint');
       expect(roundInfo.voteCount).toBeGreaterThanOrEqual(0n);
     });

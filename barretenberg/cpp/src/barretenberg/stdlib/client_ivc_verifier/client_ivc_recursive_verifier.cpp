@@ -23,10 +23,13 @@ ClientIVCRecursiveVerifier::Output ClientIVCRecursiveVerifier::verify(const Stdl
     MegaVerifier verifier{ builder, stdlib_mega_vk_and_hash, civc_rec_verifier_transcript };
     MegaVerifier::Output mega_output = verifier.template verify_proof<HidingKernelIO<Builder>>(proof.mega_proof);
 
+    // Perform databus consistency checks
+    mega_output.kernel_return_data.incomplete_assert_equal(verifier.verifier_instance->witness_commitments.calldata);
+
     // Perform Goblin recursive verification
     GoblinVerificationKey goblin_verification_key{};
     MergeCommitments merge_commitments{
-        .t_commitments = verifier.key->witness_commitments.get_ecc_op_wires()
+        .t_commitments = verifier.verifier_instance->witness_commitments.get_ecc_op_wires()
                              .get_copy(), // Commitments to subtables added by the hiding kernel
         .T_prev_commitments = std::move(mega_output.ecc_op_tables) // Commitments to the state of the ecc op_queue as
                                                                    // computed insided the hiding kernel

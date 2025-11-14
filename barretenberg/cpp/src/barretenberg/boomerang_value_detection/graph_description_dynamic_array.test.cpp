@@ -37,13 +37,13 @@ TEST(boomerang_stdlib_dynamic_array, graph_description_dynamic_array_method_resi
 
     field_ct next_size = field_ct(witness_ct(&builder, (uint256_t)(max_size - 1)));
     for (size_t i = 0; i < max_size; ++i) {
-        array.push(field_ct::from_witness(&builder, i));
+        array.push(field_ct::from_witness(&builder, typename field_ct::native(i)));
     }
 
     array.resize(next_size, 7);
     StaticAnalyzer graph = StaticAnalyzer(builder);
     auto connected_components = graph.find_connected_components();
-    auto variables_in_one_gate = graph.show_variables_in_one_gate(builder);
+    auto variables_in_one_gate = graph.get_variables_in_one_gate();
     EXPECT_EQ(connected_components.size(), 1);
     EXPECT_EQ(variables_in_one_gate.size(), max_size);
 }
@@ -67,7 +67,7 @@ TEST(boomerang_stdlib_dynamic_array, graph_description_dynamic_array_consistency
     DynamicArray_ct array(&builder, max_size);
 
     for (size_t i = 0; i < max_size; ++i) {
-        array.push(field_ct::from_witness(&builder, i));
+        array.push(field_ct::from_witness(&builder, typename field_ct::native(i)));
     }
 
     for (size_t i = 0; i < max_size; ++i) {
@@ -83,6 +83,6 @@ TEST(boomerang_stdlib_dynamic_array, graph_description_dynamic_array_consistency
     StaticAnalyzer graph = StaticAnalyzer(builder);
     auto connected_components = graph.find_connected_components();
     EXPECT_EQ(connected_components.size(), 1);
-    auto variables_in_one_gate = graph.show_variables_in_one_gate(builder);
+    auto variables_in_one_gate = graph.get_variables_in_one_gate();
     EXPECT_EQ(variables_in_one_gate.size(), max_size);
 }

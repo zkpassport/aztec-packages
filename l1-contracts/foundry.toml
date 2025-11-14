@@ -5,7 +5,7 @@ script = 'script'
 out = 'out'
 libs = ['lib']
 solc = "0.8.27"
-evm_version = 'cancun'
+evm_version = 'prague'
 optimizer = true
 
 match_path = "test/**/*.t.sol"
@@ -69,6 +69,21 @@ variable_override_spacing = false
 wrap_comments = true
 number_underscore = "thousands"
 override_spacing = false
+
+[lint]
+ignore = ["./lib/**"]
+exclude_lints = [
+  "unused-import", # Mostly in test code
+  "incorrect-shift", # Throws warnings on construction of bitmasks
+
+  "asm-keccak256", # https://github.com/AztecProtocol/aztec-packages/issues/16808
+
+  # Silencing due to just being style changes
+  "mixed-case-variable",
+  "mixed-case-function",
+  "screaming-snake-case-const",
+  "screaming-snake-case-immutable",
+]
 
 [rpc_endpoints]
 mainnet_fork = "https://mainnet.infura.io/v3/9928b52099854248b3a096be07a6b23c"

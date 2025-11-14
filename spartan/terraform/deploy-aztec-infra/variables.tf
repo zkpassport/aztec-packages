@@ -1,3 +1,15 @@
+variable "R2_ACCESS_KEY_ID" {
+  description = "Cloudflare R2 access key id for RPC node snapshot uploads"
+  type        = string
+  default     = null
+}
+
+variable "R2_SECRET_ACCESS_KEY" {
+  description = "Cloudflare R2 secret access key for RPC node snapshot uploads"
+  type        = string
+  default     = null
+}
+
 variable "GCP_PROJECT_ID" {
   description = "GCP project id"
   type        = string
@@ -163,6 +175,18 @@ variable "VALIDATORS_PER_NODE" {
   default     = 12
 }
 
+variable "VALIDATOR_PUBLISHERS_PER_VALIDATOR_KEY" {
+  description = "Number of publisher EOAs per validator key"
+  type        = string
+  default     = 1
+}
+
+variable "VALIDATOR_PUBLISHER_MNEMONIC_START_INDEX" {
+  description = "Mnemonic start index for validator publishers"
+  type        = string
+  default     = 5000
+}
+
 variable "VALIDATOR_REPLICAS" {
   description = "The number of validator replicas"
   type        = string
@@ -175,10 +199,28 @@ variable "PROVER_MNEMONIC" {
   default     = "test test test test test test test test test test test junk"
 }
 
-variable "PROVER_MNEMONIC_START_INDEX" {
-  description = "The prover mnemonic start index"
+variable "PROVER_REPLICAS" {
+  description = "The number of prover replicas"
   type        = string
-  default     = 1000
+  default     = 4
+}
+
+variable "PROVER_PUBLISHERS_PER_PROVER" {
+  description = "Number of publisher keys per prover"
+  type        = string
+  default     = 1
+}
+
+variable "PROVER_PUBLISHER_MNEMONIC_START_INDEX" {
+  description = "The prover publisher mnemonic start index"
+  type        = string
+  default     = 8000
+}
+
+variable "PROVER_NODE_DISABLE_PROOF_PUBLISH" {
+  description = "Whether to disable proof publishing from the prover node"
+  type        = bool
+  default     = false
 }
 
 variable "OTEL_COLLECTOR_ENDPOINT" {
@@ -186,6 +228,28 @@ variable "OTEL_COLLECTOR_ENDPOINT" {
   type        = string
   default     = null
   nullable    = true
+}
+
+variable "SPONSORED_FPC" {
+  description = "Enable sponsored FPC"
+  type        = bool
+}
+
+variable "TEST_ACCOUNTS" {
+  description = "Enable test accounts"
+  type        = bool
+}
+
+variable "SEQ_MIN_TX_PER_BLOCK" {
+  description = "Minimum number of sequencer transactions per block"
+  type        = string
+  default     = "0"
+}
+
+variable "SEQ_MAX_TX_PER_BLOCK" {
+  description = "Maximum number of sequencer transactions per block"
+  type        = string
+  default     = "8"
 }
 
 variable "SENTINEL_ENABLED" {
@@ -289,6 +353,12 @@ variable "EXTERNAL_BOOTNODES" {
   default     = []
 }
 
+variable "DEPLOY_ARCHIVAL_NODE" {
+  description = "Whether to deploy the archival node"
+  type        = bool
+  default     = false
+}
+
 variable "NETWORK" {
   description = "One of the existing network names to use default config for"
   type        = string
@@ -375,13 +445,6 @@ variable "BOT_SWAPS_L2_PRIVATE_KEY" {
   default     = null
 }
 
-variable "PROVER_FAILED_PROOF_STORE" {
-  description = "Optional GCS/URI to store failed proofs from the prover"
-  type        = string
-  nullable    = false
-  default     = ""
-}
-
 # RPC ingress configuration (GKE-specific)
 variable "RPC_INGRESS_ENABLED" {
   description = "Enable GKE ingress for RPC nodes"
@@ -405,4 +468,29 @@ variable "RPC_INGRESS_SSL_CERT_NAME" {
   description = "Name of the GCP managed SSL certificate for the ingress"
   type        = string
   default     = ""
+}
+
+variable "PROVER_FAILED_PROOF_STORE" {
+  description = "Optional GCS/URI to store failed proofs from the prover"
+  type        = string
+  nullable    = false
+  default     = ""
+}
+
+variable "RPC_REPLICAS" {
+  description = "The number of RPC replicas"
+  type        = string
+  default     = 1
+}
+
+variable "P2P_TX_POOL_DELETE_TXS_AFTER_REORG" {
+  description = "Whether to delete transactions from the P2P transaction pool after a reorg"
+  type        = bool
+  default     = false
+}
+
+variable "PROVER_AGENTS_PER_PROVER" {
+  description = "Number of prover agents per prover"
+  type        = string
+  default     = 1
 }

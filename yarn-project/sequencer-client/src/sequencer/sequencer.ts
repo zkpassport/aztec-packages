@@ -1,18 +1,25 @@
-import type { L2Block } from '@aztec/aztec.js';
-import { INITIAL_L2_BLOCK_NUM } from '@aztec/constants';
+import { L2Block } from '@aztec/aztec.js/block';
+import { BLOBS_PER_BLOCK, FIELDS_PER_BLOB, INITIAL_L2_BLOCK_NUM } from '@aztec/constants';
 import type { EpochCache } from '@aztec/epoch-cache';
 import { FormattedViemError, NoCommitteeError, type RollupContract } from '@aztec/ethereum';
 import { omit, pick } from '@aztec/foundation/collection';
+import { randomInt } from '@aztec/foundation/crypto';
 import { EthAddress } from '@aztec/foundation/eth-address';
+import { Signature } from '@aztec/foundation/eth-signature';
 import { Fr } from '@aztec/foundation/fields';
 import { createLogger } from '@aztec/foundation/log';
 import { RunningPromise } from '@aztec/foundation/running-promise';
 import { type DateProvider, Timer } from '@aztec/foundation/timer';
-import type { TypedEventEmitter } from '@aztec/foundation/types';
+import { type TypedEventEmitter, unfreeze } from '@aztec/foundation/types';
 import type { P2P } from '@aztec/p2p';
 import type { SlasherClientInterface } from '@aztec/slasher';
-import type { CommitteeAttestation, L2BlockSource, ValidateBlockResult } from '@aztec/stdlib/block';
-import { type L1RollupConstants, getSlotAtTimestamp } from '@aztec/stdlib/epoch-helpers';
+import {
+  CommitteeAttestation,
+  CommitteeAttestationsAndSigners,
+  type L2BlockSource,
+  type ValidateBlockResult,
+} from '@aztec/stdlib/block';
+import { type L1RollupConstants, getSlotAtTimestamp, getSlotStartBuildTimestamp } from '@aztec/stdlib/epoch-helpers';
 import { Gas } from '@aztec/stdlib/gas';
 import {
   type IFullNodeBlockBuilder,
@@ -23,17 +30,11 @@ import {
 import type { L1ToL2MessageSource } from '@aztec/stdlib/messaging';
 import type { BlockProposalOptions } from '@aztec/stdlib/p2p';
 import { orderAttestations } from '@aztec/stdlib/p2p';
+import { CheckpointHeader } from '@aztec/stdlib/rollup';
 import { pickFromSchema } from '@aztec/stdlib/schemas';
 import type { L2BlockBuiltStats } from '@aztec/stdlib/stats';
 import { MerkleTreeId } from '@aztec/stdlib/trees';
-import {
-  ContentCommitment,
-  type FailedTx,
-  GlobalVariables,
-  ProposedBlockHeader,
-  Tx,
-  type TxHash,
-} from '@aztec/stdlib/tx';
+import { ContentCommitment, type FailedTx, GlobalVariables, Tx } from '@aztec/stdlib/tx';
 import { AttestationTimeoutError } from '@aztec/stdlib/validators';
 import { Attributes, type TelemetryClient, type Tracer, getTelemetryClient, trackSpan } from '@aztec/telemetry-client';
 import type { ValidatorClient } from '@aztec/validator-client';
@@ -45,8 +46,9 @@ import type { GlobalVariableBuilder } from '../global_variable_builder/global_bu
 import type { SequencerPublisherFactory } from '../publisher/sequencer-publisher-factory.js';
 import type { Action, InvalidateBlockRequest, SequencerPublisher } from '../publisher/sequencer-publisher.js';
 import type { SequencerConfig } from './config.js';
+import { SequencerInterruptedError, SequencerTooSlowError } from './errors.js';
 import { SequencerMetrics } from './metrics.js';
-import { SequencerTimetable, SequencerTooSlowError } from './timetable.js';
+import { SequencerTimetable } from './timetable.js';
 import { SequencerState, type SequencerStateWithSlot } from './utils.js';
 
 export { SequencerState };
@@ -127,15 +129,7 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
   ) {
     super();
 
-    // Set an initial coinbase for metrics purposes, but this will potentially change with each block.
-    const validatorAddresses = this.validatorClient?.getValidatorAddresses() ?? [];
-    const coinbase =
-      validatorAddresses.length === 0
-        ? EthAddress.ZERO
-        : (this.validatorClient?.getCoinbaseForAttestor(validatorAddresses[0]) ?? EthAddress.ZERO);
-
-    this.metrics = new SequencerMetrics(telemetry, () => this.state, coinbase, this.rollupContract, 'Sequencer');
-
+    this.metrics = new SequencerMetrics(telemetry, this.rollupContract, 'Sequencer');
     // Initialize config
     this.updateConfig(this.config);
   }
@@ -220,7 +214,6 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
    * Starts the sequencer and moves to IDLE state.
    */
   public start() {
-    this.metrics.start();
     this.runningPromise = new RunningPromise(this.work.bind(this), this.log, this.pollingIntervalMs);
     this.setState(SequencerState.IDLE, undefined, { force: true });
     this.runningPromise.start();
@@ -232,9 +225,8 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
    */
   public async stop(): Promise<void> {
     this.log.info(`Stopping sequencer`);
-    this.metrics.stop();
+    this.setState(SequencerState.STOPPING, undefined, { force: true });
     this.publisher?.interrupt();
-    await this.validatorClient?.stop();
     await this.runningPromise?.stop();
     this.setState(SequencerState.STOPPED, undefined, { force: true });
     this.log.info('Stopped sequencer');
@@ -361,8 +353,6 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
     const coinbase = this.validatorClient!.getCoinbaseForAttestor(attestorAddress);
     const feeRecipient = this.validatorClient!.getFeeRecipientForAttestor(attestorAddress);
 
-    this.metrics.setCoinbase(coinbase);
-
     // Prepare invalidation request if the pending chain is invalid (returns undefined if no need)
     const invalidateBlock = await publisher.simulateInvalidateBlock(syncedTo.pendingChainValidationStatus);
     const canProposeCheck = await publisher.canProposeAtNextEthBlock(
@@ -435,6 +425,8 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
     }
 
     this.setState(SequencerState.INITIALIZING_PROPOSAL, slot);
+
+    this.metrics.incOpenSlot(slot, proposerAddressInNextSlot.toString());
     this.log.verbose(`Preparing proposal for block ${newBlockNumber} at slot ${slot}`, {
       proposer: proposerInNextSlot?.toString(),
       coinbase,
@@ -447,7 +439,7 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
     });
 
     // If I created a "partial" header here that should make our job much easier.
-    const proposalHeader = ProposedBlockHeader.from({
+    const proposalHeader = CheckpointHeader.from({
       ...newGlobalVariables,
       timestamp: newGlobalVariables.timestamp,
       lastArchiveRoot: chainTipArchive,
@@ -494,7 +486,7 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
     if (proposedBlock) {
       this.lastBlockPublished = block;
       this.emit('block-published', { blockNumber: newBlockNumber, slot: Number(slot) });
-      this.metrics.incFilledSlot(publisher.getSenderAddress().toString());
+      await this.metrics.incFilledSlot(publisher.getSenderAddress().toString(), coinbase);
     } else if (block) {
       this.emit('block-publish-failed', l1Response ?? {});
     }
@@ -535,6 +527,10 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
     opts?: { force?: boolean },
   ): void;
   setState(proposedState: SequencerState, slotNumber: bigint | undefined, opts: { force?: boolean } = {}): void {
+    if (this.state === SequencerState.STOPPING && proposedState !== SequencerState.STOPPED && !opts.force) {
+      this.log.warn(`Cannot set sequencer to ${proposedState} as it is stopping.`);
+      throw new SequencerInterruptedError();
+    }
     if (this.state === SequencerState.STOPPED && !opts.force) {
       this.log.warn(`Cannot set sequencer from ${this.state} to ${proposedState} as it is stopped.`);
       return;
@@ -584,6 +580,7 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
       maxTransactions: this.maxTxsPerBlock,
       maxBlockSize: this.maxBlockSizeInBytes,
       maxBlockGas: this.maxBlockGas,
+      maxBlobFields: BLOBS_PER_BLOCK * FIELDS_PER_BLOB,
       deadline,
     };
   }
@@ -604,7 +601,7 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
   }))
   private async buildBlockAndEnqueuePublish(
     pendingTxs: Iterable<Tx> | AsyncIterable<Tx>,
-    proposalHeader: ProposedBlockHeader,
+    proposalHeader: CheckpointHeader,
     newGlobalVariables: GlobalVariables,
     proposerAddress: EthAddress | undefined,
     invalidateBlock: InvalidateBlockRequest | undefined,
@@ -616,7 +613,6 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
     const slot = proposalHeader.slotNumber.toBigInt();
     const l1ToL2Messages = await this.l1ToL2MessageSource.getL1ToL2Messages(blockNumber);
 
-    // this.metrics.recordNewBlock(blockNumber, validTxs.length);
     const workTimer = new Timer();
     this.setState(SequencerState.CREATING_BLOCK, slot);
 
@@ -644,7 +640,7 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
 
       // TODO(@PhilWindle) We should probably periodically check for things like another
       // block being published before ours instead of just waiting on our block
-      await publisher.validateBlockHeader(block.header.toPropose(), invalidateBlock);
+      await publisher.validateBlockHeader(block.getCheckpointHeader(), invalidateBlock);
 
       const blockStats: L2BlockBuiltStats = {
         eventName: 'l2-block-built',
@@ -675,7 +671,21 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
         this.log.verbose(`Collected ${attestations.length} attestations`, { blockHash, blockNumber });
       }
 
-      await this.enqueuePublishL2Block(block, attestations, txHashes, invalidateBlock, publisher);
+      const attestationsAndSigners = new CommitteeAttestationsAndSigners(attestations ?? []);
+      const attestationsAndSignersSignature = this.validatorClient
+        ? await this.validatorClient.signAttestationsAndSigners(
+            attestationsAndSigners,
+            proposerAddress ?? publisher.getSenderAddress(),
+          )
+        : Signature.empty();
+
+      await this.enqueuePublishL2Block(
+        block,
+        attestationsAndSigners,
+        attestationsAndSignersSignature,
+        invalidateBlock,
+        publisher,
+      );
       this.metrics.recordBuiltBlock(blockBuildDuration, publicGas.l2Gas);
       return block;
     } catch (err) {
@@ -720,10 +730,13 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
     this.setState(SequencerState.COLLECTING_ATTESTATIONS, slotNumber);
 
     this.log.debug('Creating block proposal for validators');
-    const blockProposalOptions: BlockProposalOptions = { publishFullTxs: !!this.config.publishTxsWithProposals };
+    const blockProposalOptions: BlockProposalOptions = {
+      publishFullTxs: !!this.config.publishTxsWithProposals,
+      broadcastInvalidBlockProposal: this.config.broadcastInvalidBlockProposal,
+    };
     const proposal = await this.validatorClient.createBlockProposal(
       block.header.globalVariables.blockNumber,
-      block.header.toPropose(),
+      block.getCheckpointHeader(),
       block.archive.root,
       block.header.state,
       txs,
@@ -751,7 +764,7 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
     this.metrics.recordRequiredAttestations(numberOfRequiredAttestations, attestationTimeAllowed);
 
     const timer = new Timer();
-    let collectedAttestionsCount: number = 0;
+    let collectedAttestationsCount: number = 0;
     try {
       const attestationDeadline = new Date(this.dateProvider.now() + attestationTimeAllowed * 1000);
       const attestations = await this.validatorClient.collectAttestations(
@@ -760,17 +773,24 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
         attestationDeadline,
       );
 
-      collectedAttestionsCount = attestations.length;
+      collectedAttestationsCount = attestations.length;
 
       // note: the smart contract requires that the signatures are provided in the order of the committee
-      return orderAttestations(attestations, committee);
+      const sorted = orderAttestations(attestations, committee);
+      if (this.config.injectFakeAttestation) {
+        const nonEmpty = sorted.filter(a => !a.signature.isEmpty());
+        const randomIndex = randomInt(nonEmpty.length);
+        this.log.warn(`Injecting fake attestation in block ${block.number}`);
+        unfreeze(nonEmpty[randomIndex]).signature = Signature.random();
+      }
+      return sorted;
     } catch (err) {
       if (err && err instanceof AttestationTimeoutError) {
-        collectedAttestionsCount = err.collectedCount;
+        collectedAttestationsCount = err.collectedCount;
       }
       throw err;
     } finally {
-      this.metrics.recordCollectedAttestations(collectedAttestionsCount, timer.ms());
+      this.metrics.recordCollectedAttestations(collectedAttestationsCount, timer.ms());
     }
   }
 
@@ -783,8 +803,8 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
   }))
   protected async enqueuePublishL2Block(
     block: L2Block,
-    attestations: CommitteeAttestation[] | undefined,
-    txHashes: TxHash[],
+    attestationsAndSigners: CommitteeAttestationsAndSigners,
+    attestationsAndSignersSignature: Signature,
     invalidateBlock: InvalidateBlockRequest | undefined,
     publisher: SequencerPublisher,
   ): Promise<void> {
@@ -795,10 +815,15 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
     const slot = block.header.globalVariables.slotNumber.toNumber();
     const txTimeoutAt = new Date((this.getSlotStartBuildTimestamp(slot) + this.aztecSlotDuration) * 1000);
 
-    const enqueued = await publisher.enqueueProposeL2Block(block, attestations, txHashes, {
-      txTimeoutAt,
-      forcePendingBlockNumber: invalidateBlock?.forcePendingBlockNumber,
-    });
+    const enqueued = await publisher.enqueueProposeL2Block(
+      block,
+      attestationsAndSigners,
+      attestationsAndSignersSignature,
+      {
+        txTimeoutAt,
+        forcePendingBlockNumber: invalidateBlock?.forcePendingBlockNumber,
+      },
+    );
 
     if (!enqueued) {
       throw new Error(`Failed to enqueue publish of block ${block.number}`);
@@ -946,11 +971,7 @@ export class Sequencer extends (EventEmitter as new () => TypedEventEmitter<Sequ
   }
 
   private getSlotStartBuildTimestamp(slotNumber: number | bigint): number {
-    return (
-      Number(this.l1Constants.l1GenesisTime) +
-      Number(slotNumber) * this.l1Constants.slotDuration -
-      this.l1Constants.ethereumSlotDuration
-    );
+    return getSlotStartBuildTimestamp(slotNumber, this.l1Constants);
   }
 
   private getSecondsIntoSlot(slotNumber: number | bigint): number {

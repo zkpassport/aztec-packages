@@ -18,7 +18,7 @@ namespace bb::mock_circuits {
  */
 template <typename Builder> void generate_basic_arithmetic_circuit(Builder& builder, size_t log2_num_gates)
 {
-    stdlib::recursion::PairingPoints<Builder>::add_default_to_public_inputs(builder);
+    stdlib::recursion::honk::DefaultIO<Builder>::add_default(builder);
 
     stdlib::field_t a(stdlib::witness_t(&builder, fr::random_element()));
     stdlib::field_t b(stdlib::witness_t(&builder, fr::random_element()));
@@ -56,9 +56,9 @@ Prover get_prover(void (*test_circuit_function)(typename Prover::Flavor::Circuit
 
     BB_BENCH_NAME("creating prover");
 
-    auto proving_key = std::make_shared<DeciderProvingKey_<Flavor>>(builder);
-    auto verification_key = std::make_shared<typename Flavor::VerificationKey>(proving_key->get_precomputed());
-    return Prover(proving_key, verification_key);
+    auto prover_instance = std::make_shared<ProverInstance_<Flavor>>(builder);
+    auto verification_key = std::make_shared<typename Flavor::VerificationKey>(prover_instance->get_precomputed());
+    return Prover(prover_instance, verification_key);
 };
 
 /**

@@ -1,6 +1,7 @@
-import { EthAddress } from '@aztec/aztec.js';
+import { EthAddress } from '@aztec/aztec.js/addresses';
 import type { EpochCache } from '@aztec/epoch-cache';
 import { RollupContract, SlasherContract, TallySlashingProposerContract } from '@aztec/ethereum/contracts';
+import { maxBigint } from '@aztec/foundation/bigint';
 import { compactArray, partition, times } from '@aztec/foundation/collection';
 import { createLogger } from '@aztec/foundation/log';
 import { sleep } from '@aztec/foundation/sleep';
@@ -45,7 +46,7 @@ export type TallySlasherSettings = Prettify<
 >;
 
 export type TallySlasherClientConfig = SlashOffensesCollectorConfig &
-  Pick<SlasherConfig, 'slashValidatorsAlways' | 'slashValidatorsNever'>;
+  Pick<SlasherConfig, 'slashValidatorsAlways' | 'slashValidatorsNever' | 'slashExecuteRoundsLookBack'>;
 
 /**
  * The Tally Slasher client is responsible for managing slashable offenses using
@@ -177,25 +178,71 @@ export class TallySlasherClient implements ProposerSlashActionProvider, SlasherC
     return compactArray<ProposerSlashAction>([executeAction, voteAction]);
   }
 
-  /** Returns an execute slash action if there are any rounds ready to be executed */
+  /**
+   * Returns an execute slash action if there are any rounds ready to be executed.
+   * Returns the oldest slash action if there are multiple rounds pending execution.
+   */
   protected async getExecuteSlashAction(slotNumber: bigint): Promise<ProposerSlashAction | undefined> {
     const { round: currentRound } = this.roundMonitor.getRoundForSlot(slotNumber);
     const slashingExecutionDelayInRounds = BigInt(this.settings.slashingExecutionDelayInRounds);
     const executableRound = currentRound - slashingExecutionDelayInRounds - 1n;
-    if (executableRound < 0n) {
+    const lookBack = BigInt(this.config.slashExecuteRoundsLookBack);
+    const slashingLifetimeInRounds = BigInt(this.settings.slashingLifetimeInRounds);
+
+    // Compute the oldest executable round considering both lookBack and lifetimeInRounds
+    // A round is only executable if currentRound <= round + lifetimeInRounds
+    // So the oldest round we can execute is: currentRound - lifetimeInRounds
+    const oldestByLifetime = maxBigint(0n, currentRound - slashingLifetimeInRounds);
+    const oldestByLookBack = maxBigint(0n, executableRound - lookBack);
+    const oldestExecutableRound = maxBigint(oldestByLifetime, oldestByLookBack);
+
+    // Check if slashing is enabled at all
+    if (!(await this.slasher.isSlashingEnabled())) {
+      this.log.warn(`Slashing is disabled in the Slasher contract (skipping execution)`);
       return undefined;
     }
 
-    let logData: Record<string, unknown> = { currentRound, executableRound, slotNumber };
+    this.log.debug(`Checking slashing rounds ${oldestExecutableRound} to ${executableRound} to execute`, {
+      slotNumber,
+      currentRound,
+      oldestExecutableRound,
+      oldestByLifetime,
+      oldestByLookBack,
+      executableRound,
+      slashingExecutionDelayInRounds,
+      lookBack,
+      slashingLifetimeInRounds,
+    });
+
+    // Iterate over all rounds, starting from the oldest, until we find one that is executable
+    for (let roundToCheck = oldestExecutableRound; roundToCheck <= executableRound; roundToCheck++) {
+      const action = await this.tryGetRoundExecuteAction(roundToCheck, slotNumber);
+      if (action) {
+        return action;
+      }
+    }
+
+    // And return nothing if none are found
+    return undefined;
+  }
+
+  /**
+   * Checks if a given round is executable and returns an execute-slash action for it if so.
+   * Assumes round number has already been checked against lifetime and execution delay.
+   * @param executableRound - The round to check for execution
+   */
+  private async tryGetRoundExecuteAction(
+    executableRound: bigint,
+    slotNumber: bigint,
+  ): Promise<ProposerSlashAction | undefined> {
+    let logData: Record<string, unknown> = { executableRound, slotNumber };
+    this.log.debug(`Testing if slashing round ${executableRound} is executable`, logData);
 
     try {
       const roundInfo = await this.tallySlashingProposer.getRound(executableRound);
       logData = { ...logData, roundInfo };
       if (roundInfo.isExecuted) {
         this.log.verbose(`Round ${executableRound} has already been executed`, logData);
-        return undefined;
-      } else if (!roundInfo.readyToExecute) {
-        this.log.verbose(`Round ${executableRound} is not ready to execute yet`, logData);
         return undefined;
       } else if (roundInfo.voteCount === 0n) {
         this.log.debug(`Round ${executableRound} received no votes`, logData);
@@ -205,6 +252,17 @@ export class TallySlasherClient implements ProposerSlashActionProvider, SlasherC
         return undefined;
       }
 
+      // Check if round is ready to execute at the given slot
+      const isReadyToExecute = await this.tallySlashingProposer.isRoundReadyToExecute(executableRound, slotNumber);
+      if (!isReadyToExecute) {
+        this.log.warn(
+          `Round ${executableRound} is not ready to execute at slot ${slotNumber} according to contract check`,
+          logData,
+        );
+        return undefined;
+      }
+
+      // Check if the round yields any slashing at all
       const { actions: slashActions, committees } = await this.tallySlashingProposer.getTally(executableRound);
       if (slashActions.length === 0) {
         this.log.verbose(`Round ${executableRound} does not resolve in any slashing`, logData);
@@ -239,9 +297,8 @@ export class TallySlasherClient implements ProposerSlashActionProvider, SlasherC
       return { type: 'execute-slash', round: executableRound, committees: slashedCommittees };
     } catch (error) {
       this.log.error(`Error checking round to execute ${executableRound}`, error);
+      return undefined;
     }
-
-    return undefined;
   }
 
   /** Returns a vote action based on offenses from the target round (with offset applied) */

@@ -1,18 +1,18 @@
 /**
  * Tests for KeystoreManager
  */
-import { getAddressFromPrivateKey } from '@aztec/ethereum';
 import { Buffer32 } from '@aztec/foundation/buffer';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mnemonicToAccount } from 'viem/accounts';
 
 import { KeystoreError, KeystoreManager } from '../src/keystore_manager.js';
+import { LocalSigner, RemoteSigner } from '../src/signer.js';
 import type { KeyStore } from '../src/types.js';
 
 describe('KeystoreManager', () => {
@@ -111,6 +111,47 @@ describe('KeystoreManager', () => {
   });
 
   describe('signer creation', () => {
+    it('should create signers from combined { eth, bls } and from mixed arrays (eth only)', async () => {
+      const ethPk1 = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as any;
+      const blsPk1 = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as any;
+
+      // Single combined object
+      const ks1: KeyStore = {
+        schemaVersion: 1,
+        validators: [
+          {
+            attester: { eth: ethPk1, bls: blsPk1 } as any,
+            feeRecipient: await AztecAddress.random(),
+          },
+        ],
+      };
+
+      const m1 = new KeystoreManager(ks1);
+      const s1 = m1.createAttesterSigners(0);
+      expect(s1).toHaveLength(1);
+      const expected1 = new LocalSigner(Buffer32.fromString(ethPk1));
+      expect(s1[0].address.equals(expected1.address)).toBeTruthy();
+
+      // Mixed array: {eth, bls} and plain EthAccount
+      const ethPk2 = '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' as any;
+      const ks2: KeyStore = {
+        schemaVersion: 1,
+        validators: [
+          {
+            attester: [{ eth: ethPk1, bls: blsPk1 } as any, ethPk2] as any,
+            feeRecipient: await AztecAddress.random(),
+          },
+        ],
+      };
+
+      const m2 = new KeystoreManager(ks2);
+      const s2 = m2.createAttesterSigners(0);
+      expect(s2).toHaveLength(2);
+      const expected2a = new LocalSigner(Buffer32.fromString(ethPk1));
+      const expected2b = new LocalSigner(Buffer32.fromString(ethPk2));
+      const addrs = s2.map(x => x.address.toString()).sort();
+      expect(addrs).toEqual([expected2a.address.toString(), expected2b.address.toString()].sort());
+    });
     it('should create attester signers from private key', async () => {
       const keystore: KeyStore = {
         schemaVersion: 1,
@@ -201,8 +242,8 @@ describe('KeystoreManager', () => {
       };
 
       const manager = new KeystoreManager(keystore);
-      const coinbase = manager.getCoinbaseAddress(0);
       const attesterSigners = manager.createAttesterSigners(0);
+      const coinbase = manager.getCoinbaseAddress(0, attesterSigners[0].address);
 
       expect(coinbase.toString()).toBe(attesterSigners[0].address.toString());
     });
@@ -220,9 +261,38 @@ describe('KeystoreManager', () => {
       };
 
       const manager = new KeystoreManager(keystore);
-      const coinbase = manager.getCoinbaseAddress(0);
+      const attesterSigners = manager.createAttesterSigners(0);
+      const coinbase = manager.getCoinbaseAddress(0, attesterSigners[0].address);
 
       expect(coinbase.toString()).toBe('0x9876543210987654321098765432109876543210');
+    });
+
+    it('should get coinbase address for each attester when no explicit coinbase is set', async () => {
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        validators: [
+          {
+            attester: [
+              '0x1234567890123456789012345678901234567890123456789012345678901234',
+              '0x2345678901234567890123456789012345678901234567890123456789012345',
+              '0x3456789012345678901234567890123456789012345678901234567890123456',
+            ] as any[],
+            feeRecipient: await AztecAddress.random(),
+          },
+        ],
+      };
+
+      const manager = new KeystoreManager(keystore);
+      const attesterSigners = manager.createAttesterSigners(0);
+
+      // Each attester should get its own address as coinbase
+      const coinbase0 = manager.getCoinbaseAddress(0, attesterSigners[0].address);
+      const coinbase1 = manager.getCoinbaseAddress(0, attesterSigners[1].address);
+      const coinbase2 = manager.getCoinbaseAddress(0, attesterSigners[2].address);
+
+      expect(coinbase0.toString()).toBe(attesterSigners[0].address.toString());
+      expect(coinbase1.toString()).toBe(attesterSigners[1].address.toString());
+      expect(coinbase2.toString()).toBe(attesterSigners[2].address.toString());
     });
   });
 
@@ -933,10 +1003,43 @@ describe('KeystoreManager', () => {
         proverSigners!.id!.equals(EthAddress.fromString('0x1234567890123456789012345678901234567890')),
       ).toBeTruthy();
 
-      const expectedAddress = getAddressFromPrivateKey(
-        '0x1234567890123456789012345678901234567890123456789012345678901234',
+      const expectedSigner = new LocalSigner(
+        Buffer32.fromString('0x1234567890123456789012345678901234567890123456789012345678901234' as any),
       );
-      expect(proverSigners!.signers[0].address.toChecksumString()).toBe(expectedAddress);
+      expect(proverSigners!.signers[0].address.equals(expectedSigner.address)).toBeTruthy();
+    });
+
+    it('should return mnemonic prover signers via getter', () => {
+      const id = EthAddress.fromString('0x1234567890123456789012345678901234567890');
+      const mnemonic = 'test test test test test test test test test test test junk';
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        prover: {
+          id: id,
+          publisher: {
+            mnemonic: mnemonic,
+            addressCount: 1,
+          },
+        },
+      };
+
+      const manager = new KeystoreManager(keystore);
+      const proverSigners = manager.createProverSigners();
+      expect(proverSigners).toBeDefined();
+      expect(Array.isArray(proverSigners!.signers)).toBe(true);
+      expect(proverSigners!.signers.length).toBe(1);
+      expect(proverSigners!.id).toBeDefined();
+      expect(
+        proverSigners!.id!.equals(EthAddress.fromString('0x1234567890123456789012345678901234567890')),
+      ).toBeTruthy();
+
+      const viemAccount = mnemonicToAccount(mnemonic, {
+        accountIndex: 0,
+        addressIndex: 0,
+      });
+
+      const expectedAddress = viemAccount.address;
+      expect(proverSigners!.signers[0].address.equals(EthAddress.fromString(expectedAddress))).toBeTruthy();
     });
 
     it('should return mnemonic prover signers via getter', () => {
@@ -1091,6 +1194,218 @@ describe('KeystoreManager', () => {
       const signerAddr = manager.createAttesterSigners(0)[0].address; // derived local signer
       const cfg = manager.getEffectiveRemoteSignerConfig(0, signerAddr);
       expect(cfg).toBeUndefined();
+    });
+  });
+
+  describe('validateSigners', () => {
+    it('should not validate when there are no remote signers', async () => {
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        validators: [
+          {
+            attester: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef' as any,
+            feeRecipient: await AztecAddress.random(),
+          },
+        ],
+      };
+
+      const manager = new KeystoreManager(keystore);
+      await expect(manager.validateSigners()).resolves.not.toThrow();
+    });
+
+    it('should validate remote signers for validators', async () => {
+      const testAddress = EthAddress.random();
+      const testUrl = 'http://test-signer:9000';
+
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        validators: [
+          {
+            attester: { address: testAddress, remoteSignerUrl: testUrl },
+            feeRecipient: await AztecAddress.random(),
+          },
+        ],
+      };
+
+      using _ = jest.spyOn(RemoteSigner, 'validateAccess').mockImplementation(() => Promise.resolve());
+
+      const manager = new KeystoreManager(keystore);
+      await expect(manager.validateSigners()).resolves.not.toThrow();
+    });
+
+    it('should batch validate multiple addresses for the same remote signer URL', async () => {
+      const testUrl = 'http://test-signer:9000';
+      const address1 = EthAddress.random();
+      const address2 = EthAddress.random();
+      const address3 = EthAddress.random();
+
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        validators: [
+          {
+            attester: [
+              { address: address1, remoteSignerUrl: testUrl },
+              { address: address2, remoteSignerUrl: testUrl },
+            ],
+            publisher: { address: address3, remoteSignerUrl: testUrl },
+            feeRecipient: await AztecAddress.random(),
+          },
+        ],
+      };
+
+      using validateAccessSpy = jest.spyOn(RemoteSigner, 'validateAccess').mockImplementation(() => Promise.resolve());
+
+      const manager = new KeystoreManager(keystore);
+      await expect(manager.validateSigners()).resolves.not.toThrow();
+
+      // Should batch all three addresses into one call
+      expect(validateAccessSpy).toHaveBeenCalledTimes(1);
+      expect(validateAccessSpy).toHaveBeenCalledWith(
+        testUrl,
+        expect.arrayContaining([address1.toString(), address2.toString(), address3.toString()]),
+      );
+    });
+
+    it('should validate remote signers from default config', async () => {
+      const defaultUrl = 'http://default-signer:9000';
+      const address = EthAddress.random();
+
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        remoteSigner: defaultUrl,
+        validators: [
+          {
+            attester: address, // Just address, uses default remote signer
+            feeRecipient: await AztecAddress.random(),
+          },
+        ],
+      };
+
+      using validateAccessSpy = jest.spyOn(RemoteSigner, 'validateAccess');
+      validateAccessSpy.mockResolvedValueOnce(undefined);
+
+      const manager = new KeystoreManager(keystore);
+      await expect(manager.validateSigners()).resolves.not.toThrow();
+
+      expect(validateAccessSpy).toHaveBeenCalledWith(defaultUrl, [address.toString()]);
+    });
+
+    it('should validate slasher remote signers', async () => {
+      const testUrl = 'http://slasher-signer:9000';
+      const slasherAddress = EthAddress.random();
+
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        slasher: { address: slasherAddress, remoteSignerUrl: testUrl },
+      };
+
+      using validateAccessSpy = jest.spyOn(RemoteSigner, 'validateAccess');
+      validateAccessSpy.mockResolvedValueOnce(undefined);
+
+      const manager = new KeystoreManager(keystore);
+      await expect(manager.validateSigners()).resolves.not.toThrow();
+
+      expect(validateAccessSpy).toHaveBeenCalledWith(testUrl, [slasherAddress.toString()]);
+    });
+
+    it('should validate prover remote signers', async () => {
+      const testUrl = 'http://prover-signer:9000';
+      const publisherAddress = EthAddress.random();
+      const proverId = EthAddress.random();
+
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        remoteSigner: testUrl,
+        prover: {
+          id: proverId,
+          publisher: [publisherAddress],
+        },
+      };
+
+      using validateAccessSpy = jest.spyOn(RemoteSigner, 'validateAccess');
+      validateAccessSpy.mockResolvedValueOnce(undefined);
+
+      const manager = new KeystoreManager(keystore);
+      await expect(manager.validateSigners()).resolves.not.toThrow();
+
+      expect(validateAccessSpy).toHaveBeenCalledWith(testUrl, [publisherAddress.toString()]);
+    });
+
+    it('should handle validation errors', async () => {
+      const testUrl = 'http://test-signer:9000';
+      const address = EthAddress.random();
+
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        validators: [
+          {
+            attester: { address, remoteSignerUrl: testUrl },
+            feeRecipient: await AztecAddress.random(),
+          },
+        ],
+      };
+
+      using validateAccessSpy = jest.spyOn(RemoteSigner, 'validateAccess');
+      validateAccessSpy.mockRejectedValueOnce(new Error('Connection refused'));
+
+      const manager = new KeystoreManager(keystore);
+      await expect(manager.validateSigners()).rejects.toThrow('Connection refused');
+    });
+
+    it('should skip validation for mnemonic and JSON V3 configs', async () => {
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        validators: [
+          {
+            attester: { mnemonic: 'test test test test test test test test test test test junk' } as any,
+            feeRecipient: await AztecAddress.random(),
+          },
+          {
+            attester: { path: '/some/path.json', password: 'test' } as any,
+            feeRecipient: await AztecAddress.random(),
+          },
+        ],
+      };
+
+      using validateAccessSpy = jest.spyOn(RemoteSigner, 'validateAccess');
+
+      const manager = new KeystoreManager(keystore);
+      await expect(manager.validateSigners()).resolves.not.toThrow();
+
+      // Should not call validateAccess for mnemonic or JSON configs
+      expect(validateAccessSpy).not.toHaveBeenCalled();
+    });
+
+    it('should validate multiple remote signer URLs separately', async () => {
+      const url1 = 'http://signer1:9000';
+      const url2 = 'http://signer2:9000';
+      const address1 = EthAddress.random();
+      const address2 = EthAddress.random();
+
+      const keystore: KeyStore = {
+        schemaVersion: 1,
+        validators: [
+          {
+            attester: { address: address1, remoteSignerUrl: url1 },
+            feeRecipient: await AztecAddress.random(),
+          },
+          {
+            attester: { address: address2, remoteSignerUrl: url2 },
+            feeRecipient: await AztecAddress.random(),
+          },
+        ],
+      };
+
+      using validateAccessSpy = jest.spyOn(RemoteSigner, 'validateAccess');
+      validateAccessSpy.mockResolvedValue(undefined);
+
+      const manager = new KeystoreManager(keystore);
+      await expect(manager.validateSigners()).resolves.not.toThrow();
+
+      // Should call validateAccess twice, once for each URL
+      expect(validateAccessSpy).toHaveBeenCalledTimes(2);
+      expect(validateAccessSpy).toHaveBeenCalledWith(url1, [address1.toString()]);
+      expect(validateAccessSpy).toHaveBeenCalledWith(url2, [address2.toString()]);
     });
   });
 });

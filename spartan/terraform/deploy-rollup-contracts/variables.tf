@@ -18,6 +18,7 @@ variable "AZTEC_DOCKER_IMAGE" {
 variable "L1_RPC_URLS" {
   description = "Comma-separated list of L1 RPC URLs"
   type        = string
+  sensitive   = true
 }
 
 variable "PRIVATE_KEY" {
@@ -46,6 +47,11 @@ variable "VALIDATORS" {
 
 variable "SPONSORED_FPC" {
   description = "Enable sponsored FPC"
+  type        = bool
+}
+
+variable "TEST_ACCOUNTS" {
+  description = "Enable test accounts"
   type        = bool
 }
 
@@ -85,8 +91,20 @@ variable "AZTEC_ACTIVATION_THRESHOLD" {
   nullable    = true
 }
 
+variable "AZTEC_LAG_IN_EPOCHS" {
+  description = "Aztec lag in epochs"
+  type        = string
+  nullable    = true
+}
+
 variable "AZTEC_EJECTION_THRESHOLD" {
   description = "Aztec ejection threshold"
+  type        = string
+  nullable    = true
+}
+
+variable "AZTEC_LOCAL_EJECTION_THRESHOLD" {
+  description = "Aztec local ejection threshold"
   type        = string
   nullable    = true
 }
@@ -210,3 +228,4 @@ variable "NETWORK" {
   type        = string
   nullable    = true
 }
+

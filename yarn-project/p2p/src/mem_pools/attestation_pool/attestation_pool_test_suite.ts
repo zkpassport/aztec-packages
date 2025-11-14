@@ -7,7 +7,7 @@ import {
   SignatureDomainSeparator,
   getHashedSignaturePayloadEthSignedMessage,
 } from '@aztec/stdlib/p2p';
-import { makeHeader } from '@aztec/stdlib/testing';
+import { makeL2BlockHeader } from '@aztec/stdlib/testing';
 import { TxHash } from '@aztec/stdlib/tx';
 
 import { jest } from '@jest/globals';
@@ -41,16 +41,15 @@ export function describeAttestationPool(getAttestationPool: () => AttestationPoo
   };
 
   const mockBlockProposal = (signer: Secp256k1Signer, slotNumber: number, archive: Fr = Fr.random()): BlockProposal => {
-    const blockNumber = 1;
-    const header = makeHeader(1, 2, slotNumber);
-    const payload = new ConsensusPayload(header.toPropose(), archive, header.state);
+    const header = makeL2BlockHeader(1, 2, slotNumber);
+    const payload = new ConsensusPayload(header.toCheckpointHeader(), archive, header.state);
 
     const hash = getHashedSignaturePayloadEthSignedMessage(payload, SignatureDomainSeparator.blockProposal);
     const signature = signer.sign(hash);
 
     const txHashes = [TxHash.random(), TxHash.random()]; // Mock tx hashes
 
-    return new BlockProposalClass(blockNumber, payload, signature, txHashes);
+    return new BlockProposalClass(payload, signature, txHashes);
   };
 
   // We compare buffers as the objects can have cached values attached to them which are not serialised
@@ -117,7 +116,7 @@ export function describeAttestationPool(getAttestationPool: () => AttestationPoo
     const retreivedAttestations = await ap.getAttestationsForSlotAndProposal(BigInt(slotNumber), archive.toString());
     expect(retreivedAttestations.length).toBe(1);
     expect(retreivedAttestations[0].toBuffer()).toEqual(attestations[0].toBuffer());
-    expect(retreivedAttestations[0].getSender().toString()).toEqual(signer.address.toString());
+    expect(retreivedAttestations[0].getSender()?.toString()).toEqual(signer.address.toString());
 
     // Try adding them on another operation and check they are still not duplicated
     await ap.addAttestations([attestations[0]]);
@@ -291,7 +290,7 @@ export function describeAttestationPool(getAttestationPool: () => AttestationPoo
       expect(retrievedProposal).toBeDefined();
       // Should have the second proposal
       expect(retrievedProposal!.toBuffer()).toEqual(proposal2.toBuffer());
-      expect(retrievedProposal!.getSender().toString()).toBe(signers[1].address.toString());
+      expect(retrievedProposal!.getSender()?.toString()).toBe(signers[1].address.toString());
     });
 
     it('should handle block proposals with different slots and same archive', async () => {

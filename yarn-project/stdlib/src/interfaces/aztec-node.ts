@@ -52,6 +52,7 @@ import {
 import { SingleValidatorStatsSchema, ValidatorsStatsSchema } from '../validators/schemas.js';
 import type { SingleValidatorStats, ValidatorsStats } from '../validators/types.js';
 import { type ComponentsVersions, getVersioningResponseHandler } from '../versioning/index.js';
+import { type AllowedElement, AllowedElementSchema } from './allowed_element.js';
 import { MAX_RPC_BLOCKS_LEN, MAX_RPC_LEN, MAX_RPC_TXS_LEN } from './api_limit.js';
 import {
   type GetContractClassLogsResponse,
@@ -223,6 +224,20 @@ export interface AztecNode
    * @returns The requested block.
    */
   getBlock(number: L2BlockNumber): Promise<L2Block | undefined>;
+
+  /**
+   * Get a block specified by its hash.
+   * @param blockHash - The block hash being requested.
+   * @returns The requested block.
+   */
+  getBlockByHash(blockHash: Fr): Promise<L2Block | undefined>;
+
+  /**
+   * Get a block specified by its archive root.
+   * @param archive - The archive root being requested.
+   * @returns The requested block.
+   */
+  getBlockByArchive(archive: Fr): Promise<L2Block | undefined>;
 
   /**
    * Method to fetch the latest block number synchronized by the node.
@@ -399,6 +414,20 @@ export interface AztecNode
    */
   getBlockHeader(blockNumber?: L2BlockNumber): Promise<BlockHeader | undefined>;
 
+  /**
+   * Get a block header specified by its hash.
+   * @param blockHash - The block hash being requested.
+   * @returns The requested block header.
+   */
+  getBlockHeaderByHash(blockHash: Fr): Promise<BlockHeader | undefined>;
+
+  /**
+   * Get a block header specified by its archive root.
+   * @param archive - The archive root being requested.
+   * @returns The requested block header.
+   */
+  getBlockHeaderByArchive(archive: Fr): Promise<BlockHeader | undefined>;
+
   /** Returns stats for validators if enabled. */
   getValidatorsStats(): Promise<ValidatorsStats>;
 
@@ -442,6 +471,12 @@ export interface AztecNode
    * Returns the ENR of this node for peer discovery, if available.
    */
   getEncodedEnr(): Promise<string | undefined>;
+
+  /**
+   * Returns the list of allowed public setup elements configured for this node.
+   * @returns The list of allowed elements.
+   */
+  getAllowedPublicSetup(): Promise<AllowedElement[]>;
 }
 
 export const MAX_LOGS_PER_TAG = 10;
@@ -516,6 +551,10 @@ export const AztecNodeApiSchema: ApiSchemaFor<AztecNode> = {
 
   getBlock: z.function().args(L2BlockNumberSchema).returns(L2Block.schema.optional()),
 
+  getBlockByHash: z.function().args(schemas.Fr).returns(L2Block.schema.optional()),
+
+  getBlockByArchive: z.function().args(schemas.Fr).returns(L2Block.schema.optional()),
+
   getBlockNumber: z.function().returns(z.number()),
 
   getProvenBlockNumber: z.function().returns(z.number()),
@@ -589,6 +628,10 @@ export const AztecNodeApiSchema: ApiSchemaFor<AztecNode> = {
 
   getBlockHeader: z.function().args(optional(L2BlockNumberSchema)).returns(BlockHeader.schema.optional()),
 
+  getBlockHeaderByHash: z.function().args(schemas.Fr).returns(BlockHeader.schema.optional()),
+
+  getBlockHeaderByArchive: z.function().args(schemas.Fr).returns(BlockHeader.schema.optional()),
+
   getValidatorsStats: z.function().returns(ValidatorsStatsSchema),
 
   getValidatorStats: z
@@ -611,6 +654,8 @@ export const AztecNodeApiSchema: ApiSchemaFor<AztecNode> = {
   getContract: z.function().args(schemas.AztecAddress).returns(ContractInstanceWithAddressSchema.optional()),
 
   getEncodedEnr: z.function().returns(z.string().optional()),
+
+  getAllowedPublicSetup: z.function().args().returns(z.array(AllowedElementSchema)),
 };
 
 export function createAztecNodeClient(

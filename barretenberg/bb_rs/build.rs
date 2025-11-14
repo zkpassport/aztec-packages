@@ -153,7 +153,13 @@ fn main() {
             .configure_arg("-DPLATFORM=OS64")
             .configure_arg("-DDEPLOYMENT_TARGET=15.1")
             .configure_arg("--toolchain=../bb_rs/ios.toolchain.cmake")
-            .configure_arg("-DTRACY_ENABLE=OFF");
+            // .configure_arg("-DTRACY_ENABLE=OFF")
+            .configure_arg("-DFUZZING=OFF")
+            // Skip AVM/vm2 on mobile (not needed for wallet crypto)
+            .configure_arg("-DAVM=OFF")
+            .configure_arg("-DMOBILE=ON");
+            // // iOS doesn't need Node.js bindings, skip nodejs_module to avoid yarn/npm dependencies
+            // .configure_arg("-DBUILD_NODEJS_MODULE=OFF");
         
         // Performance optimizations (Release mode only)
         if cmake_build_type == "Release" {
@@ -164,6 +170,9 @@ fn main() {
             config.cxxflag("-ftree-vectorize");      // Enable loop vectorization
             config.cxxflag("-fvectorize");           // Enable LLVM vectorization
             config.cxxflag("-march=armv8-a");      //  Generic ARM64, works on all 64-bit iOS
+            // Prevent deprecated warnings from becoming errors in benchmarks
+            config.cxxflag("-Wno-error=deprecated-declarations");
+            config.cxxflag("-Wno-deprecated-declarations");
             
             println!("cargo:warning=🚀 Performance optimizations enabled: LTO + ARM NEON + A14 tuning");
         }
@@ -176,11 +185,9 @@ fn main() {
             println!("cargo:warning=⚠️  NOT adding DISABLE_AZTEC_VM - VM2 will be compiled!");
         }
         if disable_testing {
-            println!("cargo:warning=🔧 DISABLING tests with multiple CMake flags");
-            config.configure_arg("-DBUILD_TESTING=OFF");
-            config.configure_arg("-DENABLE_TESTING=OFF");
-            // Explicitly disable test targets
-            config.configure_arg("-DBUILD_TESTS=OFF");
+            println!("cargo:warning=🔧 DISABLING tests (controlled by MOBILE=ON flag)");
+            // Note: Tests/benches are actually controlled by NOT MOBILE in module.cmake
+            // The -DTESTING/-DBUILD_TESTING flags don't exist in Barretenberg's CMake
         }
         if disable_multithreading {
             config.configure_arg("-DMULTITHREADING=OFF");
@@ -206,17 +213,25 @@ fn main() {
             .configure_arg("-DANDROID_ABI=arm64-v8a")
             .configure_arg("-DANDROID_PLATFORM=android-33")
             .configure_arg(&format!("--toolchain={}/ndk/{}/build/cmake/android.toolchain.cmake", android_home, ndk_version))
-            .configure_arg("-DTRACY_ENABLE=OFF");
+            .configure_arg("-DTRACY_ENABLE=OFF")
+            // Skip AVM/vm2 on mobile (not needed for wallet crypto)
+            .configure_arg("-DAVM=OFF")
+            // Skip ipc, lmdblib, nodejs_module, world_state, vm2 for mobile
+            .configure_arg("-DMOBILE=ON")
+            // Android doesn't need Node.js bindings either
+            .configure_arg("-DBUILD_NODEJS_MODULE=OFF");
+        // Prevent deprecated warnings from becoming errors in benchmarks
+        config.cxxflag("-Wno-error=deprecated-declarations");
+        config.cxxflag("-Wno-deprecated-declarations");
         
         // Apply optional optimizations
         if disable_aztec_vm {
             config.configure_arg("-DDISABLE_AZTEC_VM=ON");
         }
         if disable_testing {
-            println!("cargo:warning=🔧 DISABLING tests with multiple CMake flags");
-            config.configure_arg("-DBUILD_TESTING=OFF");
-            config.configure_arg("-DENABLE_TESTING=OFF");
-            config.configure_arg("-DBUILD_TESTS=OFF");
+            println!("cargo:warning=🔧 DISABLING tests (controlled by MOBILE=ON flag)");
+            // Note: Tests/benches are actually controlled by NOT MOBILE in module.cmake
+            // The -DTESTING/-DBUILD_TESTING flags don't exist in Barretenberg's CMake
         }
         if disable_multithreading {
             config.configure_arg("-DMULTITHREADING=OFF");
@@ -233,17 +248,23 @@ fn main() {
         config
             .generator("Ninja")
             .configure_arg(format!("-DCMAKE_BUILD_TYPE={}", cmake_build_type))
-            .configure_arg("-DTRACY_ENABLE=OFF");
+            // .configure_arg("-DTRACY_ENABLE=OFF")
+            // Skip AVM/vm2 (not needed for this library build)
+            .configure_arg("-DAVM=OFF")
+            // Skip ipc, lmdblib, nodejs_module, world_state, vm2 for mobile/embedded builds
+            .configure_arg("-DMOBILE=ON");
+        // Prevent deprecated warnings from becoming errors in benchmarks
+        config.cxxflag("-Wno-error=deprecated-declarations");
+        config.cxxflag("-Wno-deprecated-declarations");
         
         // Apply optional optimizations
         if disable_aztec_vm {
             config.configure_arg("-DDISABLE_AZTEC_VM=ON");
         }
         if disable_testing {
-            println!("cargo:warning=🔧 DISABLING tests with multiple CMake flags");
-            config.configure_arg("-DBUILD_TESTING=OFF");
-            config.configure_arg("-DENABLE_TESTING=OFF");
-            config.configure_arg("-DBUILD_TESTS=OFF");
+            println!("cargo:warning=🔧 DISABLING tests (controlled by MOBILE=ON flag)");
+            // Note: Tests/benches are actually controlled by NOT MOBILE in module.cmake
+            // The -DTESTING/-DBUILD_TESTING flags don't exist in Barretenberg's CMake
         }
         if disable_multithreading {
             config.configure_arg("-DMULTITHREADING=OFF");

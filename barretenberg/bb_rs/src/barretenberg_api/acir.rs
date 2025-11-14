@@ -1,6 +1,5 @@
 use super::{bindgen, models::Ptr, traits::SerializeBuffer, Buffer};
 use std::ptr;
-use std::fmt::Write;
 use std::env;
 use num_bigint::BigUint;
 
@@ -45,14 +44,13 @@ fn from_biguints_to_hex_strings(biguints: &[BigUint]) -> Vec<String> {
     biguints.iter().map(|biguint| format!("0x{:064x}", biguint)).collect()
 }
 
-pub unsafe fn get_circuit_sizes(constraint_system_buf: &[u8], recursive: bool) -> CircuitSizes {
+pub unsafe fn get_circuit_sizes(constraint_system_buf: &[u8], _recursive: bool) -> CircuitSizes {
     let mut total = 0;
-    let mut subgroup = 0;
-    let honk_recursion = true;
+    let mut subgroup: u32 = 0;
+    let has_ipa_claim = false;
     bindgen::acir_get_circuit_sizes(
         constraint_system_buf.to_buffer().as_slice().as_ptr(),
-        &recursive,
-        &honk_recursion,
+        &has_ipa_claim,
         &mut total,
         &mut subgroup,
     );

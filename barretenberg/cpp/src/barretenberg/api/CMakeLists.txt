@@ -10,6 +10,7 @@ if(NOT WASM)
 endif()
 
 # api_tests needs vm2_stub to resolve dsl's AVM recursion constraint references
-if(NOT WASM AND NOT FUZZING)
+# if(NOT WASM AND NOT FUZZING)
+if(NOT WASM AND NOT FUZZING AND NOT MOBILE)
     target_link_libraries(api_tests PRIVATE vm2_stub)
 endif()

@@ -50,7 +50,8 @@ if(AVM)
   # vm2_tests needs dsl for integration testing, but this creates circular dependency:
   # vm2 provides functions that dsl calls, but tests need dsl functions.
   # Solution: Link dsl, then vm2 again to resolve the circular reference.
-  if(NOT WASM AND NOT FUZZING)
+  # if(NOT WASM AND NOT FUZZING)
+  if(NOT WASM AND NOT FUZZING AND NOT MOBILE)
       target_link_libraries(vm2_tests PRIVATE dsl vm2)
   endif()
 endif()

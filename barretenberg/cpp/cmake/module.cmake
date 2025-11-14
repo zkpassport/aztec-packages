@@ -108,7 +108,8 @@ function(barretenberg_module_with_sources MODULE_NAME)
     endif()
 
     # Test files - only build if TEST_SOURCE_FILES was provided
-    if(TEST_SOURCE_FILES AND NOT FUZZING)
+    # if(TEST_SOURCE_FILES AND NOT FUZZING)
+    if(TEST_SOURCE_FILES AND NOT FUZZING AND NOT MOBILE)
         add_library(
             ${MODULE_NAME}_test_objects
             OBJECT
@@ -240,7 +241,8 @@ function(barretenberg_module_with_sources MODULE_NAME)
     endif()
 
     # Benchmark files - only build if BENCH_SOURCE_FILES was provided
-    if(BENCH_SOURCE_FILES AND NOT FUZZING)
+    # if(BENCH_SOURCE_FILES AND NOT FUZZING)
+    if(BENCH_SOURCE_FILES AND NOT FUZZING AND NOT MOBILE)
         foreach(BENCHMARK_SOURCE ${BENCH_SOURCE_FILES})
             get_filename_component(BENCHMARK_NAME ${BENCHMARK_SOURCE} NAME_WE) # extract name without extension
             add_library(

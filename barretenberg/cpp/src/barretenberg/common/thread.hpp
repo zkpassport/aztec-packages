@@ -17,14 +17,14 @@ constexpr size_t PARALLEL_FOR_MAX_NESTING = 1;
 constexpr size_t PARALLEL_FOR_MAX_NESTING = 2;
 #endif
 
-inline size_t get_num_cpus()
-{
-#if defined(__APPLE__) || defined(ANDROID) || defined(__ANDROID__)
-    return std::thread::hardware_concurrency();
-#else
-    return env_hardware_concurrency();
-#endif
-}
+// inline size_t get_num_cpus()
+// {
+// #if defined(__APPLE__) || defined(ANDROID) || defined(__ANDROID__)
+//     return std::thread::hardware_concurrency();
+// #else
+//     return env_hardware_concurrency();
+// #endif
+// }
 // Useful for programatically benching different thread counts
 // Note this is threadsafe and affects parallel_for's just in that thread if so.
 void set_parallel_for_concurrency(size_t num_cores);

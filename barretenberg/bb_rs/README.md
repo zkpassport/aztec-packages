@@ -23,5 +23,25 @@ random.h is not available in the iOS SDK includes but it is available in the Mac
 
 You can also run `scripts/patcher.sh` to do this (you may need to run it as `sudo`).
 
+## Changes Made
 
+barretenberg/cpp/src/CMakeLists.txt
 
+```cmake
+option(MOBILE "Exclude nodejs_module, world_state, vm2 for mobile" OFF)
+```
+
+barretenberg/cpp/CmakeLists.txt
+
+```cmake
+if(NOT FUZZING AND NOT WASM)
+    add_subdirectory(barretenberg/ipc)
+    add_subdirectory(barretenberg/lmdblib)
+
+    if (NOT MOBILE)
+       add_subdirectory(barretenberg/nodejs_module)
+       add_subdirectory(barretenberg/world_state)
+       add_subdirectory(barretenberg/vm2)
+    endif()
+endif()
+```

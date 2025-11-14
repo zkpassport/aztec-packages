@@ -36,6 +36,7 @@ option(ENABLE_TRACY "Enable low-medium overhead profiling for memory and perform
 option(ENABLE_PIC "Builds with position independent code" OFF)
 option(SYNTAX_ONLY "only check syntax (-fsyntax-only)" OFF)
 option(AVM "enable building of vm2 module and bb-avm" ON)
+option(MOBILE "Exclude ipc, lmdblib, nodejs_module, world_state, vm2 for mobile" OFF)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
     message(STATUS "Compiling for ARM.")

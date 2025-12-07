@@ -202,15 +202,29 @@ set(BARRETENBERG_TARGET_OBJECTS
     $<TARGET_OBJECTS:translator_vm_objects>
     $<TARGET_OBJECTS:ultra_honk_objects>)
 
+# if(NOT WASM AND NOT FUZZING)
+# # if(NOT WASM AND NOT FUZZING AND NOT MOBILE)
+#     # enable merkle trees and lmdb
+#     list(APPEND BARRETENBERG_TARGET_OBJECTS $<TARGET_OBJECTS:crypto_merkle_tree_objects>)
+#     list(APPEND BARRETENBERG_TARGET_OBJECTS $<TARGET_OBJECTS:lmdblib_objects>)
+#     list(APPEND BARRETENBERG_TARGET_OBJECTS $<TARGET_OBJECTS:api_objects>)
+
+#     if (NOT MOBILE)
+#     list(APPEND BARRETENBERG_TARGET_OBJECTS $<TARGET_OBJECTS:world_state_objects>)
+#     endif()
+# endif()
+
 if(NOT WASM AND NOT FUZZING)
-# if(NOT WASM AND NOT FUZZING AND NOT MOBILE)
     # enable merkle trees and lmdb
     list(APPEND BARRETENBERG_TARGET_OBJECTS $<TARGET_OBJECTS:crypto_merkle_tree_objects>)
     list(APPEND BARRETENBERG_TARGET_OBJECTS $<TARGET_OBJECTS:lmdblib_objects>)
     list(APPEND BARRETENBERG_TARGET_OBJECTS $<TARGET_OBJECTS:api_objects>)
 
     if (NOT MOBILE)
-    list(APPEND BARRETENBERG_TARGET_OBJECTS $<TARGET_OBJECTS:world_state_objects>)
+        list(APPEND BARRETENBERG_TARGET_OBJECTS $<TARGET_OBJECTS:world_state_objects>)
+    else()
+        # MOBILE builds need vm2_stub since vm2 is excluded
+        list(APPEND BARRETENBERG_TARGET_OBJECTS $<TARGET_OBJECTS:vm2_stub_objects>)
     endif()
 endif()
 

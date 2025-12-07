@@ -105,16 +105,6 @@ fn main() {
         _ => "Debug",
     };
     
-    // Check if Aztec VM should be disabled (default: OFF, can be enabled via env var)
-    // Set DISABLE_AZTEC_VM=1 in your build script to skip VM2 compilation
-    let disable_aztec_vm = env::var("DISABLE_AZTEC_VM")
-        .map(|v| v == "1" || v.to_lowercase() == "true" || v.to_lowercase() == "on")
-        .unwrap_or(false);
-    
-    // Debug output to see what's happening
-    println!("cargo:warning=🔍 DISABLE_AZTEC_VM env var: {:?}", env::var("DISABLE_AZTEC_VM"));
-    println!("cargo:warning=🔍 disable_aztec_vm parsed: {}", disable_aztec_vm);
-    
     // Check if testing should be disabled (default: ON, set BB_DISABLE_TESTING=1 to disable)
     let disable_testing = env::var("BB_DISABLE_TESTING")
         .map(|v| v == "1" || v.to_lowercase() == "true" || v.to_lowercase() == "on")
@@ -128,9 +118,7 @@ fn main() {
     // Check which build target to use (default: "bb", set BB_BUILD_TARGET=barretenberg for library only)
     let build_target = env::var("BB_BUILD_TARGET").unwrap_or_else(|_| "bb".to_string());
     
-    if disable_aztec_vm {
-        println!("cargo:warning=⚠️  Aztec VM (VM2) compilation is DISABLED");
-    }
+    // Note: AVM (VM2) is disabled via -DAVM=OFF and -DMOBILE=ON for all mobile builds
     if disable_testing {
         println!("cargo:warning=⚠️  Testing suite compilation is DISABLED");
     }
@@ -177,13 +165,7 @@ fn main() {
             println!("cargo:warning=🚀 Performance optimizations enabled: LTO + ARM NEON + A14 tuning");
         }
         
-        // Apply optional optimizations
-        if disable_aztec_vm {
-            println!("cargo:warning=🔧 Adding -DDISABLE_AZTEC_VM=ON to CMake config");
-            config.configure_arg("-DDISABLE_AZTEC_VM=ON");
-        } else {
-            println!("cargo:warning=⚠️  NOT adding DISABLE_AZTEC_VM - VM2 will be compiled!");
-        }
+        // Apply optional settings
         if disable_testing {
             println!("cargo:warning=🔧 DISABLING tests (controlled by MOBILE=ON flag)");
             // Note: Tests/benches are actually controlled by NOT MOBILE in module.cmake
@@ -224,10 +206,7 @@ fn main() {
         config.cxxflag("-Wno-error=deprecated-declarations");
         config.cxxflag("-Wno-deprecated-declarations");
         
-        // Apply optional optimizations
-        if disable_aztec_vm {
-            config.configure_arg("-DDISABLE_AZTEC_VM=ON");
-        }
+        // Apply optional settings
         if disable_testing {
             println!("cargo:warning=🔧 DISABLING tests (controlled by MOBILE=ON flag)");
             // Note: Tests/benches are actually controlled by NOT MOBILE in module.cmake
@@ -257,10 +236,7 @@ fn main() {
         config.cxxflag("-Wno-error=deprecated-declarations");
         config.cxxflag("-Wno-deprecated-declarations");
         
-        // Apply optional optimizations
-        if disable_aztec_vm {
-            config.configure_arg("-DDISABLE_AZTEC_VM=ON");
-        }
+        // Apply optional settings
         if disable_testing {
             println!("cargo:warning=🔧 DISABLING tests (controlled by MOBILE=ON flag)");
             // Note: Tests/benches are actually controlled by NOT MOBILE in module.cmake

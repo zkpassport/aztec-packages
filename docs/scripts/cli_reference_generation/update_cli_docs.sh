@@ -107,14 +107,14 @@ case "$CLI_NAME" in
   aztec)
     DISPLAY_NAME="Aztec CLI"
     TITLE="Aztec CLI Reference"
-    OUTPUT_FILE="cli_reference_autogen.md"
+    OUTPUT_FILE="cli_reference.md"
     SIDEBAR_POSITION="3"
     COMMAND="aztec"
     ;;
   aztec-wallet)
     DISPLAY_NAME="Aztec Wallet CLI"
-    TITLE="Aztec Wallet CLI Reference"
-    OUTPUT_FILE="cli_wallet_reference_autogen.md"
+    TITLE="Reference"
+    OUTPUT_FILE="cli_wallet_reference.md"
     SIDEBAR_POSITION="10"
     COMMAND="aztec-wallet"
     ;;
@@ -144,7 +144,7 @@ TAGS+="]"
 
 cat > "$TEMP_WITH_FRONTMATTER" << EOF
 ---
-title: ${TITLE} (Auto-generated)
+title: ${TITLE}
 description: Comprehensive auto-generated reference for the ${DISPLAY_NAME} command-line interface with all commands and options.
 tags: ${TAGS}
 sidebar_position: ${SIDEBAR_POSITION}

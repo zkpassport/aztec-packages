@@ -16,7 +16,7 @@ This is an auto-generated reference. For tutorials and guides, see the [Aztec.js
 
 *Package: @aztec/aztec.js*
 
-*Generated: 2025-12-10T11:49:50.683Z*
+*Generated: 2025-12-10T22:27:41.987Z*
 
 This document provides a comprehensive reference for all public APIs in the Aztec.js library.
 

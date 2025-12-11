@@ -49,20 +49,14 @@ echo ""
 echo "Files updated:"
 for cli in "${CLIS[@]}"; do
   if [[ "$cli" == "aztec" ]]; then
-<<<<<<< HEAD
-    filename="cli_reference_autogen.md"
+    filename="cli_reference.md"
   else
-    filename="cli_wallet_reference_autogen.md"
+    filename="cli_wallet_reference.md"
   fi
   if [[ -n "$OUTPUT_DIR" ]]; then
     echo "  - $OUTPUT_DIR/$filename"
   else
     echo "  - $filename"
-=======
-    echo "  - Aztec CLI reference (cli_reference.md)"
-  else
-    echo "  - Aztec Wallet CLI reference (cli_wallet_reference.md)"
->>>>>>> a27376b6e3 (feat(docs): graduate autogen to official references (#18875))
   fi
 done
 echo ""

@@ -1,8 +1,8 @@
 [package]
 name = "bb_rs"
-version = "2.0.3"
+version = "3.0.0-devnet.20251212"
 edition = "2021"
-authors = ["Bartosz Nowak", "Théo Madzou"]
+authors = ["Bartosz Nowak", "Théo Madzou", "Porco"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

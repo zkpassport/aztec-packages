@@ -29,6 +29,7 @@
 #include "barretenberg/common/thread.hpp"
 #include "barretenberg/common/version.hpp"
 #include "barretenberg/flavor/ultra_rollup_flavor.hpp"
+#include "barretenberg/polynomials/backing_memory.hpp" // modification
 #include "barretenberg/srs/factories/native_crs_factory.hpp"
 #include "barretenberg/srs/global_crs.hpp"
 #include "barretenberg/vm2/api_avm.hpp"
@@ -752,7 +753,12 @@ int parse_and_run_cli_command(int argc, char* argv[])
     }
     debug_logging = flags.debug;
     verbose_logging = debug_logging || flags.verbose;
-    slow_low_memory = flags.slow_low_memory;
+
+    // upstream
+    // slow_low_memory = flags.slow_low_memory;
+
+    // modification
+    set_slow_low_memory(flags.slow_low_memory);
 #if !defined(__wasm__) || defined(ENABLE_WASM_BENCH)
     if (!flags.storage_budget.empty()) {
         storage_budget = parse_size_string(flags.storage_budget);

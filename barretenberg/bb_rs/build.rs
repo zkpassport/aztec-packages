@@ -161,6 +161,9 @@ fn main() {
             // Prevent deprecated warnings from becoming errors in benchmarks
             config.cxxflag("-Wno-error=deprecated-declarations");
             config.cxxflag("-Wno-deprecated-declarations");
+            // Allow missing field initializers (iOS strict mode issue)
+            config.cxxflag("-Wno-error=missing-field-initializers");
+            config.cxxflag("-Wno-missing-field-initializers");
             
             println!("cargo:warning=🚀 Performance optimizations enabled: LTO + ARM NEON + A14 tuning");
         }
@@ -204,7 +207,9 @@ fn main() {
             .configure_arg("-DBUILD_NODEJS_MODULE=OFF");
         // Prevent deprecated warnings from becoming errors in benchmarks
         config.cxxflag("-Wno-error=deprecated-declarations");
-        config.cxxflag("-Wno-deprecated-declarations");
+        // Allow missing field initializers (Android strict mode issue)
+        config.cxxflag("-Wno-error=missing-field-initializers");
+        config.cxxflag("-Wno-missing-field-initializers");
         
         // Apply optional settings
         if disable_testing {
@@ -299,6 +304,8 @@ fn main() {
             // Dependencies' include paths needs to be added manually.
             &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
             //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
+            // Tell msgpack to not use Boost
+            "-DMSGPACK_NO_BOOST",
             &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/c++/v1", android_home, ndk_version, host_tag),
             &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include", android_home, ndk_version, host_tag),
             &format!("-I{}/ndk/{}/toolchains/llvm/prebuilt/{}/sysroot/usr/include/aarch64-linux-android", android_home, ndk_version, host_tag)
@@ -328,6 +335,8 @@ fn main() {
             &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
             &format!("-I{}/build/include/barretenberg", dst.display()),
             //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
+            // Tell msgpack to not use Boost
+            "-DMSGPACK_NO_BOOST",
             &format!("-I/Applications/Xcode.app/Contents/Developer/Platforms/{}.platform/Developer/SDKs/{}/usr/include/c++/v1", platform, sdk),
             &format!("-I/Applications/Xcode.app/Contents/Developer/Platforms/{}.platform/Developer/SDKs/{}/usr/include", platform, sdk),
             // Fix for iOS system type issues
@@ -352,6 +361,8 @@ fn main() {
                 // Add barretenberg include path for relative includes
                 &format!("-I{}/build/include/barretenberg", dst.display()),
                 //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
+                // Tell msgpack to not use Boost
+                "-DMSGPACK_NO_BOOST",
                 "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1",
                 "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include",
                 // Fix for macOS system type issues
@@ -369,6 +380,8 @@ fn main() {
             // Dependencies' include paths needs to be added manually.
             &format!("-I{}/build/_deps/msgpack-c/src/msgpack-c/include", dst.display()),
             //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
+            // Tell msgpack to not use Boost
+            "-DMSGPACK_NO_BOOST",
         ]);
     }
 

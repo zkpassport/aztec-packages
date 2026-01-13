@@ -1,6 +1,7 @@
+import type { BlockNumber } from '@aztec/foundation/branded-types';
 import { timesParallel } from '@aztec/foundation/collection';
-import { randomBytes, randomInt } from '@aztec/foundation/crypto';
-import { Fr } from '@aztec/foundation/fields';
+import { randomBytes, randomInt } from '@aztec/foundation/crypto/random';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import type { FieldsOf } from '@aztec/foundation/types';
 
 import { z } from 'zod';
@@ -13,7 +14,6 @@ import { ContractClassLog, ContractClassLogFields } from '../logs/contract_class
 import { type PreTag, PreTagSchema } from '../logs/pre_tag.js';
 import { Note } from '../note/note.js';
 import { type ZodFor, mapSchema, schemas } from '../schemas/index.js';
-import type { UInt32 } from '../types/index.js';
 import { HashedValues } from './hashed_values.js';
 import type { OffchainEffect } from './offchain_effect.js';
 
@@ -26,6 +26,8 @@ export class NoteAndSlot {
     public note: Note,
     /** The storage slot of the note. */
     public storageSlot: Fr,
+    /** The randomness injected to the note. */
+    public randomness: Fr,
     /** The note type identifier. */
     public noteTypeId: NoteSelector,
   ) {}
@@ -35,17 +37,18 @@ export class NoteAndSlot {
       .object({
         note: Note.schema,
         storageSlot: schemas.Fr,
+        randomness: schemas.Fr,
         noteTypeId: schemas.NoteSelector,
       })
       .transform(NoteAndSlot.from);
   }
 
   static from(fields: FieldsOf<NoteAndSlot>) {
-    return new NoteAndSlot(fields.note, fields.storageSlot, fields.noteTypeId);
+    return new NoteAndSlot(fields.note, fields.storageSlot, fields.randomness, fields.noteTypeId);
   }
 
   static random() {
-    return new NoteAndSlot(Note.random(), Fr.random(), NoteSelector.random());
+    return new NoteAndSlot(Note.random(), Fr.random(), Fr.random(), NoteSelector.random());
   }
 }
 
@@ -106,7 +109,7 @@ export class PrivateExecutionResult {
   /**
    * The anchor block number that this execution was simulated with.
    */
-  getSimulationAnchorBlockNumber(): UInt32 {
+  getSimulationAnchorBlockNumber(): BlockNumber {
     return this.entrypoint.publicInputs.anchorBlockHeader.globalVariables.blockNumber;
   }
 }

@@ -55,24 +55,7 @@ url=http://ci.aztec-labs.com/$key
 outfile=/tmp/$key
 touch $outfile
 
-function publish_log {
-  if [ "$CI_REDIS_AVAILABLE" -eq 0 ]; then
-    return
-  fi
-
-  {
-    echo "Parent Log: ${PARENT_LOG_URL:-none}"
-    echo "Command: $cmd"
-    echo "Date: $(date)"
-    echo "Status: $status"
-    echo "Took: ${time}"
-    echo
-
-    cat $outfile
-  } | redis_setexz $key $CI_REDIS_EXPIRE
-}
-
-function _format_log_output {
+function format_log_output {
   echo "Parent Log: ${PARENT_LOG_URL:-none}"
   echo "Command: $cmd"
   echo "Date: $(date)"
@@ -84,12 +67,12 @@ function _format_log_output {
 
 function publish_log {
   [ "$CI_REDIS_AVAILABLE" -eq 0 ] && return
-  _format_log_output | redis_setexz $key $CI_REDIS_EXPIRE
+  format_log_output | redis_setexz $key $CI_REDIS_EXPIRE
 }
 
 function publish_log_final {
   [ "$CI_REDIS_AVAILABLE" -eq 0 ] && return
-  _format_log_output | cache_persistent $key $CI_REDIS_EXPIRE
+  format_log_output | cache_persistent $key $CI_REDIS_EXPIRE
 }
 
 function live_publish_log {
@@ -137,11 +120,16 @@ publish_log_final
 
 # Handle non-zero exit status
 if [ "$status" -ne 0 ]; then
-  if [ -t 1 ]; then
-    echo -e "\nCommand exited with status $status. Dumping output:"
-    cat $outfile
+  # Print "interrupted" on SIGINT or SIGTERM.
+  if [ "$status" -eq 143 ] || [ "$status" -eq 130 ]; then
+    echo -e ". ${yellow}interrupted${reset} ($time)"
+  else
+    if [ -t 1 ]; then
+      echo -e "\nCommand exited with status $status. Dumping output:"
+      cat $outfile
+    fi
+    echo -e ". ${red}failed${reset} ($time) ${log_info:-}"
   fi
-  echo -e ". ${red}failed${reset} ($time) ${log_info:-}"
 else
   echo -e ". ${green}done${reset} ($time)"
 fi

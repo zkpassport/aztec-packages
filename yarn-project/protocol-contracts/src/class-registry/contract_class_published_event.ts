@@ -1,5 +1,5 @@
 import { CONTRACT_CLASS_PUBLISHED_MAGIC_VALUE } from '@aztec/constants';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { FieldReader } from '@aztec/foundation/serialize';
 import { bufferFromFields } from '@aztec/stdlib/abi';
 import {
@@ -73,5 +73,11 @@ export class ContractClassPublishedEvent {
       privateFunctions: [],
       utilityFunctions: [],
     };
+  }
+
+  public static extractContractClassEvents(logs: ContractClassLog[]): ContractClassPublishedEvent[] {
+    return logs
+      .filter((log: ContractClassLog) => ContractClassPublishedEvent.isContractClassPublishedEvent(log))
+      .map((log: ContractClassLog) => ContractClassPublishedEvent.fromLog(log));
   }
 }

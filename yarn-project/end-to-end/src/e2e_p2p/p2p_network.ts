@@ -2,20 +2,20 @@ import type { InitialAccountData } from '@aztec/accounts/testing';
 import type { AztecNodeConfig, AztecNodeService } from '@aztec/aztec-node';
 import { AztecAddress, EthAddress } from '@aztec/aztec.js/addresses';
 import { Fr } from '@aztec/aztec.js/fields';
+import { getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
 import {
   type EmpireSlashingProposerContract,
-  type ExtendedViemWalletClient,
   GSEContract,
-  MultiAdderArtifact,
-  type Operator,
   RollupContract,
   type TallySlashingProposerContract,
-  type ViemClient,
-  createL1TxUtilsFromViemWallet,
-  deployL1Contract,
-  getL1ContractsConfigEnvVars,
-} from '@aztec/ethereum';
+} from '@aztec/ethereum/contracts';
+import type { Operator } from '@aztec/ethereum/deploy-l1-contracts';
+import { deployL1Contract } from '@aztec/ethereum/deploy-l1-contracts';
+import { MultiAdderArtifact } from '@aztec/ethereum/l1-artifacts';
+import { createL1TxUtilsFromViemWallet } from '@aztec/ethereum/l1-tx-utils';
 import { ChainMonitor } from '@aztec/ethereum/test';
+import type { ExtendedViemWalletClient, ViemClient } from '@aztec/ethereum/types';
+import { EpochNumber } from '@aztec/foundation/branded-types';
 import { SecretValue } from '@aztec/foundation/config';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import { retryUntil } from '@aztec/foundation/retry';
@@ -200,7 +200,7 @@ export class P2PNetworkTest {
 
   async addBootstrapNode() {
     await this.snapshotManager.snapshot('add-bootstrap-node', async ({ aztecNodeConfig }) => {
-      const telemetry = getEndToEndTestTelemetryClient(this.metricsPort);
+      const telemetry = await getEndToEndTestTelemetryClient(this.metricsPort);
       this.bootstrapNode = await createBootstrapNodeFromPrivateKey(
         BOOTSTRAP_NODE_PRIVATE_KEY,
         this.bootNodePort,
@@ -292,7 +292,9 @@ export class P2PNetworkTest {
       });
 
       await cheatCodes.rollup.advanceToEpoch(
-        (await cheatCodes.rollup.getEpoch()) + (await rollup.read.getLagInEpochs()) + 1n,
+        EpochNumber.fromBigInt(
+          BigInt(await cheatCodes.rollup.getEpoch()) + (await rollup.read.getLagInEpochsForValidatorSet()) + 1n,
+        ),
       );
 
       // Send and await a tx to make sure we mine a block for the warp to correctly progress.
@@ -326,11 +328,12 @@ export class P2PNetworkTest {
           .deployed();
         return { contractAddress: spamContract.address };
       },
-      async ({ contractAddress }) => {
+      ({ contractAddress }) => {
         if (!this.wallet) {
           throw new Error('Call snapshot t.setupAccount before deploying account contract');
         }
-        this.spamContract = await SpamContract.at(contractAddress, this.wallet);
+        this.spamContract = SpamContract.at(contractAddress, this.wallet);
+        return Promise.resolve();
       },
     );
   }

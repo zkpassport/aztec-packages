@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 source $(git rev-parse --show-toplevel)/ci3/source_bootstrap
 
-cmd=${1:-}
-[ -n "$cmd" ] && shift
-
 function hash {
   hash_str \
     $(../noir/bootstrap.sh hash) \
@@ -81,6 +78,10 @@ function lint {
   fi
 }
 
+function compile_all_projects {
+  get_projects | compile_project
+}
+
 function compile_all {
   set -euo pipefail
   local hash=$(hash)
@@ -96,7 +97,6 @@ function compile_all {
     stdlib \
     ivc-integration \
     l1-artifacts \
-    native \
     noir-contracts.js \
     noir-test-contracts.js \
     noir-protocol-circuits-types \
@@ -110,13 +110,9 @@ function compile_all {
   cd pxe && yarn check_oracle_version
   cd ..
 
-  cmds=('format --check')
-  if [ "${TYPECHECK:-0}" -eq 1 ] || [ "${CI:-0}" -eq 1 ]; then
-    # Fully type check and lint.
-    cmds+=('yarn tsc -b --emitDeclarationOnly && lint --check')
-  else
-    # We just need the type declarations required for downstream consumers.
-    cmds+=('cd aztec.js && yarn tsc -b --emitDeclarationOnly')
+  cmds=('format --check' 'yarn tsgo -b --emitDeclarationOnly')
+  if [ "${CI:-0}" -eq 1 ]; then
+    cmds+=('lint --check')
   fi
   parallel --joblog joblog.txt --tag denoise ::: "${cmds[@]}"
   cat joblog.txt
@@ -137,29 +133,31 @@ function build {
 
 function test_cmds {
   local hash=$(hash)
-  local avm_flag=$(../barretenberg/cpp/bootstrap.sh hash | grep -qE no-avm && echo "no-avm" || echo "avm")
 
   # Exclusions:
   # end-to-end: e2e tests handled separately with end-to-end/bootstrap.sh.
   # kv-store: Uses mocha so will need different treatment.
   for test in !(end-to-end|kv-store|aztec)/src/**/*.test.ts; do
-    # If AVM is disabled, filter out avm_proving_tests/*.test.ts and avm_integration.test.ts
-    # Also must filter out rollup_ivc_integration.test.ts as it includes AVM proving.
-    if [[ $avm_flag == "no-avm" && "$test" =~ (avm_proving_tests|avm_integration|rollup_ivc_integration) ]]; then
-      continue
-    fi
+    # Skip benchmarks here.
+    [[ "$test" =~ \.bench\.test\.ts$ ]] && continue
 
     local prefix=$hash
     local cmd_env=""
 
     # These need isolation due to network stack usage (p2p, anvil, etc).
-    if [[ "$test" =~ ^(prover-node|p2p|ethereum|aztec|prover-client/src/test|stdlib/src/l1-contracts)/ ]]; then
+    if [[ "$test" =~ ^(prover-node|p2p|ethereum|aztec|prover-client/src/test|stdlib/src/l1-contracts|ivc-integration/src/chonk_browser|blob-sink/src/server) ]]; then
       prefix+=":ISOLATE=1:NAME=$test"
+    fi
+
+    if [[ "$test" =~ ^ivc-integration/src/chonk_browser ]]; then
+      prefix+=":NET=1"
     fi
 
     # Boost some tests resources.
     if [[ "$test" =~ testbench ]]; then
       prefix+=":CPUS=10:MEM=16g"
+    elif [[ "$test" =~ avm_proving_tests || "$test" =~ rollup_ivc_integration || "$test" =~ avm_integration ]]; then
+      prefix+=":CPUS=16:MEM=16g"
     elif [[ "$test" =~ ^ivc-integration/ ]]; then
       prefix+=":CPUS=8"
     fi
@@ -167,6 +165,8 @@ function test_cmds {
     # Add debug logging for tests that require a bit more info
     if [[ "$test" == p2p/src/client/p2p_client.test.ts || "$test" == p2p/src/services/discv5/discv5_service.test.ts || "$test" == p2p/src/client/p2p_client.integration.test.ts ]]; then
       cmd_env+=" LOG_LEVEL=debug"
+    elif [[ "$test" =~ rollup_ivc_integration || "$test" =~ avm_integration ]]; then
+      cmd_env+=" LOG_LEVEL=debug BB_VERBOSE=1 "
     elif [[ "$test" =~ e2e_p2p ]]; then
       cmd_env+=" LOG_LEVEL='verbose; debug:p2p'"
     fi
@@ -181,19 +181,15 @@ function test_cmds {
       fi
     fi
 
-    if [[ "$test" =~ rollup_ivc_integration || "$test" =~ avm_integration ]]; then
-      cmd_env+=" LOG_LEVEL=debug BB_VERBOSE=1 "
-    fi
-
     echo "${prefix}${cmd_env} yarn-project/scripts/run_test.sh $test"
   done
 
   # Uses mocha for browser tests, so we have to treat it differently.
   echo "$hash cd yarn-project/kv-store && yarn test"
-  echo "$hash cd yarn-project/ivc-integration && yarn test:browser"
 
   if [[ "${TARGET_BRANCH:-}" =~ ^v[0-9]+$ ]]; then
     echo "$hash yarn-project/scripts/run_test.sh aztec/src/testnet_compatibility.test.ts"
+    echo "$hash yarn-project/scripts/run_test.sh aztec/src/mainnet_compatibility.test.ts"
   fi
 }
 
@@ -240,7 +236,7 @@ function release {
 
 case "$cmd" in
   "clean")
-    [ -n "${2:-}" ] && cd $2
+    [ -n "${1:-}" ] && cd $1
     git clean -fdx
     ;;
   "clean-lite")
@@ -249,15 +245,8 @@ case "$cmd" in
       echo "$files" | xargs rm -rf
     fi
     ;;
-  "ci")
+  "")
     build
-    test
-    ;;
-  ""|"fast")
-    build
-    ;;
-  "full")
-    TYPECHECK=1 build
     ;;
   "compile")
     if [ -n "${1:-}" ]; then
@@ -295,14 +284,7 @@ case "$cmd" in
     trap cleanup_instrumentation EXIT
     eval "$cmd"
     ;;
-  lint|format)
-    $cmd "$@"
-    ;;
-  test|test_cmds|bench_cmds|hash|release|format)
-    $cmd
-    ;;
   *)
-    echo "Unknown command: $cmd"
-    exit 1
-  ;;
+    default_cmd_handler "$@"
+    ;;
 esac

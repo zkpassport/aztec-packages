@@ -1,5 +1,5 @@
 import { createLogger } from '@aztec/foundation/log';
-import type { L2Block } from '@aztec/stdlib/block';
+import type { L2BlockNew } from '@aztec/stdlib/block';
 import {
   Attributes,
   type Gauge,
@@ -33,6 +33,8 @@ export class ArchiverInstrumentation {
 
   private syncDurationPerMessage: Histogram;
   private syncMessageCount: UpDownCounter;
+
+  private blockProposalTxTargetCount: UpDownCounter;
 
   private log = createLogger('archiver:instrumentation');
 
@@ -114,6 +116,11 @@ export class ArchiverInstrumentation {
       valueType: ValueType.INT,
     });
 
+    this.blockProposalTxTargetCount = meter.createUpDownCounter(Metrics.ARCHIVER_BLOCK_PROPOSAL_TX_TARGET_COUNT, {
+      description: 'Number of block proposals by tx target',
+      valueType: ValueType.INT,
+    });
+
     this.dbMetrics = new LmdbMetrics(
       meter,
       {
@@ -139,7 +146,7 @@ export class ArchiverInstrumentation {
     return this.telemetry.isEnabled();
   }
 
-  public processNewBlocks(syncTimePerBlock: number, blocks: L2Block[]) {
+  public processNewBlocks(syncTimePerBlock: number, blocks: L2BlockNew[]) {
     this.syncDurationPerBlock.record(Math.ceil(syncTimePerBlock));
     this.blockHeight.record(Math.max(...blocks.map(b => b.number)));
     this.syncBlockCount.add(blocks.length);
@@ -183,5 +190,12 @@ export class ArchiverInstrumentation {
 
   public updateL1BlockHeight(blockNumber: bigint) {
     this.l1BlockHeight.record(Number(blockNumber));
+  }
+
+  public recordBlockProposalTxTarget(target: string, usedTrace: boolean) {
+    this.blockProposalTxTargetCount.add(1, {
+      [Attributes.L1_BLOCK_PROPOSAL_TX_TARGET]: target.toLowerCase(),
+      [Attributes.L1_BLOCK_PROPOSAL_USED_TRACE]: usedTrace,
+    });
   }
 }

@@ -1,10 +1,10 @@
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { AztecLMDBStoreV2, openTmpStore } from '@aztec/kv-store/lmdb-v2';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { L2BlockHash } from '@aztec/stdlib/block';
-import { NoteStatus } from '@aztec/stdlib/note';
+import { NoteDao, NoteStatus } from '@aztec/stdlib/note';
 
-import { NoteDao } from './note_dao.js';
 import { NoteDataProvider } from './note_data_provider.js';
 
 // -----------------------------------------------------------------------------
@@ -41,9 +41,8 @@ describe('NoteDataProvider', () => {
     return NoteDao.random({
       contractAddress: overrides.contractAddress ?? CONTRACT_A,
       storageSlot: overrides.storageSlot ?? SLOT_X,
-      recipient: overrides.recipient ?? SCOPE_1,
       index: overrides.index ?? 0n,
-      l2BlockNumber: overrides.l2BlockNumber ?? 1,
+      l2BlockNumber: overrides.l2BlockNumber ?? BlockNumber(1),
       siloedNullifier: overrides.siloedNullifier ?? Fr.random(),
       ...overrides,
     });
@@ -60,21 +59,18 @@ describe('NoteDataProvider', () => {
     const note1 = await mkNote({
       contractAddress: CONTRACT_A,
       storageSlot: SLOT_X,
-      recipient: SCOPE_1,
       siloedNullifier: DUMMY_SILOED_NULLIFIER_1,
       index: 1n,
     });
     const note2 = await mkNote({
       contractAddress: CONTRACT_A,
       storageSlot: SLOT_Y,
-      recipient: SCOPE_1,
       siloedNullifier: DUMMY_SILOED_NULLIFIER_2,
       index: 2n,
     });
     const note3 = await mkNote({
       contractAddress: CONTRACT_B,
       storageSlot: SLOT_X,
-      recipient: SCOPE_2,
       siloedNullifier: DUMMY_SILOED_NULLIFIER_3,
       index: 3n,
     });
@@ -86,7 +82,7 @@ describe('NoteDataProvider', () => {
   }
 
   // Helper to create a nullifier object matching a given note.
-  function mkNullifier(note: NoteDao, blockNumber?: number) {
+  function mkNullifier(note: NoteDao, blockNumber?: BlockNumber) {
     return {
       data: note.siloedNullifier,
       l2BlockNumber: blockNumber ?? note.l2BlockNumber,
@@ -121,8 +117,8 @@ describe('NoteDataProvider', () => {
       await provider1.addScope(SCOPE_1);
       await provider1.addScope(SCOPE_2);
 
-      const noteA = await mkNote({ contractAddress: CONTRACT_A, recipient: SCOPE_1, index: 1n });
-      const noteB = await mkNote({ contractAddress: CONTRACT_B, recipient: SCOPE_2, index: 2n });
+      const noteA = await mkNote({ contractAddress: CONTRACT_A, index: 1n });
+      const noteB = await mkNote({ contractAddress: CONTRACT_B, index: 2n });
       await provider1.addNotes([noteA, noteB], FAKE_ADDRESS);
 
       const provider2 = await NoteDataProvider.create(store);
@@ -173,7 +169,6 @@ describe('NoteDataProvider', () => {
       const note4 = await mkNote({
         contractAddress: CONTRACT_A,
         storageSlot: SLOT_X,
-        recipient: SCOPE_2,
         index: 4n,
       });
       await provider.addNotes([note4], SCOPE_2);
@@ -184,6 +179,20 @@ describe('NoteDataProvider', () => {
       });
 
       expect(new Set(getIndexes(res))).toEqual(new Set([1n, 2n, 4n])); // note1, note2, and note4
+    });
+
+    it('deduplicates notes that appear in multiple scopes', async () => {
+      // note 1 has been added to scope 1 in setup so we add it to scope 2 to then be able to test deduplication
+      await provider.addNotes([note1], SCOPE_2);
+
+      const res = await provider.getNotes({
+        contractAddress: CONTRACT_A,
+        scopes: [SCOPE_1, SCOPE_2],
+      });
+
+      // Note 1 should be present exactly once in the result
+      const note1Matches = res.filter(n => n.equals(note1));
+      expect(note1Matches.length).toBe(1);
     });
 
     it('filters notes by status, returning ACTIVE by default and both ACTIVE and NULLIFIED when requested', async () => {
@@ -391,7 +400,7 @@ describe('NoteDataProvider', () => {
     it('throws error when nullifier is not found', async () => {
       const fakeNullifier = {
         data: Fr.random(),
-        l2BlockNumber: 999,
+        l2BlockNumber: BlockNumber(999),
         l2BlockHash: L2BlockHash.random(),
       };
 
@@ -424,7 +433,7 @@ describe('NoteDataProvider', () => {
         mkNullifier(note2),
         {
           data: Fr.random(), // Invalid
-          l2BlockNumber: 999,
+          l2BlockNumber: BlockNumber(999),
           l2BlockHash: L2BlockHash.random(),
         },
       ];
@@ -456,7 +465,7 @@ describe('NoteDataProvider', () => {
 
       const byScope = await provider.getNotes({
         contractAddress: CONTRACT_A,
-        scopes: [note1.recipient],
+        scopes: [SCOPE_1],
         status: NoteStatus.ACTIVE_OR_NULLIFIED,
       });
       expect(new Set(getIndexes(byScope))).toEqual(new Set([1n, 2n]));
@@ -498,14 +507,18 @@ describe('NoteDataProvider', () => {
 
     describe('rewind nullifications happy path', () => {
       async function setupRollbackScenario() {
-        const noteBlock1 = await mkNote({ index: 1n, l2BlockNumber: 1 }); // Nullified at block 2
-        const noteBlock2 = await mkNote({ index: 2n, l2BlockNumber: 2 }); // Never nullified
-        const noteBlock3 = await mkNote({ index: 3n, l2BlockNumber: 3 }); // Nullified at block 4
-        const noteBlock5 = await mkNote({ index: 5n, l2BlockNumber: 5 }); // Created after rollback block 3
+        const noteBlock1 = await mkNote({ index: 1n, l2BlockNumber: BlockNumber(1) }); // Nullified at block 2
+        const noteBlock2 = await mkNote({ index: 2n, l2BlockNumber: BlockNumber(2) }); // Never nullified
+        const noteBlock3 = await mkNote({ index: 3n, l2BlockNumber: BlockNumber(3) }); // Nullified at block 4
+        const noteBlock5 = await mkNote({ index: 5n, l2BlockNumber: BlockNumber(5) }); // Created after rollback block 3
 
         await provider.addNotes([noteBlock1, noteBlock2, noteBlock3, noteBlock5], SCOPE_1);
 
-        const nullifiers = [mkNullifier(noteBlock1, 2), mkNullifier(noteBlock3, 4), mkNullifier(noteBlock5, 6)];
+        const nullifiers = [
+          mkNullifier(noteBlock1, BlockNumber(2)),
+          mkNullifier(noteBlock3, BlockNumber(4)),
+          mkNullifier(noteBlock5, BlockNumber(6)),
+        ];
 
         // Apply nullifiers and rollback to block 3
         // - should restore noteBlock3 (nullified at block 4) and preserve noteBlock1 (nullified at block 2)
@@ -559,13 +572,13 @@ describe('NoteDataProvider', () => {
 
     describe('rewind nullifications edge cases', () => {
       it('handles rollback when blockNumber equals synchedBlockNumber', async () => {
-        const note = await mkNote({ index: 10n, l2BlockNumber: 5 });
+        const note = await mkNote({ index: 10n, l2BlockNumber: BlockNumber(5) });
         await provider.addNotes([note], SCOPE_1);
 
         const nullifiers = [
           {
             data: note.siloedNullifier,
-            l2BlockNumber: 5,
+            l2BlockNumber: BlockNumber(5),
             l2BlockHash: L2BlockHash.fromString(note.l2BlockHash),
           },
         ];
@@ -586,13 +599,13 @@ describe('NoteDataProvider', () => {
       });
 
       it('handles rollback when synchedBlockNumber < blockNumber', async () => {
-        const note = await mkNote({ index: 20n, l2BlockNumber: 3 });
+        const note = await mkNote({ index: 20n, l2BlockNumber: BlockNumber(3) });
         await provider.addNotes([note], SCOPE_1);
 
         const nullifiers = [
           {
             data: note.siloedNullifier,
-            l2BlockNumber: 4,
+            l2BlockNumber: BlockNumber(4),
             l2BlockHash: L2BlockHash.fromString(note.l2BlockHash),
           },
         ];
@@ -612,14 +625,14 @@ describe('NoteDataProvider', () => {
       });
 
       it('handles rollback with a large block gap', async () => {
-        const note1 = await mkNote({ index: 30n, l2BlockNumber: 5 });
-        const note2 = await mkNote({ index: 31n, l2BlockNumber: 10 });
+        const note1 = await mkNote({ index: 30n, l2BlockNumber: BlockNumber(5) });
+        const note2 = await mkNote({ index: 31n, l2BlockNumber: BlockNumber(10) });
         await provider.addNotes([note1, note2], SCOPE_1);
 
         const nullifiers = [
           {
             data: note1.siloedNullifier,
-            l2BlockNumber: 7,
+            l2BlockNumber: BlockNumber(7),
             l2BlockHash: L2BlockHash.fromString(note1.l2BlockHash),
           },
         ];

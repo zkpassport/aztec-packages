@@ -7,7 +7,13 @@ import {IMintableERC20} from "@aztec/shared/interfaces/IMintableERC20.sol";
 import {G1Point, G2Point} from "@aztec/shared/libraries/BN254Lib.sol";
 import {Ownable} from "@oz/access/Ownable.sol";
 import {MerkleProof} from "@oz/utils/cryptography/MerkleProof.sol";
-import {ZKPassportVerifier, ProofVerificationParams} from "@zkpassport/ZKPassportVerifier.sol";
+import {
+  ZKPassportVerifier,
+  ProofVerificationParams,
+  BoundData,
+  OS,
+  FaceMatchMode
+} from "@zkpassport/ZKPassportVerifier.sol";
 
 /**
  * @title StakingAssetHandler
@@ -51,8 +57,13 @@ interface IStakingAssetHandler {
   error InvalidProof();
   error InvalidScope();
   error InvalidDomain();
-  error ProofNotBoundToAddress(address _expected, address _received);
-  error ProofNotBoundToChainId(uint256 _expected, uint256 _received);
+  error InvalidBoundAddress(address _expected, address _received);
+  error InvalidChainId(uint256 _expected, uint256 _received);
+  error InvalidAge();
+  error InvalidCountry();
+  error InvalidValidityPeriod();
+  error InvalidFaceMatch();
+  error ExtraDiscloseDataNonZero();
   error SybilDetected(bytes32 _nullifier);
   error AttesterDoesNotExist(address _attester);
   error NoNullifier();
@@ -145,15 +156,6 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
   // ZKPassport constraints
   string public validDomain;
   string public validScope;
-  uint256 public validValidityPeriodInSeconds = 7 days;
-  uint256 public validMinAge = 18;
-  uint256 public validMaxAge = 0;
-
-  // ZKPassport - Excluded counties
-  bytes32 internal pkr = keccak256(bytes("PRK"));
-  bytes32 internal ukr = keccak256(bytes("UKR"));
-  bytes32 internal irn = keccak256(bytes("IRN"));
-  bytes32 internal cub = keccak256(bytes("CUB"));
 
   constructor(StakingAssetHandlerArgs memory _args) Ownable(_args.owner) {
     require(_args.depositsPerMint > 0, CannotMintZeroAmount());
@@ -337,14 +339,34 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
     require(!nullifiers[nullifier], SybilDetected(nullifier));
 
     if (!skipBindCheck) {
-      bytes memory data = zkPassportVerifier.getBindProofInputs(_params.committedInputs, _params.committedInputCounts);
-      // Use the getBoundData function to get the formatted data
-      // which includes the user's address, chainId and any custom data
-      (address boundAddress, uint256 chainId,) = zkPassportVerifier.getBoundData(data);
+      BoundData memory boundData = zkPassportVerifier.getBoundData(_params.commitments);
+
       // Make sure the bound user address is the same as the _attester
-      require(boundAddress == _attester, ProofNotBoundToAddress(boundAddress, _attester));
+      require(boundData.senderAddress == _attester, InvalidBoundAddress(boundData.senderAddress, _attester));
       // Make sure the chainId is the same as the current chainId
-      require(chainId == block.chainid, ProofNotBoundToChainId(chainId, block.chainid));
+      require(boundData.chainId == block.chainid, InvalidChainId(boundData.chainId, block.chainid));
+      // Make sure the custom data is empty
+      require(bytes(boundData.customData).length == 0, ExtraDiscloseDataNonZero());
+
+      // Age check
+      bool isAgeValid = zkPassportVerifier.isAgeAboveOrEqual(MIN_AGE, _params.commitments);
+      require(isAgeValid, InvalidAge());
+
+      // Country exclusion check
+      string[] memory excludedCountries = new string[](4);
+      excludedCountries[0] = CUB;
+      excludedCountries[1] = IRN;
+      excludedCountries[2] = PKR;
+      excludedCountries[3] = UKR;
+      bool isCountryValid = zkPassportVerifier.isNationalityOut(excludedCountries, _params.commitments);
+      require(isCountryValid, InvalidCountry());
+
+      // Sanctions check
+      zkPassportVerifier.enforceSanctionsRoot(true, _params.commitments); // true = strict mode
+
+      // Face match check
+      bool isFaceMatchValid = zkPassportVerifier.isFaceMatchVerified(FaceMatchMode.STRICT, OS.ANY, _params.commitments);
+      require(isFaceMatchValid, InvalidFaceMatch());
     }
 
     // Set nullifier to consumed
@@ -392,9 +414,10 @@ contract StakingAssetHandler is IStakingAssetHandler, Ownable {
     // Try to flush the entry queue, but don't let it revert the deposit
     // solhint-disable-next-line no-empty-blocks
     try _rollup.flushEntryQueue(validatorsToFlush) {
-      // Flush succeeded, no action needed
-      // solhint-disable-next-line no-empty-blocks
-    } catch {
+    // Flush succeeded, no action needed
+    // solhint-disable-next-line no-empty-blocks
+    }
+      catch {
       // Flush failed, but we don't want to revert the deposit
       // The validator is still in the queue and can be flushed later
     }

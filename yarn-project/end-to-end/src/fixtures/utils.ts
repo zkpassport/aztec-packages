@@ -12,19 +12,18 @@ import { AnvilTestWatcher, CheatCodes } from '@aztec/aztec/testing';
 import { createBlobSinkClient } from '@aztec/blob-sink/client';
 import { type BlobSinkServer, createBlobSinkServer } from '@aztec/blob-sink/server';
 import { GENESIS_ARCHIVE_ROOT, SPONSORED_FPC_SALT } from '@aztec/constants';
+import { isAnvilTestChain } from '@aztec/ethereum/chain';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import { getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
+import { NULL_KEY } from '@aztec/ethereum/constants';
+import { RollupContract, deployMulticall3 } from '@aztec/ethereum/contracts';
 import {
   type DeployL1ContractsArgs,
   type DeployL1ContractsReturnType,
-  FeeAssetArtifact,
-  NULL_KEY,
   type Operator,
-  RollupContract,
-  createExtendedL1Client,
   deployL1Contracts,
-  deployMulticall3,
-  getL1ContractsConfigEnvVars,
-  isAnvilTestChain,
-} from '@aztec/ethereum';
+} from '@aztec/ethereum/deploy-l1-contracts';
+import { FeeAssetArtifact } from '@aztec/ethereum/l1-artifacts';
 import {
   DelayedTxUtils,
   EthCheatCodes,
@@ -32,10 +31,11 @@ import {
   createDelayedL1TxUtilsFromViemWallet,
   startAnvil,
 } from '@aztec/ethereum/test';
+import { BlockNumber, EpochNumber } from '@aztec/foundation/branded-types';
 import { SecretValue } from '@aztec/foundation/config';
-import { randomBytes } from '@aztec/foundation/crypto';
+import { randomBytes } from '@aztec/foundation/crypto/random';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import { tryRmDir } from '@aztec/foundation/fs';
 import { withLogNameSuffix } from '@aztec/foundation/log';
 import { retryUntil } from '@aztec/foundation/retry';
@@ -91,10 +91,10 @@ const { AZTEC_NODE_URL = '' } = process.env;
 const getAztecUrl = () => AZTEC_NODE_URL;
 
 let telemetry: TelemetryClient | undefined = undefined;
-function getTelemetryClient(partialConfig: Partial<TelemetryClientConfig> & { benchmark?: boolean } = {}) {
+async function getTelemetryClient(partialConfig: Partial<TelemetryClientConfig> & { benchmark?: boolean } = {}) {
   if (!telemetry) {
     const config = { ...getTelemetryConfig(), ...partialConfig };
-    telemetry = config.benchmark ? new BenchmarkTelemetryClient() : initTelemetryClient(config);
+    telemetry = config.benchmark ? new BenchmarkTelemetryClient() : await initTelemetryClient(config);
   }
   return telemetry;
 }
@@ -117,16 +117,26 @@ export const setupL1Contracts = async (
   args: Partial<DeployL1ContractsArgs> = {},
   chain: Chain = foundry,
 ) => {
-  const l1Data = await deployL1Contracts(l1RpcUrls, account, chain, logger, {
-    vkTreeRoot: getVKTreeRoot(),
-    protocolContractsHash,
-    genesisArchiveRoot: args.genesisArchiveRoot ?? new Fr(GENESIS_ARCHIVE_ROOT),
-    salt: args.salt,
-    initialValidators: args.initialValidators,
-    ...getL1ContractsConfigEnvVars(),
-    realVerifier: false,
-    ...args,
-  });
+  const l1Data = await deployL1Contracts(
+    l1RpcUrls,
+    account,
+    chain,
+    logger,
+    {
+      vkTreeRoot: getVKTreeRoot(),
+      protocolContractsHash,
+      genesisArchiveRoot: args.genesisArchiveRoot ?? new Fr(GENESIS_ARCHIVE_ROOT),
+      salt: args.salt,
+      initialValidators: args.initialValidators,
+      ...getL1ContractsConfigEnvVars(),
+      realVerifier: false,
+      ...args,
+    },
+    {
+      priorityFeeBumpPercentage: 0,
+      priorityFeeRetryBumpPercentage: 0,
+    },
+  );
 
   return l1Data;
 };
@@ -438,7 +448,9 @@ export async function setup(
       config.publisherPrivateKeys = [new SecretValue(`0x${publisherPrivKey!.toString('hex')}` as const)];
     }
 
-    config.coinbase = EthAddress.fromString(publisherHdAccount.address);
+    if (config.coinbase === undefined) {
+      config.coinbase = EthAddress.fromString(publisherHdAccount.address);
+    }
 
     if (AZTEC_NODE_URL) {
       // we are setting up against a remote environment, l1 contracts are assumed to already be deployed
@@ -489,7 +501,7 @@ export async function setup(
         deployL1ContractsValues.l1ContractAddresses.rollupAddress,
       );
 
-      const blockReward = await rollup.getBlockReward();
+      const blockReward = await rollup.getCheckpointReward();
       const mintAmount = 10_000n * (blockReward as bigint);
 
       const feeJuice = getContract({
@@ -528,7 +540,7 @@ export async function setup(
       await watcher.start();
     }
 
-    const telemetry = getTelemetryClient(opts.telemetryConfig);
+    const telemetry = await getTelemetryClient(opts.telemetryConfig);
 
     // Blob sink service - blobs get posted here and served from here
     const blobSinkPort = await getPort();
@@ -636,7 +648,11 @@ export async function setup(
       (opts.initialValidators && opts.initialValidators.length > 0)
     ) {
       // We need to advance such that the committee is set up.
-      await cheatCodes.rollup.advanceToEpoch((await cheatCodes.rollup.getEpoch()) + BigInt(config.lagInEpochs + 1));
+      await cheatCodes.rollup.advanceToEpoch(
+        EpochNumber.fromBigInt(
+          BigInt(await cheatCodes.rollup.getEpoch()) + BigInt(config.lagInEpochsForValidatorSet + 1),
+        ),
+      );
       await cheatCodes.rollup.setupEpoch();
       await cheatCodes.rollup.debugRollup();
     }
@@ -728,7 +744,7 @@ export async function setup(
 
 export async function ensureAccountContractsPublished(wallet: Wallet, accountsToDeploy: AztecAddress[]) {
   // We have to check whether the accounts are already deployed. This can happen if the test runs against
-  // the sandbox and the test accounts exist
+  // the local network and the test accounts exist
   const accountsAndAddresses = await Promise.all(
     accountsToDeploy.map(async address => {
       return {
@@ -848,7 +864,7 @@ export async function setupSponsoredFPC(wallet: Wallet) {
     salt: new Fr(SPONSORED_FPC_SALT),
   });
 
-  await wallet.registerContract({ instance, artifact: SponsoredFPCContract.artifact });
+  await wallet.registerContract(instance, SponsoredFPCContract.artifact);
   getLogger().info(`SponsoredFPC: ${instance.address}`);
   return instance;
 }
@@ -858,10 +874,10 @@ export async function setupSponsoredFPC(wallet: Wallet) {
  * @param wallet - The wallet
  */
 export async function registerSponsoredFPC(wallet: Wallet): Promise<void> {
-  await wallet.registerContract({ instance: await getSponsoredFPCInstance(), artifact: SponsoredFPCContract.artifact });
+  await wallet.registerContract(await getSponsoredFPCInstance(), SponsoredFPCContract.artifact);
 }
 
-export async function waitForProvenChain(node: AztecNode, targetBlock?: number, timeoutSec = 60, intervalSec = 1) {
+export async function waitForProvenChain(node: AztecNode, targetBlock?: BlockNumber, timeoutSec = 60, intervalSec = 1) {
   targetBlock ??= await node.getBlockNumber();
 
   await retryUntil(
@@ -893,7 +909,11 @@ export function createAndSyncProverNode(
 
     // Creating temp store and archiver for simulated prover node
     const archiverConfig = { ...aztecNodeConfig, dataDirectory: proverNodeConfig.dataDirectory };
-    const archiver = await createArchiver(archiverConfig, { blobSinkClient }, { blockUntilSync: true });
+    const archiver = await createArchiver(
+      archiverConfig,
+      { blobSinkClient, dateProvider: proverNodeDeps.dateProvider },
+      { blockUntilSync: true },
+    );
 
     // Prover node config is for simulated proofs
     const proverConfig: ProverNodeConfig = {

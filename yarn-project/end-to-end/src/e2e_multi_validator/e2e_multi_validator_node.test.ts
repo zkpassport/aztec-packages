@@ -8,12 +8,11 @@ import type { Logger } from '@aztec/aztec.js/log';
 import type { AztecNode } from '@aztec/aztec.js/node';
 import type { Wallet } from '@aztec/aztec.js/wallet';
 import type { CheatCodes } from '@aztec/aztec/testing';
-import {
-  type DeployL1ContractsReturnType,
-  RollupContract,
-  createExtendedL1Client,
-  getL1ContractsConfigEnvVars,
-} from '@aztec/ethereum';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import { getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
+import { RollupContract } from '@aztec/ethereum/contracts';
+import type { DeployL1ContractsReturnType } from '@aztec/ethereum/deploy-l1-contracts';
+import { EpochNumber } from '@aztec/foundation/branded-types';
 import { SecretValue } from '@aztec/foundation/config';
 import { Signature } from '@aztec/foundation/eth-signature';
 import { retryUntil } from '@aztec/foundation/retry';
@@ -163,7 +162,11 @@ describe('e2e_multi_validator_node', () => {
       validatorAddresses[VALIDATOR_COUNT - 2],
     ]);
 
-    await cheatCodes.rollup.advanceToEpoch((await cheatCodes.rollup.getEpoch()) + BigInt(config.lagInEpochs + 1));
+    await cheatCodes.rollup.advanceToEpoch(
+      EpochNumber.fromBigInt(
+        BigInt(await cheatCodes.rollup.getEpoch()) + BigInt(config.lagInEpochsForValidatorSet + 1),
+      ),
+    );
 
     // check that the committee is undefined
     const committee = await rollup.getCurrentEpochCommittee();

@@ -90,7 +90,7 @@ TEST(UltraCircuitSMT, ArithmeticRelation)
     auto circuit_info = unpack_from_buffer(builder.export_circuit());
     Solver s(circuit_info.modulus, ultra_solver_config);
     UltraCircuit cir(circuit_info, &s);
-    ASSERT_EQ(cir.get_num_gates(), builder.get_estimated_num_finalized_gates());
+    ASSERT_EQ(cir.get_num_gates(), builder.get_num_finalized_gates_inefficient(/*ensure_nonzero=*/false));
 
     cir["a"] == a.get_value();
     cir["b"] == b.get_value();
@@ -122,7 +122,7 @@ TEST(UltraCircuitSMT, EllipticRelationADD)
     auto circuit_info = unpack_from_buffer(builder.export_circuit());
     Solver s(circuit_info.modulus, ultra_solver_config);
     UltraCircuit cir(circuit_info, &s);
-    ASSERT_EQ(cir.get_num_gates(), builder.get_estimated_num_finalized_gates());
+    ASSERT_EQ(cir.get_num_gates(), builder.get_num_finalized_gates_inefficient(/*ensure_nonzero=*/false));
 
     cir["x1"] == p1.x().get_value();
     cir["x2"] == p2.x().get_value();
@@ -165,7 +165,7 @@ TEST(UltraCircuitSMT, EllipticRelationDBL)
     auto circuit_info = unpack_from_buffer(builder.export_circuit());
     Solver s(circuit_info.modulus, ultra_solver_config);
     UltraCircuit cir(circuit_info, &s);
-    ASSERT_EQ(cir.get_num_gates(), builder.get_estimated_num_finalized_gates());
+    ASSERT_EQ(cir.get_num_gates(), builder.get_num_finalized_gates_inefficient(/*ensure_nonzero=*/false));
 
     cir["x1"] == p1.x().get_value();
     cir["y1"] == p1.y().get_value();
@@ -202,7 +202,7 @@ TEST(UltraCircuitSMT, OptimizedDeltaRangeRelation)
     auto circuit_info = unpack_from_buffer(builder.export_circuit());
     Solver s(circuit_info.modulus, ultra_solver_config);
     UltraCircuit cir(circuit_info, &s, TermType::BVTerm);
-    ASSERT_EQ(cir.get_num_gates(), builder.get_estimated_num_finalized_gates());
+    ASSERT_EQ(cir.get_num_gates(), builder.get_num_finalized_gates_inefficient(/*ensure_nonzero=*/false));
 
     cir["a"] == a.get_value();
     s.print_assertions();
@@ -251,7 +251,7 @@ TEST(UltraCircuitSMT, LookupRelation2)
     auto circuit_info = unpack_from_buffer(builder.export_circuit());
     Solver s(circuit_info.modulus, ultra_solver_config, /*base=*/16, /*bvsize=*/256);
     UltraCircuit cir(circuit_info, &s, TermType::BVTerm);
-    ASSERT_EQ(cir.get_num_gates(), builder.get_estimated_num_finalized_gates());
+    ASSERT_EQ(cir.get_num_gates(), builder.get_num_finalized_gates_inefficient(/*ensure_nonzero=*/false));
 
     cir["a"] == a.get_value();
     cir["b"] == b.get_value();
@@ -378,7 +378,8 @@ TEST(UltraCircuitSMT, RAMTables)
     Builder builder;
 
     size_t table_size = 3;
-    ram_table_t table(&builder, table_size);
+    std::vector<field_t> zeros(table_size, field_t(0));
+    ram_table_t table(&builder, zeros);
     for (size_t i = 0; i < table_size; ++i) {
         table.write(i, 0);
     }
@@ -420,7 +421,8 @@ TEST(UltraCircuitSMT, RAMTablesRelaxed)
     Builder builder;
 
     size_t table_size = 3;
-    ram_table_t table(&builder, table_size);
+    std::vector<field_t> zeros(table_size, field_t(0));
+    ram_table_t table(&builder, zeros);
     for (size_t i = 0; i < table_size; ++i) {
         table.write(i, 0);
     }

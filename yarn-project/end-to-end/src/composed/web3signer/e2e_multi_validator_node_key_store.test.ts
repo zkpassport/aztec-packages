@@ -5,12 +5,11 @@ import { ContractDeployer } from '@aztec/aztec.js/deployment';
 import { Fr } from '@aztec/aztec.js/fields';
 import type { AztecNode } from '@aztec/aztec.js/node';
 import type { Wallet } from '@aztec/aztec.js/wallet';
-import {
-  type DeployL1ContractsReturnType,
-  RollupContract,
-  getAddressFromPrivateKey,
-  getL1ContractsConfigEnvVars,
-} from '@aztec/ethereum';
+import { getAddressFromPrivateKey } from '@aztec/ethereum/account';
+import { getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
+import { RollupContract } from '@aztec/ethereum/contracts';
+import type { DeployL1ContractsReturnType } from '@aztec/ethereum/deploy-l1-contracts';
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { SecretValue } from '@aztec/foundation/config';
 import { retryUntil } from '@aztec/foundation/retry';
 import { type EthPrivateKey, KeystoreManager, loadKeystores, mergeKeystores } from '@aztec/node-keystore';
@@ -19,7 +18,7 @@ import type { Sequencer, SequencerClient, SequencerPublisherFactory } from '@azt
 import type { TestSequencer, TestSequencerClient } from '@aztec/sequencer-client/test';
 import type { BlockProposalOptions } from '@aztec/stdlib/p2p';
 import type { CheckpointHeader } from '@aztec/stdlib/rollup';
-import type { StateReference, Tx } from '@aztec/stdlib/tx';
+import type { Tx } from '@aztec/stdlib/tx';
 import { NodeKeystoreAdapter, ValidatorClient } from '@aztec/validator-client';
 
 import { jest } from '@jest/globals';
@@ -362,10 +361,9 @@ describe('e2e_multi_validator_node', () => {
 
     const originalCreateProposal = validatorClient.createBlockProposal.bind(validatorClient);
     const createBlockProposal = (
-      blockNumber: number,
+      blockNumber: BlockNumber,
       header: CheckpointHeader,
       archive: Fr,
-      stateReference: StateReference,
       txs: Tx[],
       proposerAddress: EthAddress | undefined,
       options: BlockProposalOptions,
@@ -381,7 +379,7 @@ describe('e2e_multi_validator_node', () => {
         );
       }
 
-      return originalCreateProposal(blockNumber, header, archive, stateReference, txs, proposerAddress, options);
+      return originalCreateProposal(blockNumber, header, archive, txs, proposerAddress, options);
     };
     validatorClient.createBlockProposal = jest.fn(createBlockProposal);
 

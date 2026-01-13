@@ -17,7 +17,37 @@ const path = require("path");
 // @ts-ignore
 const fs = require("fs");
 const macros = require("./src/katex-macros.js");
-const versions = require("./versions.json");
+
+// Load separate version files for each docs instance
+const developerVersions = require("./developer_versions.json");
+const networkVersions = require("./network_versions.json");
+
+// Find specific versions dynamically for Developer docs
+const nightlyVersion = developerVersions.find((v) => v.includes("nightly"));
+const devnetVersion = developerVersions.find((v) => v.includes("devnet"));
+
+// Find specific versions dynamically for Network docs
+const ignitionVersion = networkVersions.find((v) => v.includes("ignition"));
+const testnetVersion = networkVersions.find((v) => !v.includes("ignition"));
+
+// Always serve from processed-docs (with resolved macros)
+// Preprocessing runs on both `yarn start` and `yarn build`
+const docsPath = "processed-docs/docs";
+const developerDocsPath = "processed-docs/docs-developers";
+const networkDocsPath = "processed-docs/docs-network";
+
+// Shared remark/rehype plugins configuration
+const remarkPlugins = [math];
+const rehypePlugins = [
+  [
+    katex,
+    {
+      throwOnError: true,
+      globalGroup: true,
+      macros,
+    },
+  ],
+];
 
 const config = {
   title: "Privacy-first zkRollup | Aztec Documentation",
@@ -44,7 +74,7 @@ const config = {
   markdown: {
     mermaid: true,
     hooks: {
-      onBrokenMarkdownLinks: process.env.ENV === "dev" ? "warn" : "throw",
+      onBrokenMarkdownLinks: "throw",
     },
   },
   themes: ["@docusaurus/theme-mermaid", "docusaurus-theme-search-typesense"],
@@ -53,50 +83,15 @@ const config = {
       "@docusaurus/preset-classic",
       /** @type {import('@docusaurus/preset-classic').Options} */
       {
-        docs: {
-          path: process.env.ENV === "dev" ? "docs" : "processed-docs",
-          sidebarPath: "./sidebars.js",
-          editUrl: (params) => {
-            return (
-              `https://github.com/AztecProtocol/aztec-packages/edit/master/docs/docs/` +
-              params.docPath
-            );
-          },
-          routeBasePath: "/",
-          include: ["**/*.{md,mdx}"],
-          // Don't show latest since nightlies are published
-          // Hide current version in Netlify production, show in dev and PR previews
-          // Netlify sets CONTEXT
-          includeCurrentVersion: process.env.CONTEXT !== "production",
-          // There should be 2 versions, nightly and stable
-          // The stable version is second in the list
-          lastVersion: versions[1],
-          versions: {
-            [versions[0]]: {
-              ...(versions[0].includes("nightly") && { path: "nightly" }),
-            },
-            ...(process.env.CONTEXT !== "production" && {
-              current: {
-                label: "dev",
-                path: "dev",
-              },
-            }),
-          },
-          remarkPlugins: [math],
-          rehypePlugins: [
-            [
-              katex,
-              {
-                throwOnError: true,
-                globalGroup: true,
-                macros,
-              },
-            ],
-          ],
-        },
+        // Disable docs from preset - we use separate plugins for multi-instance
+        docs: false,
         blog: false,
         theme: {
           customCss: require.resolve("./src/css/custom.css"),
+        },
+        // Enable pages for root-level content (index.mdx, ignition_info, etc.)
+        pages: {
+          path: "src/pages",
         },
       },
     ],
@@ -111,15 +106,114 @@ const config = {
     },
   ],
   plugins: [
+    // Developer docs instance - nightly/devnet versions
+    [
+      "@docusaurus/plugin-content-docs",
+      {
+        id: "developer",
+        path: developerDocsPath,
+        routeBasePath: "developers",
+        sidebarPath: "./sidebars-developer.js",
+        editUrl: (params) => {
+          return (
+            `https://github.com/AztecProtocol/aztec-packages/edit/next/docs/docs-developers/` +
+            params.docPath
+          );
+        },
+        // Version configuration for Build docs
+        includeCurrentVersion: process.env.CONTEXT !== "production",
+        lastVersion: devnetVersion,
+        versions: {
+          ...(nightlyVersion && {
+            [nightlyVersion]: {
+              path: "nightly",
+              banner: "unreleased",
+            },
+          }),
+          ...(devnetVersion && {
+            [devnetVersion]: {
+              label: `Devnet (${devnetVersion})`,
+              path: "",
+              banner: "none",
+            },
+          }),
+          ...(process.env.CONTEXT !== "production" && {
+            current: {
+              label: "dev",
+              path: "dev",
+            },
+          }),
+        },
+        remarkPlugins,
+        rehypePlugins,
+      },
+    ],
+    // Network docs instance (node operators) - testnet/ignition versions
+    [
+      "@docusaurus/plugin-content-docs",
+      {
+        id: "network",
+        path: networkDocsPath,
+        routeBasePath: "network",
+        sidebarPath: "./sidebars-network.js",
+        editUrl: (params) => {
+          return (
+            `https://github.com/AztecProtocol/aztec-packages/edit/next/docs/docs-network/` +
+            params.docPath
+          );
+        },
+        // Version configuration for Network docs
+        includeCurrentVersion: process.env.CONTEXT !== "production",
+        lastVersion: ignitionVersion,
+        versions: {
+          ...(ignitionVersion && {
+            [ignitionVersion]: {
+              label: `Ignition (${ignitionVersion.replace("-ignition", "")})`,
+              path: "",
+              banner: "none",
+            },
+          }),
+          ...(testnetVersion && {
+            [testnetVersion]: {
+              label: `Testnet (${testnetVersion})`,
+              path: "testnet",
+              banner: "none",
+            },
+          }),
+          ...(process.env.CONTEXT !== "production" && {
+            current: {
+              label: "dev",
+              path: "dev",
+            },
+          }),
+        },
+        remarkPlugins,
+        rehypePlugins,
+      },
+    ],
+    // Root pages (index, ignition_info, etc.) - no versioning
+    [
+      "@docusaurus/plugin-content-docs",
+      {
+        id: "root",
+        path: docsPath,
+        routeBasePath: "/",
+        sidebarPath: false, // No sidebar for root pages
+        remarkPlugins,
+        rehypePlugins,
+      },
+    ],
     [
       "docusaurus-plugin-llms",
       {
         generateLLMsTxt: true,
         generateLLMsFullTxt: true,
-        docsDir: `versioned_docs/version-${versions[0]}/`,
+        docsDir: devnetVersion
+          ? `developer_versioned_docs/version-${devnetVersion}/`
+          : `developer_versioned_docs/version-${developerVersions[0]}/`,
         title: "Aztec Protocol Documentation",
         excludeImports: true,
-        version: versions[0],
+        version: devnetVersion || developerVersions[0],
         pathTransformation: {
           ignorePaths: ["docs"],
         },
@@ -137,9 +231,7 @@ const config = {
     ],
     // ["./src/plugins/plugin-embed-code", {}],
   ],
-  customFields: {
-    ENV: process.env.ENV,
-  },
+  customFields: {},
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
@@ -176,31 +268,31 @@ const config = {
           src: "img/Aztec Wordmark_Dark.svg",
         },
         items: [
+          // Unified version dropdown - shows context-aware versions based on current section
           {
-            type: "docsVersionDropdown",
+            type: "custom-unifiedVersionDropdown",
             position: "left",
-            dropdownActiveClassDisabled: true,
           },
+          // Developer sidebar link
           {
             type: "docSidebar",
             sidebarId: "sidebar",
+            docsPluginId: "developer",
             position: "left",
             label: "Build",
           },
+
+          // Network sidebar link
           {
             type: "docSidebar",
-            sidebarId: "nodesSidebar",
+            sidebarId: "sidebar",
+            docsPluginId: "network",
             position: "left",
             label: "Run a node",
           },
           {
-            to: "/developers/getting_started_on_sandbox",
-            label: "Install Sandbox",
-            position: "right",
-          },
-          {
-            to: "/try_testnet",
-            label: "Try Testnet",
+            to: "/ignition_info",
+            label: "Ignition Info",
             position: "right",
           },
           {
@@ -298,10 +390,6 @@ const config = {
               {
                 label: "Introduction",
                 to: "/",
-              },
-              {
-                label: "Developer Getting Started",
-                to: "/developers/getting_started",
               },
               {
                 label: "Aztec.nr",

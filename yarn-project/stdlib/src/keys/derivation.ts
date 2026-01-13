@@ -1,6 +1,9 @@
 import { GeneratorIndex } from '@aztec/constants';
-import { Grumpkin, poseidon2HashWithSeparator, sha512ToGrumpkinScalar } from '@aztec/foundation/crypto';
-import { Fq, Fr, GrumpkinScalar } from '@aztec/foundation/fields';
+import { Grumpkin } from '@aztec/foundation/crypto/grumpkin';
+import { poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
+import { sha512ToGrumpkinScalar } from '@aztec/foundation/crypto/sha512';
+import { Fq, Fr } from '@aztec/foundation/curves/bn254';
+import { GrumpkinScalar } from '@aztec/foundation/curves/grumpkin';
 
 import { AztecAddress } from '../aztec-address/index.js';
 import type { KeyPrefix } from './key_types.js';
@@ -50,7 +53,7 @@ export async function computeAddress(publicKeys: PublicKeys, partialAddress: Fr)
   // 2. addressPoint = (preaddress * G) + ivpk_m
   // 3. address = addressPoint.x
   const preaddress = await computePreaddress(await publicKeys.hash(), partialAddress);
-  const address = await new Grumpkin().add(
+  const address = await Grumpkin.add(
     await derivePublicKeyFromSecretKey(new Fq(preaddress.toBigInt())),
     publicKeys.masterIncomingViewingPublicKey,
   );
@@ -81,8 +84,7 @@ export async function computeAddressSecret(preaddress: Fr, ivsk: Fq) {
 }
 
 export function derivePublicKeyFromSecretKey(secretKey: Fq) {
-  const curve = new Grumpkin();
-  return curve.mul(curve.generator(), secretKey);
+  return Grumpkin.mul(Grumpkin.generator, secretKey);
 }
 
 /**

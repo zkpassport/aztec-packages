@@ -1,6 +1,9 @@
 #include "honk_recursion_constraint.hpp"
 #include "acir_format.hpp"
 #include "acir_format_mocks.hpp"
+#include "barretenberg/chonk/mock_circuit_producer.hpp"
+#include "barretenberg/dsl/acir_format/gate_count_constants.hpp"
+#include "barretenberg/dsl/acir_format/utils.hpp"
 #include "barretenberg/dsl/acir_format/witness_constant.hpp"
 #include "barretenberg/numeric/uint256/uint256.hpp"
 #include "barretenberg/special_public_inputs/special_public_inputs.hpp"
@@ -36,92 +39,20 @@ template <typename RecursiveFlavor> class AcirHonkRecursionConstraint : public :
 
     InnerBuilder create_inner_circuit()
     {
-        /**
-         * constraints produced by Noir program:
-         * fn main(x : u32, y : pub u32) {
-         * let z = x ^ y;
-         *
-         * constrain z != 10;
-         * }
-         **/
-        RangeConstraint range_a{
-            .witness = 0,
-            .num_bits = 32,
-        };
-        RangeConstraint range_b{
-            .witness = 1,
-            .num_bits = 32,
-        };
+        InnerBuilder builder;
 
-        LogicConstraint logic_constraint{
-            .a = WitnessOrConstant<bb::fr>::from_index(0),
-            .b = WitnessOrConstant<bb::fr>::from_index(1),
-            .result = 2,
-            .num_bits = 32,
-            .is_xor_gate = 1,
-        };
-        poly_triple expr_a{
-            .a = 2,
-            .b = 3,
-            .c = 0,
-            .q_m = 0,
-            .q_l = 1,
-            .q_r = -1,
-            .q_o = 0,
-            .q_c = -10,
-        };
-        poly_triple expr_b{
-            .a = 3,
-            .b = 4,
-            .c = 5,
-            .q_m = 1,
-            .q_l = 0,
-            .q_r = 0,
-            .q_o = -1,
-            .q_c = 0,
-        };
-        poly_triple expr_c{
-            .a = 3,
-            .b = 5,
-            .c = 3,
-            .q_m = 1,
-            .q_l = 0,
-            .q_r = 0,
-            .q_o = -1,
-            .q_c = 0,
+        MockCircuits::add_arithmetic_gates(builder);
+        MockCircuits::add_lookup_gates(builder);
 
-        };
-        poly_triple expr_d{
-            .a = 5,
-            .b = 0,
-            .c = 0,
-            .q_m = 0,
-            .q_l = -1,
-            .q_r = 0,
-            .q_o = 0,
-            .q_c = 1,
-        };
+        builder.add_public_variable(fr::one());
+        builder.add_public_variable(fr::one());
 
-        AcirFormat constraint_system{
-            .varnum = 6,
-            .num_acir_opcodes = 7,
-            .public_inputs = { 1, 2 },
-            .logic_constraints = { logic_constraint },
-            .range_constraints = { range_a, range_b },
-            .poly_triple_constraints = { expr_a, expr_b, expr_c, expr_d },
-            .original_opcode_indices = create_empty_original_opcode_indices(),
-        };
-        mock_opcode_indices(constraint_system);
+        if constexpr (HasIPAAccumulator<InnerFlavor>) {
+            bb::stdlib::recursion::honk::RollupIO::add_default(builder);
+        } else {
+            bb::stdlib::recursion::honk::DefaultIO<InnerBuilder>::add_default(builder);
+        }
 
-        uint256_t inverse_of_five = fr(5).invert();
-        WitnessVector witness{
-            5, 10, 15, 5, inverse_of_five, 1,
-        };
-        bool has_ipa_claim = IsAnyOf<InnerFlavor, UltraRollupFlavor>;
-
-        ProgramMetadata metadata{ .has_ipa_claim = has_ipa_claim };
-        AcirProgram program{ constraint_system, witness };
-        auto builder = create_circuit(program, metadata);
         return builder;
     }
 
@@ -140,7 +71,7 @@ template <typename RecursiveFlavor> class AcirHonkRecursionConstraint : public :
     {
         std::vector<RecursionConstraint> honk_recursion_constraints;
 
-        SlabVector<fr> witness;
+        std::vector<fr> witness;
 
         for (auto& inner_circuit : inner_circuits) {
 
@@ -171,12 +102,8 @@ template <typename RecursiveFlavor> class AcirHonkRecursionConstraint : public :
                 ProofSurgeon<fr>::populate_recursion_witness_data(
                     witness, proof_witnesses, key_witnesses, key_hash_witness, num_public_inputs_to_extract);
 
-            auto predicate = WitnessOrConstant<fr>::from_index(static_cast<uint32_t>(witness.size()));
-            if (predicate_val) {
-                witness.push_back(fr(1));
-            } else {
-                witness.push_back(fr(0));
-            }
+            uint32_t predicate_index = add_to_witness_and_track_indices(witness, predicate_val ? fr(1) : fr(0));
+            auto predicate = WitnessOrConstant<fr>::from_index(predicate_index);
 
             RecursionConstraint honk_recursion_constraint{
                 .key = key_indices,
@@ -190,7 +117,7 @@ template <typename RecursiveFlavor> class AcirHonkRecursionConstraint : public :
         }
 
         AcirFormat constraint_system{};
-        constraint_system.varnum = static_cast<uint32_t>(witness.size());
+        constraint_system.max_witness_index = static_cast<uint32_t>(witness.size() - 1);
         constraint_system.num_acir_opcodes = static_cast<uint32_t>(honk_recursion_constraints.size());
         constraint_system.honk_recursion_constraints = honk_recursion_constraints;
         constraint_system.original_opcode_indices = create_empty_original_opcode_indices();
@@ -203,7 +130,7 @@ template <typename RecursiveFlavor> class AcirHonkRecursionConstraint : public :
             witness = {}; // set it all to 0
         }
         AcirProgram program{ constraint_system, witness };
-        BuilderType outer_circuit = create_circuit<BuilderType>(program, metadata);
+        auto outer_circuit = create_circuit<BuilderType>(program, metadata);
 
         return outer_circuit;
     }
@@ -242,6 +169,9 @@ TYPED_TEST_SUITE(AcirHonkRecursionConstraint, Flavors);
 
 TYPED_TEST(AcirHonkRecursionConstraint, TestHonkRecursionConstraintVKGeneration)
 {
+#ifndef NDEBUG
+    BB_DISABLE_ASSERTS();
+#endif
     std::vector<typename TestFixture::InnerBuilder> layer_1_circuits;
     layer_1_circuits.push_back(TestFixture::create_inner_circuit());
 
@@ -276,13 +206,10 @@ TYPED_TEST(AcirHonkRecursionConstraint, TestBasicSingleHonkRecursionConstraint)
                                                                                        /*dummy_witnesses=*/false,
                                                                                        /*predicate_val=*/true);
 
-    info("estimate finalized circuit gates = ", layer_2_circuit.get_estimated_num_finalized_gates());
-
     auto prover_instance = std::make_shared<typename TestFixture::OuterProverInstance>(layer_2_circuit);
     auto verification_key =
         std::make_shared<typename TestFixture::OuterVerificationKey>(prover_instance->get_precomputed());
     typename TestFixture::OuterProver prover(prover_instance, verification_key);
-    info("prover gates = ", prover_instance->dyadic_size());
     auto proof = prover.construct_proof();
 
     EXPECT_EQ(TestFixture::verify_proof(prover_instance, verification_key, proof), true);
@@ -298,13 +225,10 @@ TYPED_TEST(AcirHonkRecursionConstraint, TestBasicDoubleHonkRecursionConstraints)
     auto layer_2_circuit =
         TestFixture::template create_outer_circuit<typename TestFixture::OuterBuilder>(layer_1_circuits, false, false);
 
-    info("circuit gates = ", layer_2_circuit.get_estimated_num_finalized_gates());
-
     auto prover_instance = std::make_shared<typename TestFixture::OuterProverInstance>(layer_2_circuit);
     auto verification_key =
         std::make_shared<typename TestFixture::OuterVerificationKey>(prover_instance->get_precomputed());
     typename TestFixture::OuterProver prover(prover_instance, verification_key);
-    info("prover gates = ", prover_instance->dyadic_size());
     auto proof = prover.construct_proof();
 
     EXPECT_EQ(TestFixture::verify_proof(prover_instance, verification_key, proof), true);
@@ -364,13 +288,11 @@ TYPED_TEST(AcirHonkRecursionConstraint, TestOneOuterRecursiveCircuit)
                                                                                        /*dummy_witnesses=*/false,
                                                                                        /*predicate_val=*/true);
     info("created second outer circuit");
-    info("number of gates in layer 3 = ", layer_3_circuit.get_estimated_num_finalized_gates());
 
     auto prover_instance = std::make_shared<typename TestFixture::OuterProverInstance>(layer_3_circuit);
     auto verification_key =
         std::make_shared<typename TestFixture::OuterVerificationKey>(prover_instance->get_precomputed());
     typename TestFixture::OuterProver prover(prover_instance, verification_key);
-    info("prover gates = ", prover_instance->dyadic_size());
     auto proof = prover.construct_proof();
 
     EXPECT_EQ(TestFixture::verify_proof(prover_instance, verification_key, proof), true);
@@ -403,7 +325,7 @@ TYPED_TEST(AcirHonkRecursionConstraint, TestFullRecursiveComposition)
     layer_b_2_circuits.push_back(TestFixture::create_inner_circuit());
     info("created second inner circuit");
 
-    std::vector<Builder> layer_2_circuits;
+    std::vector<typename TestFixture::InnerBuilder> layer_2_circuits;
     layer_2_circuits.push_back(
         TestFixture::template create_outer_circuit<typename TestFixture::InnerBuilder>(layer_b_1_circuits,
                                                                                        /*dummy_witnesses=*/false,
@@ -421,14 +343,98 @@ TYPED_TEST(AcirHonkRecursionConstraint, TestFullRecursiveComposition)
                                                                                        /*dummy_witnesses=*/false,
                                                                                        /*predicate_val=*/true);
     info("created third outer circuit");
-    info("number of gates in layer 3 circuit = ", layer_3_circuit.get_estimated_num_finalized_gates());
 
     auto prover_instance = std::make_shared<typename TestFixture::OuterProverInstance>(layer_3_circuit);
     auto verification_key =
         std::make_shared<typename TestFixture::OuterVerificationKey>(prover_instance->get_precomputed());
     typename TestFixture::OuterProver prover(prover_instance, verification_key);
-    info("prover gates = ", prover_instance->dyadic_size());
     auto proof = prover.construct_proof();
 
     EXPECT_EQ(TestFixture::verify_proof(prover_instance, verification_key, proof), true);
+}
+
+TYPED_TEST(AcirHonkRecursionConstraint, GateCountSingleHonkRecursion)
+{
+    using InnerFlavor = TestFixture::InnerFlavor;
+    using RecursiveFlavor = TypeParam;
+    using InnerVerificationKey = TestFixture::InnerVerificationKey;
+    using InnerProverInstance = TestFixture::InnerProverInstance;
+    using OuterBuilder = TestFixture::OuterBuilder;
+
+    std::vector<typename TestFixture::InnerBuilder> layer_1_circuits;
+    layer_1_circuits.push_back(TestFixture::create_inner_circuit());
+
+    // Create outer circuit with gate counting enabled
+    std::vector<RecursionConstraint> honk_recursion_constraints;
+    std::vector<fr> witness;
+
+    auto& inner_circuit = layer_1_circuits[0];
+    auto prover_instance = std::make_shared<InnerProverInstance>(inner_circuit);
+    auto verification_key = std::make_shared<InnerVerificationKey>(prover_instance->get_precomputed());
+    typename TestFixture::InnerProver prover(prover_instance, verification_key);
+    auto inner_proof = prover.construct_proof();
+
+    std::vector<bb::fr> key_witnesses = verification_key->to_field_elements();
+    fr key_hash_witness = verification_key->hash();
+
+    auto [num_public_inputs_to_extract, proof_type] = [&]() -> std::pair<size_t, acir_format::PROOF_TYPE> {
+        size_t num_public_inputs_to_extract = inner_circuit.num_public_inputs();
+        if constexpr (HasIPAAccumulator<InnerFlavor>) {
+            return { num_public_inputs_to_extract - RollupIO::PUBLIC_INPUTS_SIZE, ROLLUP_HONK };
+        } else if constexpr (InnerFlavor::HasZK) {
+            return { num_public_inputs_to_extract - DefaultIO::PUBLIC_INPUTS_SIZE, HONK_ZK };
+        } else {
+            return { num_public_inputs_to_extract - DefaultIO::PUBLIC_INPUTS_SIZE, HONK };
+        }
+    }();
+
+    auto [key_indices, key_hash_index, proof_indices, inner_public_inputs] =
+        ProofSurgeon<fr>::populate_recursion_witness_data(
+            witness, inner_proof, key_witnesses, key_hash_witness, num_public_inputs_to_extract);
+
+    // We pin the number of gates with predicate set to witness true, so this is an upper bound for when the constraint
+    // is added with a constant predicate
+    uint32_t predicate_index = add_to_witness_and_track_indices(witness, fr(1));
+    auto predicate = WitnessOrConstant<fr>::from_index(predicate_index);
+
+    RecursionConstraint honk_recursion_constraint{
+        .key = key_indices,
+        .proof = proof_indices,
+        .public_inputs = inner_public_inputs,
+        .key_hash = key_hash_index,
+        .proof_type = proof_type,
+        .predicate = predicate,
+    };
+    honk_recursion_constraints.push_back(honk_recursion_constraint);
+
+    AcirFormat constraint_system{};
+    constraint_system.max_witness_index = static_cast<uint32_t>(witness.size() - 1);
+    constraint_system.num_acir_opcodes = 1;
+    constraint_system.honk_recursion_constraints = honk_recursion_constraints;
+    constraint_system.original_opcode_indices = create_empty_original_opcode_indices();
+    mock_opcode_indices(constraint_system);
+
+    bool constexpr has_ipa_claim = IsAnyOf<InnerFlavor, UltraRollupFlavor>;
+    ProgramMetadata metadata{ .has_ipa_claim = has_ipa_claim, .collect_gates_per_opcode = true };
+
+    AcirProgram program{ constraint_system, witness };
+    auto outer_circuit = create_circuit<OuterBuilder>(program, metadata);
+
+    // Verify the gate count was recorded
+    EXPECT_EQ(program.constraints.gates_per_opcode.size(), 1);
+
+    // Get expected values from shared constants
+    static auto [EXPECTED_GATE_COUNT, EXPECTED_ECC_ROWS, EXPECTED_ULTRA_OPS] =
+        HONK_RECURSION_CONSTANTS<RecursiveFlavor>;
+
+    // Assert gate count
+    EXPECT_EQ(program.constraints.gates_per_opcode[0], EXPECTED_GATE_COUNT);
+
+    // For MegaBuilder, also assert ECC row count and ultra ops count
+    if constexpr (IsMegaBuilder<OuterBuilder>) {
+        size_t actual_ecc_rows = outer_circuit.op_queue->get_num_rows();
+        EXPECT_EQ(actual_ecc_rows, EXPECTED_ECC_ROWS);
+        size_t actual_ultra_ops = outer_circuit.op_queue->get_current_subtable_size();
+        EXPECT_EQ(actual_ultra_ops, EXPECTED_ULTRA_OPS);
+    }
 }

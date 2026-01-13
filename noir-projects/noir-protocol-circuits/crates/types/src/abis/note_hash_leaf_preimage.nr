@@ -24,6 +24,10 @@ impl LeafPreimage for NoteHashLeafPreimage {
 
 impl Readable for NoteHashLeafPreimage {
     fn assert_match_read_request(self, read_request: Scoped<Counted<Field>>) {
+        assert(
+            read_request.contract_address.is_zero(),
+            "Settled read request must have zero contract address",
+        );
         assert_eq(
             self.value,
             read_request.innermost(),

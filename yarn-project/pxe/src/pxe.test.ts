@@ -1,12 +1,16 @@
-import { BBWASMBundlePrivateKernelProver } from '@aztec/bb-prover/client/wasm/bundle';
+import { BBBundlePrivateKernelProver } from '@aztec/bb-prover/client/bundle';
 import type { L1ContractAddresses } from '@aztec/ethereum/l1-contract-addresses';
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { omit } from '@aztec/foundation/collection';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
-import { openTmpStore } from '@aztec/kv-store/lmdb-v2';
+import { AztecLMDBStoreV2, openTmpStore } from '@aztec/kv-store/lmdb-v2';
+import { TestContractArtifact } from '@aztec/noir-test-contracts.js/Test';
 import { BundledProtocolContractsProvider } from '@aztec/protocol-contracts/providers/bundle';
 import { WASMSimulator } from '@aztec/simulator/client';
+import { EventSelector } from '@aztec/stdlib/abi';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
+import { L2BlockHash } from '@aztec/stdlib/block';
 import { getContractClassFromArtifact } from '@aztec/stdlib/contract';
 import type { AztecNode } from '@aztec/stdlib/interfaces/client';
 import {
@@ -14,20 +18,25 @@ import {
   randomContractInstanceWithAddress,
   randomDeployedContract,
 } from '@aztec/stdlib/testing';
+import { BlockHeader, GlobalVariables, TxHash } from '@aztec/stdlib/tx';
 
 import { mock } from 'jest-mock-extended';
+import type { MockProxy } from 'jest-mock-extended/lib/Mock.js';
 
 import type { PXEConfig } from './config/index.js';
-import { PXE } from './pxe.js';
+import { PXE, type PackedPrivateEvent } from './pxe.js';
+import { PrivateEventDataProvider } from './storage/index.js';
 
 describe('PXE', () => {
   let pxe: PXE;
+  let kvStore: AztecLMDBStoreV2;
+  let node: MockProxy<AztecNode>;
 
   beforeAll(async () => {
-    const kvStore = await openTmpStore('test');
-    const node = mock<AztecNode>();
+    kvStore = await openTmpStore('test');
+    node = mock<AztecNode>();
     const simulator = new WASMSimulator();
-    const kernelProver = new BBWASMBundlePrivateKernelProver(simulator);
+    const kernelProver = new BBBundlePrivateKernelProver(simulator);
     const protocolContractsProvider = new BundledProtocolContractsProvider();
     const config: PXEConfig = {
       l2BlockBatchSize: 50,
@@ -141,6 +150,143 @@ describe('PXE', () => {
     await expect(pxe.registerContract({ instance, artifact })).rejects.toThrow(/Artifact does not match/i);
   });
 
+  // These tests are meant to quickly exercise PXE as a
+  // frontier API so we don't need to rely on slower E2E
+  // tests (which in turn are more meaningful for acceptance).
+  // For finer grained tests check out storage/private_event_data_provider.test.ts
+  describe('getPrivateEvents', () => {
+    let contractAddress: AztecAddress;
+    let eventSelector: EventSelector;
+    let lastKnownBlockNumber: BlockNumber;
+    let l2BlockHash: L2BlockHash;
+    let scope: AztecAddress;
+    let privateEventDataProvider: PrivateEventDataProvider;
+    let eventIndex = 0;
+
+    beforeEach(async () => {
+      // Set up basic state
+      lastKnownBlockNumber = BlockNumber(42);
+      const globalVariables = GlobalVariables.empty({
+        blockNumber: lastKnownBlockNumber,
+      });
+      const blockHeader = BlockHeader.empty({
+        globalVariables,
+      });
+      node.getBlockHeader.mockResolvedValue(blockHeader);
+
+      // This is read when PXE tries to resolve the
+      // class id of a contract instance
+      node.getPublicStorageAt.mockResolvedValue(Fr.ZERO);
+
+      // Used to sync private logs from the node.
+      node.getLogsByTags.mockResolvedValue([]);
+
+      // Necessary to sync contract private state
+      await pxe.registerContractClass(TestContractArtifact);
+      const contractClass = await getContractClassFromArtifact(TestContractArtifact);
+      const contractClassId = contractClass.id;
+      const contractInstance = await randomContractInstanceWithAddress({ contractClassId });
+      await pxe.registerContract({
+        instance: contractInstance,
+      });
+
+      contractAddress = contractInstance.address;
+      eventSelector = EventSelector.random();
+      l2BlockHash = L2BlockHash.random();
+
+      scope = await AztecAddress.random();
+
+      privateEventDataProvider = new PrivateEventDataProvider(kvStore);
+    });
+
+    async function storeEvent(blockNumber?: number): Promise<PackedPrivateEvent> {
+      const event = {
+        packedEvent: [Fr.random(), Fr.random()],
+        l2BlockNumber: BlockNumber(blockNumber ?? lastKnownBlockNumber),
+        l2BlockHash,
+        txHash: TxHash.random(),
+        eventSelector,
+      };
+
+      await privateEventDataProvider.storePrivateEventLog(eventSelector, event.packedEvent, eventIndex++, {
+        contractAddress,
+        scope,
+        txHash: event.txHash,
+        l2BlockNumber: event.l2BlockNumber,
+        l2BlockHash: event.l2BlockHash,
+      });
+
+      return event;
+    }
+
+    it('returns private events', async () => {
+      // Store a couple of events to exercise `getPrivateEvents`
+      const event1 = await storeEvent();
+      const event2 = await storeEvent();
+
+      const events = await pxe.getPrivateEvents(eventSelector, {
+        contractAddress,
+        fromBlock: lastKnownBlockNumber,
+        scopes: [scope],
+      });
+
+      expect(events).toEqual([event1, event2]);
+    });
+
+    it('returns no events', async () => {
+      const events = await pxe.getPrivateEvents(eventSelector, {
+        contractAddress,
+        fromBlock: lastKnownBlockNumber,
+        scopes: [scope],
+      });
+
+      expect(events).toEqual([]);
+    });
+
+    describe('filtering', () => {
+      let eventsInPastBlocks: PackedPrivateEvent[];
+      let eventsInLatestKnownBlock: PackedPrivateEvent[];
+      let _eventsInNotYetSyncedBlocks: PackedPrivateEvent[];
+
+      beforeEach(async () => {
+        eventsInPastBlocks = await Promise.all([
+          storeEvent(lastKnownBlockNumber - 1),
+          storeEvent(lastKnownBlockNumber - 1),
+        ]);
+
+        eventsInLatestKnownBlock = await Promise.all([
+          storeEvent(lastKnownBlockNumber),
+          storeEvent(lastKnownBlockNumber),
+        ]);
+
+        _eventsInNotYetSyncedBlocks = await Promise.all([
+          storeEvent(lastKnownBlockNumber + 1),
+          storeEvent(lastKnownBlockNumber + 1),
+        ]);
+      });
+
+      it('filters by txHash', async () => {
+        const events = await pxe.getPrivateEvents(eventSelector, {
+          contractAddress,
+          scopes: [scope],
+          txHash: eventsInLatestKnownBlock[1].txHash,
+        });
+
+        expect(events).toEqual([eventsInLatestKnownBlock[1]]);
+      });
+
+      it('filters by block', async () => {
+        const events = await pxe.getPrivateEvents(eventSelector, {
+          contractAddress,
+          scopes: [scope],
+          fromBlock: BlockNumber(lastKnownBlockNumber - 1),
+          toBlock: lastKnownBlockNumber,
+        });
+
+        expect(events).toEqual([...eventsInPastBlocks]);
+      });
+    });
+  });
   // Note: Not testing a successful run of `proveTx`, `sendTx`, `getTxReceipt` and `simulateUtility` here as it
   //       requires a larger setup and it's sufficiently tested in the e2e tests.
 });

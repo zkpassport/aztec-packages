@@ -6,9 +6,9 @@
 
 #pragma once
 
+#include "barretenberg/crypto/sha256/sha256.hpp"
 #include "barretenberg/ecc/groups/precomputed_generators_secp256r1_impl.hpp"
 #include "barretenberg/stdlib/encryption/ecdsa/ecdsa.hpp"
-#include "barretenberg/stdlib/hash/sha256/sha256.hpp"
 #include "barretenberg/stdlib/primitives/curves/secp256k1.hpp"
 
 namespace bb::stdlib {
@@ -90,10 +90,8 @@ bool_t<Builder> ecdsa_verify_signature(const stdlib::byte_array<Builder>& hashed
     Fr z(hashed_message);
 
     // Step 1.
-    public_key.x.assert_is_in_field(
-        "ECDSA input validation: the x coordinate of the public key is bigger than the base field modulus."); // x < q
-    public_key.y.assert_is_in_field(
-        "ECDSA input validation: the y coordinate of the public key is bigger than the base field modulus."); // y < q
+    public_key.assert_coordinates_in_field(
+        "ECDSA input validation: coordinate(s) of the public key bigger than the base field modulus."); // x < q, y < q
 
     // Step 2.
     public_key.validate_on_curve("ECDSA input validation: the public key is not a point on the elliptic curve.");
@@ -137,19 +135,21 @@ bool_t<Builder> ecdsa_verify_signature(const stdlib::byte_array<Builder>& hashed
         bool_t<Builder>(false), "ECDSA validation: the result of the batch multiplication is the point at infinity.");
 
     // Step 8.
-    result.x.reduce_mod_target_modulus();
+    // We reduce result.x() to 2^s, where s is the smallest s.t. 2^s > q. It is cheap in terms of constraints, and
+    // avoids possible edge cases
+    result.x().reduce_mod_target_modulus();
 
-    // Transfer Fq value result.x to Fr (this is just moving from a C++ class to another)
-    Fr result_x_mod_r = Fr::unsafe_construct_from_limbs(result.x.binary_basis_limbs[0].element,
-                                                        result.x.binary_basis_limbs[1].element,
-                                                        result.x.binary_basis_limbs[2].element,
-                                                        result.x.binary_basis_limbs[3].element);
+    // Transfer Fq value result.x() to Fr (this is just moving from a C++ class to another)
+    Fr result_x_mod_r = Fr::unsafe_construct_from_limbs(result.x().binary_basis_limbs[0].element,
+                                                        result.x().binary_basis_limbs[1].element,
+                                                        result.x().binary_basis_limbs[2].element,
+                                                        result.x().binary_basis_limbs[3].element);
     // Copy maximum limb values from Fq to Fr: this is needed by the subtraction happening in the == operator
     for (size_t idx = 0; idx < 4; idx++) {
-        result_x_mod_r.binary_basis_limbs[idx].maximum_value = result.x.binary_basis_limbs[idx].maximum_value;
+        result_x_mod_r.binary_basis_limbs[idx].maximum_value = result.x().binary_basis_limbs[idx].maximum_value;
     }
 
-    // Check result.x = r mod n
+    // Check result.x() = r mod n
     bool_t<Builder> is_signature_valid = result_x_mod_r == r;
 
     // Logging
@@ -206,11 +206,9 @@ template <typename Builder> void generate_ecdsa_verification_test_circuit(Builde
 
         ecdsa_signature<Builder> sig{ byte_array<Builder>(&builder, rr), byte_array<Builder>(&builder, ss) };
 
-        byte_array<Builder> message(&builder, message_string);
-
-        // Compute H(m)
-        stdlib::byte_array<Builder> hashed_message =
-            static_cast<stdlib::byte_array<Builder>>(stdlib::SHA256<Builder>::hash(message));
+        // Compute H(m) natively and pass as witness (mirrors ACIR which takes pre-hashed message)
+        auto hash_arr = crypto::sha256(std::vector<uint8_t>(message_string.begin(), message_string.end()));
+        stdlib::byte_array<Builder> hashed_message(&builder, std::vector<uint8_t>(hash_arr.begin(), hash_arr.end()));
 
         // Verify ecdsa signature
         bool_t<Builder> result =

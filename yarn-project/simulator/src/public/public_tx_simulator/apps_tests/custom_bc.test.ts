@@ -1,4 +1,4 @@
-import { addressingWithBaseTagIssueTest } from '@aztec/simulator/public/fixtures';
+import { addressingWithBaseTagIssueTest, addressingWithIndirectTagIssueTest } from '@aztec/simulator/public/fixtures';
 import { NativeWorldStateService } from '@aztec/world-state/native';
 
 import {
@@ -11,13 +11,21 @@ import {
 } from '../../fixtures/custom_bytecode_tests.js';
 import { PublicTxSimulationTester } from '../../fixtures/public_tx_simulation_tester.js';
 
-describe('Public TX simulator apps tests: custom bytecodes unhappy paths', () => {
+describe.each([
+  { useCppSimulator: false, simulatorName: 'TS Simulator' },
+  { useCppSimulator: true, simulatorName: 'Cpp Simulator' },
+])('Public TX simulator apps tests: custom bytecodes unhappy paths ($simulatorName)', ({ useCppSimulator }) => {
   let worldStateService: NativeWorldStateService;
   let tester: PublicTxSimulationTester;
 
   beforeEach(async () => {
     worldStateService = await NativeWorldStateService.tmp();
-    tester = await PublicTxSimulationTester.create(worldStateService);
+    tester = await PublicTxSimulationTester.create(
+      worldStateService,
+      /*globals=*/ undefined,
+      /*metrics=*/ undefined,
+      useCppSimulator,
+    );
   });
 
   afterEach(async () => {
@@ -33,15 +41,28 @@ describe('Public TX simulator apps tests: custom bytecodes unhappy paths', () =>
     const result = await addressingWithBaseTagIssueTest(/*isIndirect=*/ false, tester);
     expect(result.revertCode.isOK()).toBe(false);
   });
+
+  it('Indirect address with invalid tag', async () => {
+    const result = await addressingWithIndirectTagIssueTest(tester);
+    expect(result.revertCode.isOK()).toBe(false);
+  });
 });
 
-describe('Public TX simulator apps tests: bytecode flow unhappy paths', () => {
+describe.each([
+  { useCppSimulator: false, simulatorName: 'TS Simulator' },
+  { useCppSimulator: true, simulatorName: 'Cpp Simulator' },
+])('Public TX simulator apps tests: bytecode flow unhappy paths ($simulatorName)', ({ useCppSimulator }) => {
   let worldStateService: NativeWorldStateService;
   let tester: PublicTxSimulationTester;
 
   beforeEach(async () => {
     worldStateService = await NativeWorldStateService.tmp();
-    tester = await PublicTxSimulationTester.create(worldStateService);
+    tester = await PublicTxSimulationTester.create(
+      worldStateService,
+      /*globals=*/ undefined,
+      /*metrics=*/ undefined,
+      useCppSimulator,
+    );
   });
 
   afterEach(async () => {

@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 source $(git rev-parse --show-toplevel)/ci3/source_bootstrap
 
-cmd=${1:-}
-
 hash=$(hash_str $(cache_content_hash .rebuild_patterns) $(../yarn-project/bootstrap.sh hash))
 
 dump_fail "flock scripts/logs/install_deps.lock retry scripts/install_deps.sh >&2"
@@ -12,7 +10,14 @@ source ./scripts/source_network_env.sh
 source ./scripts/gcp_auth.sh
 
 function build {
-  denoise "helm lint ./aztec-network/"
+  denoise "helm lint ./aztec-bot/"
+  denoise "helm lint ./aztec-chaos-scenarios/"
+  denoise "helm lint ./aztec-keystore/"
+  denoise "helm lint ./aztec-node/"
+  denoise "helm lint ./aztec-prover-stack/"
+  denoise "helm lint ./aztec-snapshots/"
+  denoise "helm lint ./aztec-validator/"
+  denoise "helm lint ./eth-devnet/"
   denoise ./spartan/scripts/check_env_vars.sh
 }
 
@@ -80,19 +85,6 @@ function single_test {
   $root/yarn-project/end-to-end/scripts/run_test.sh simple $test_file
 }
 
-function start_env {
-  if [ "$CI_NIGHTLY" -eq 1 ] && [ "$(arch)" != "arm64" ]; then
-    echo "Skipping start_env for nightly while we migrate to use the same deployment flow as the scenario/staging networks."
-  fi
-}
-
-function stop_env {
-  if [ "$CI_NIGHTLY" -eq 1 ] && [ "$(arch)" != "arm64" ]; then
-    echo "Skipping stop_env for nightly while we migrate to use the same deployment flow as the scenario/staging networks."
-  fi
-}
-
-
 function test {
   echo_header "spartan test (deprecated)"
   # the existing test flow is deprecated.
@@ -110,6 +102,22 @@ function network_tests {
 
   gcp_auth
   network_test_cmds | filter_test_cmds | parallelize 1
+}
+
+function network_bench_cmds {
+  echo "$hash:TIMEOUT=3600 BENCH_OUTPUT=bench-out/n_tps.bench.json TPS_TARGET=0.5,1,2 TEST_DURATION=600 $root/yarn-project/end-to-end/scripts/run_test.sh simple n_tps.test.ts"
+}
+
+function network_bench {
+  rm -rf bench-out
+  mkdir -p bench-out
+
+  local env_file="$1"
+  source_network_env $env_file
+
+  echo_header "spartan bench"
+  gcp_auth
+  network_bench_cmds | parallelize 1
 }
 
 function ensure_eth_balances {
@@ -131,7 +139,6 @@ case "$cmd" in
     # do nothing but the install_deps.sh above
     ;;
   "ensure_eth_balances")
-    shift
     env_file="$1"
     amount="$2"
 
@@ -147,7 +154,6 @@ case "$cmd" in
     ensure_eth_balances "$amount"
     ;;
   "ensure_funded_environment")
-    shift
     env_file="$1"
     low_watermark="${2:-0.5}"
     high_watermark="${3:-1.0}"
@@ -155,7 +161,6 @@ case "$cmd" in
     ./scripts/ensure_funded_environment.sh "$env_file" "$FUNDING_PRIVATE_KEY" "$low_watermark" "$high_watermark"
     ;;
   "network_deploy")
-    shift
     env_file="$1"
 
     #Sets up basic env vars like RUN_TESTS
@@ -170,7 +175,6 @@ case "$cmd" in
     fi
     ;;
   "single_test")
-    shift
     env_file="$1"
     test_file="$2"
     source_network_env $env_file
@@ -179,10 +183,9 @@ case "$cmd" in
     single_test $test_file
     ;;
 
-  "network_tests")
-    shift
+  network_tests|network_bench)
     env_file="$1"
-    network_tests $env_file
+    $cmd $env_file
     ;;
   "kind")
     if ! kubectl config get-clusters | grep -q "^kind-kind$" || ! docker ps | grep -q "kind-control-plane"; then
@@ -209,7 +212,6 @@ case "$cmd" in
     metrics/install-prod.sh
     ;;
   "network-shaping")
-    shift
     namespace="$1"
     chaos_values="$2"
     if network_shaping "$namespace" "$chaos_values"; then
@@ -223,7 +225,7 @@ case "$cmd" in
   "hash")
     echo $hash
     ;;
-  test|test_cmds|gke|build|start_env|stop_env|gcp_auth)
+  test|test_cmds|gke|build|gcp_auth)
     $cmd
     ;;
   "test-kind-smoke")
@@ -287,7 +289,6 @@ case "$cmd" in
       ./scripts/test_k8s.sh kind src/spartan/upgrade_via_cli.test.ts 1-validators.yaml upgrade-via-cli${NAME_POSTFIX:-}
     ;;
   "test-gke-transfer")
-    shift
     execution_client="$1"
     # TODO(#12163) reenable bot once not conflicting with transfer
     OVERRIDES="blobSink.enabled=true,bot.enabled=false"

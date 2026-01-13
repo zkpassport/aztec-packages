@@ -52,6 +52,9 @@ class TranslatorFlavor {
     // Important: these constants cannot be arbitrarily changed - please consult with a member of the Crypto team if
     // they become too small.
 
+    // The number of entities added for ZK (gemini_masking_poly)
+    static constexpr size_t NUM_MASKING_POLYNOMIALS = 1;
+
     // None of this parameters can be changed
     // Number of wires representing the op queue whose commitments are going to be checked against those from the
     // final round of merge
@@ -120,11 +123,13 @@ class TranslatorFlavor {
     // The number of multivariate polynomials on which a sumcheck prover sumcheck operates (including shifts). We
     // often need containers of this size to hold related data, so we choose a name more agnostic than
     // `NUM_POLYNOMIALS`. Note: this number does not include the individual sorted list polynomials.
-    static constexpr size_t NUM_ALL_ENTITIES = 187;
+    // Includes gemini_masking_poly for ZK (NUM_ALL_ENTITIES = 187 + NUM_MASKING_POLYNOMIALS)
+    static constexpr size_t NUM_ALL_ENTITIES = 188;
     // The number of polynomials precomputed to describe a circuit and to aid a prover in constructing a satisfying
     // assignment of witnesses. We again choose a neutral name.
     static constexpr size_t NUM_PRECOMPUTED_ENTITIES = 10;
     // The total number of witness entities not including shifts.
+    // Includes gemini_masking_poly for ZK (NUM_WITNESS_ENTITIES = 90 + NUM_MASKING_POLYNOMIALS)
     static constexpr size_t NUM_WITNESS_ENTITIES = 91;
     static constexpr size_t NUM_WIRES_NON_SHIFTED = 1;
     static constexpr size_t NUM_SHIFTED_ENTITIES = 86;
@@ -182,8 +187,9 @@ class TranslatorFlavor {
 
     // Proof length formula
     static constexpr size_t PROOF_LENGTH_WITHOUT_PUB_INPUTS =
-        /* 1. accumulated_result */ (num_frs_fq) +
-        /* 1. NUM_WITNESS_ENTITIES commitments */ ((NUM_WITNESS_ENTITIES - 4) * num_frs_comm) +
+        /* 1. NUM_WITNESS_ENTITIES commitments (minus gemini_masking_poly sent separately, z_perm sent separately,
+              and 4 op queue wires passed by merge protocol) */
+        ((NUM_WITNESS_ENTITIES - 3 - TranslatorFlavor::NUM_OP_QUEUE_WIRES) * num_frs_comm) +
         /* 2. Libra concatenation commitment*/ (num_frs_comm) +
         /* 3. Libra sum */ (num_frs_fr) +
         /* 4. CONST_TRANSLATOR_LOG_N sumcheck univariates */
@@ -192,17 +198,15 @@ class TranslatorFlavor {
         /* 6. Libra claimed evaluation */ (num_frs_fr) +
         /* 7. Libra grand sum commitment */ (num_frs_comm) +
         /* 8. Libra quotient commitment */ (num_frs_comm) +
-        /* 9. Gemini masking commitment */ (num_frs_comm) +
-        /* 10. Gemini masking evaluation */ (num_frs_fr) +
-        /* 11. CONST_TRANSLATOR_LOG_N - 1 Gemini Fold commitments */
+        /* 9. CONST_TRANSLATOR_LOG_N - 1 Gemini Fold commitments */
         ((CONST_TRANSLATOR_LOG_N - 1) * num_frs_comm) +
-        /* 12. CONST_TRANSLATOR_LOG_N Gemini a evaluations */
+        /* 10. CONST_TRANSLATOR_LOG_N Gemini a evaluations */
         (CONST_TRANSLATOR_LOG_N * num_frs_fr) +
-        /* 13. Gemini P pos evaluation */ (num_frs_fr) +
-        /* 14. Gemini P neg evaluation */ (num_frs_fr) +
-        /* 15. NUM_SMALL_IPA_EVALUATIONS libra evals */ (NUM_SMALL_IPA_EVALUATIONS * num_frs_fr) +
-        /* 16. Shplonk Q commitment */ (num_frs_comm) +
-        /* 17. KZG W commitment */ (num_frs_comm);
+        /* 11. Gemini P pos evaluation */ (num_frs_fr) +
+        /* 12. Gemini P neg evaluation */ (num_frs_fr) +
+        /* 13. NUM_SMALL_IPA_EVALUATIONS libra evals */ (NUM_SMALL_IPA_EVALUATIONS * num_frs_fr) +
+        /* 14. Shplonk Q commitment */ (num_frs_comm) +
+        /* 15. KZG W commitment */ (num_frs_comm);
 
     /**
      * @brief A base class labelling precomputed entities and (ordered) subsets of interest.
@@ -235,13 +239,13 @@ class TranslatorFlavor {
                               interleaved_range_constraints_2, // column 2
                               interleaved_range_constraints_3) // column 3
     };
-    template <typename DataType> class WireToBeShiftedEntities {
+    /**
+     * @brief Non-op-queue wires that need to be shifted
+     */
+    template <typename DataType> class NonOpQueueWiresToBeShiftedEntities {
       public:
         DEFINE_FLAVOR_MEMBERS(DataType,
-                              x_lo_y_hi,                                    // column 0
-                              x_hi_z_1,                                     // column 1
-                              y_lo_z_2,                                     // column 2
-                              p_x_low_limbs,                                // column 3
+                              p_x_low_limbs,                                // column 0
                               p_x_high_limbs,                               // column 4
                               p_y_low_limbs,                                // column 5
                               p_y_high_limbs,                               // column 6
@@ -319,6 +323,28 @@ class TranslatorFlavor {
                               relation_wide_limbs_range_constraint_2,       // column 78
                               relation_wide_limbs_range_constraint_3);      // column 79
     };
+
+    /**
+     * @brief Op queue wires (to be shifted): first 3 wires of the to-be-shifted group
+     */
+    template <typename DataType> class OpQueueWiresToBeShiftedEntities {
+      public:
+        DEFINE_FLAVOR_MEMBERS(DataType,
+                              x_lo_y_hi, // column 0
+                              x_hi_z_1,  // column 1
+                              y_lo_z_2)  // column 2
+    };
+
+    /**
+     * @brief All wires to be shifted (op queue + non-op-queue)
+     */
+    template <typename DataType>
+    class WireToBeShiftedEntities : public OpQueueWiresToBeShiftedEntities<DataType>,
+                                    public NonOpQueueWiresToBeShiftedEntities<DataType> {
+      public:
+        DEFINE_COMPOUND_GET_ALL(OpQueueWiresToBeShiftedEntities<DataType>, NonOpQueueWiresToBeShiftedEntities<DataType>)
+    };
+
     // TODO(https://github.com/AztecProtocol/barretenberg/issues/907)
     // Note: These are technically derived from wires but do not depend on challenges (like z_perm). They are committed
     // to in the wires commitment round.
@@ -332,12 +358,24 @@ class TranslatorFlavor {
                               ordered_range_constraints_4); // column 4
     };
 
-    template <typename DataType> class WireNonshiftedEntities {
+    /**
+     * @brief Op queue wires (non-shifted): these represent the op queue and are provided by the merge protocol
+     */
+    template <typename DataType> class OpQueueWireNonshiftedEntities {
       public:
         DEFINE_FLAVOR_MEMBERS(DataType,
                               op // column 0
         );
     };
+
+    /**
+     * @brief All wire entities that are not shifted (currently just the op queue wire)
+     */
+    template <typename DataType> class WireNonshiftedEntities : public OpQueueWireNonshiftedEntities<DataType> {
+      public:
+        DEFINE_COMPOUND_GET_ALL(OpQueueWireNonshiftedEntities<DataType>)
+    };
+
     template <typename DataType> class DerivedWitnessEntities {
       public:
         DEFINE_FLAVOR_MEMBERS(DataType,
@@ -370,12 +408,30 @@ class TranslatorFlavor {
         };
 
         /**
+         * @brief Get only the op queue wires (provided by merge protocol, not committed to in translator)
+         */
+        auto get_op_queue_wires()
+        {
+            return concatenate(OpQueueWireNonshiftedEntities<DataType>::get_all(),
+                               OpQueueWiresToBeShiftedEntities<DataType>::get_all());
+        };
+
+        /**
          * @brief Witness Entities to which the prover commits and do not require challenges (i.e. not derived).
          */
         auto get_wires_and_ordered_range_constraints()
         {
             return concatenate(WireNonshiftedEntities<DataType>::get_all(),
                                WireToBeShiftedEntities<DataType>::get_all(),
+                               OrderedRangeConstraints<DataType>::get_all());
+        };
+
+        /**
+         * @brief Non-op-queue wires and ordered range constraints (committed to by translator prover)
+         */
+        auto get_non_opqueue_wires_and_ordered_range_constraints()
+        {
+            return concatenate(NonOpQueueWiresToBeShiftedEntities<DataType>::get_all(),
                                OrderedRangeConstraints<DataType>::get_all());
         };
 
@@ -589,19 +645,32 @@ class TranslatorFlavor {
     };
 
     /**
+     * @brief Container for ZK entities (gemini masking polynomial for ZK-PCS)
+     * @details Translator is always ZK, so this always contains the masking polynomial
+     */
+    template <typename DataType> class MaskingEntities {
+      public:
+        DEFINE_FLAVOR_MEMBERS(DataType, gemini_masking_poly)
+    };
+
+    /**
      * @brief A base class labelling all entities (for instance, all of the polynomials used by the prover during
      * sumcheck) in this Honk variant along with particular subsets of interest.
      * @details Used to build containers for: the prover's polynomial during sumcheck; the sumcheck's folded
      * polynomials; the univariates consturcted during during sumcheck; the evaluations produced by sumcheck.
      *
-     * Symbolically we have: AllEntities = PrecomputedEntities + WitnessEntities + ShiftedEntities.
+     * Symbolically we have: AllEntities = PrecomputedEntities + WitnessEntities + ShiftedEntities + MaskingEntities.
      */
     template <typename DataType>
-    class AllEntities : public PrecomputedEntities<DataType>,
+    class AllEntities : public MaskingEntities<DataType>,
+                        public PrecomputedEntities<DataType>,
                         public WitnessEntities<DataType>,
                         public ShiftedEntities<DataType> {
       public:
-        DEFINE_COMPOUND_GET_ALL(PrecomputedEntities<DataType>, WitnessEntities<DataType>, ShiftedEntities<DataType>)
+        DEFINE_COMPOUND_GET_ALL(MaskingEntities<DataType>,
+                                PrecomputedEntities<DataType>,
+                                WitnessEntities<DataType>,
+                                ShiftedEntities<DataType>)
 
         auto get_precomputed() const { return PrecomputedEntities<DataType>::get_all(); };
 
@@ -618,12 +687,15 @@ class TranslatorFlavor {
 
         auto get_unshifted() const
         {
-            return concatenate(PrecomputedEntities<DataType>::get_all(), WitnessEntities<DataType>::get_unshifted());
+            return concatenate(MaskingEntities<DataType>::get_all(),
+                               PrecomputedEntities<DataType>::get_all(),
+                               WitnessEntities<DataType>::get_unshifted());
         }
 
         auto get_unshifted_without_interleaved()
         {
-            return concatenate(PrecomputedEntities<DataType>::get_all(),
+            return concatenate(MaskingEntities<DataType>::get_all(),
+                               PrecomputedEntities<DataType>::get_all(),
                                WitnessEntities<DataType>::get_unshifted_without_interleaved());
         }
 
@@ -806,11 +878,19 @@ class TranslatorFlavor {
          * @param domain_separator
          * @param transcript
          */
-        fr hash_through_transcript([[maybe_unused]] const std::string& domain_separator,
-                                   [[maybe_unused]] Transcript& transcript) const override
+        fr hash_with_origin_tagging([[maybe_unused]] const std::string& domain_separator,
+                                    [[maybe_unused]] Transcript& transcript) const override
         {
             throw_or_abort("Not intended to be used because vk is hardcoded in circuit.");
         }
+
+#ifndef NDEBUG
+        bool compare(const VerificationKey& other)
+        {
+            return NativeVerificationKey_<PrecomputedEntities<Commitment>, Transcript>::compare<
+                NUM_PRECOMPUTED_ENTITIES>(other, CommitmentLabels().get_precomputed());
+        }
+#endif
     };
 
     /**
@@ -936,7 +1016,7 @@ class TranslatorFlavor {
             this->relation_wide_limbs_range_constraint_0 = "RELATION_WIDE_LIMBS_RANGE_CONSTRAINT_0";
             this->relation_wide_limbs_range_constraint_1 = "RELATION_WIDE_LIMBS_RANGE_CONSTRAINT_1";
             this->relation_wide_limbs_range_constraint_2 = "RELATION_WIDE_LIMBS_RANGE_CONSTRAINT_2";
-            this->relation_wide_limbs_range_constraint_3 = "RELATION_WIDE_LIMBS_RANGE_CONSTRAINT_2";
+            this->relation_wide_limbs_range_constraint_3 = "RELATION_WIDE_LIMBS_RANGE_CONSTRAINT_3";
             this->ordered_range_constraints_0 = "ORDERED_RANGE_CONSTRAINTS_0";
             this->ordered_range_constraints_1 = "ORDERED_RANGE_CONSTRAINTS_1";
             this->ordered_range_constraints_2 = "ORDERED_RANGE_CONSTRAINTS_2";
@@ -984,7 +1064,7 @@ class TranslatorFlavor {
     /**
      * @brief When evaluating the sumcheck protocol - can we skip evaluation of all relations for a given row?
      *
-     * @details When used in LegacyClientIVC, the Translator has a large fixed size, which is often not fully utilized.
+     * @details When used in Chonk, the Translator has a large fixed size, which is often not fully utilized.
      *          If a row is completely empty, the values of z_perm and z_perm_shift will match,
      *          we can use this as a proxy to determine if we can skip Sumcheck::compute_univariate
      **/

@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 source $(git rev-parse --show-toplevel)/ci3/source_bootstrap
 
-cmd=${1:-}
-
 hash=$(../bootstrap.sh hash)
 bench_fixtures_dir=example-app-ivc-inputs-out
+default_avm_inputs_dump_dir=dumped-avm-circuit-inputs
 
 # Helper function to extract test names from a test file
 function extract_test_names {
   local test_file="$1"
   grep -oP "(it|test)\s*\(\s*['\"].*?['\"]" "$test_file" | \
     sed -E "s/(it|test)\s*\(\s*['\"](.+)['\"]/\2/"
+}
+
+# Helper to generate DUMP_AVM_INPUTS_TO_DIR env var setting for a test (empty if not dumping)
+function set_dump_avm {
+  [ -n "${DUMP_AVM_INPUTS_TO_DIR:-}" ] && echo "DUMP_AVM_INPUTS_TO_DIR=${DUMP_AVM_INPUTS_TO_DIR}/$1"
 }
 
 function test_cmds {
@@ -32,7 +36,7 @@ function test_cmds {
       echo "$prefix:NAME=e2e_prover_full_fake FAKE_PROOFS=1 $run_test_script simple e2e_prover/full"
     fi
   fi
-  echo "$prefix:TIMEOUT=15m:NAME=e2e_block_building $run_test_script simple e2e_block_building"
+  echo "$prefix:TIMEOUT=15m:NAME=e2e_block_building $(set_dump_avm e2e_block_building) $run_test_script simple e2e_block_building"
 
   local tests=(
     # List all standalone and nested tests, except for the ones listed above.
@@ -49,15 +53,16 @@ function test_cmds {
       while IFS= read -r test_name; do
         # Create a safe name for the individual test (replace spaces with underscores)
         local safe_test_name=$(echo "$test_name" | sed 's/ /_/g')
-        echo "$prefix:NAME=${name}_${safe_test_name} $run_test_script simple $test \"$test_name\""
+        local full_name="${name}_${safe_test_name}"
+        echo "$prefix:NAME=$full_name $(set_dump_avm $full_name) $run_test_script simple $test \"$test_name\""
       done < <(extract_test_names "$test")
     else
       # Regular test file - run the whole file
-      echo "$prefix:NAME=$name $run_test_script simple $test"
+      echo "$prefix:NAME=$name $(set_dump_avm $name) $run_test_script simple $test"
     fi
   done
 
-  # compose-based tests (use running sandbox)
+  # compose-based tests (use running local network)
   tests=(
     src/composed/!(integration_proof_verification|e2e_persistence).test.ts
     src/guides/*.test.ts
@@ -76,18 +81,15 @@ function test_cmds {
   done
 
   #echo "$hash:ONLY_TERM_PARENT=1 $run_test_script simple src/e2e_multi_validator/e2e_multi_validator_node.test.ts"
-  # echo "$hash:ONLY_TERM_PARENT=1 $run_test_script web3signer src/composed/web3signer/integration_remote_signer.test.ts"
+  #echo "$hash:ONLY_TERM_PARENT=1 $run_test_script web3signer src/composed/web3signer/integration_remote_signer.test.ts"
   #echo "$hash:ONLY_TERM_PARENT=1 $run_test_script web3signer src/e2e_multi_validator/e2e_multi_validator_node_key_store.test.ts"
 
-  # TODO(AD): figure out workaround for mainframe subnet exhaustion
-  if [ "$CI" -eq 1 ]; then
-    # compose-based tests with custom scripts
-    for flow in ../cli-wallet/test/flows/*.sh; do
-      # Note these scripts are ran directly by docker-compose.yml because it ends in '.sh'.
-      # Set LOG_LEVEL=info for a better output experience. Deeper debugging should happen with other e2e tests.
-      echo "$hash:ONLY_TERM_PARENT=1 LOG_LEVEL=info $run_test_script compose $flow"
-    done
-  fi
+  # compose-based tests with custom scripts
+  for flow in ../cli-wallet/test/flows/*.sh; do
+    # Note these scripts are ran directly by docker-compose.yml because it ends in '.sh'.
+    # Set LOG_LEVEL=info for a better output experience. Deeper debugging should happen with other e2e tests.
+    echo "$hash:ONLY_TERM_PARENT=1 LOG_LEVEL=info $run_test_script compose $flow"
+  done
 }
 
 function test {
@@ -119,7 +121,7 @@ function build_bench {
   export ENV_VARS_TO_INJECT="BENCHMARK_CONFIG CAPTURE_IVC_FOLDER LOG_LEVEL"
   rm -rf $CAPTURE_IVC_FOLDER && mkdir -p $CAPTURE_IVC_FOLDER
   rm -rf bench-out && mkdir -p bench-out
-  if cache_download bb-client-ivc-captures-$hash.tar.gz; then
+  if cache_download bb-chonk-captures-$hash.tar.gz; then
     return
   fi
   parallel --tag --line-buffer --halt now,fail=1 'docker_isolate "scripts/run_test.sh simple {}"' ::: \
@@ -128,7 +130,7 @@ function build_bench {
     client_flows/bridging \
     client_flows/transfers \
     client_flows/amm
-  cache_upload bb-client-ivc-captures-$hash.tar.gz $CAPTURE_IVC_FOLDER
+  cache_upload bb-chonk-captures-$hash.tar.gz $CAPTURE_IVC_FOLDER
 }
 
 function bench {
@@ -137,15 +139,94 @@ function bench {
   bench_cmds | STRICT_SCHEDULING=1 parallelize
 }
 
-case "$cmd" in
-  "clean")
-    git clean -fdx
-    ;;
-  test|test_cmds|bench|bench_cmds|build_bench)
-    $cmd
-    ;;
-  *)
-    echo "Unknown command: $cmd"
+# Runs e2e tests with AVM circuit inputs dumping enabled, then packages and uploads them
+function test_and_collect_avm_inputs {
+  echo_header "e2e tests with AVM circuit inputs dumping"
+
+  # Fail if dump directory already exists to avoid mixing/overwriting results
+  if [ -d "$default_avm_inputs_dump_dir" ]; then
+    echo_stderr "Error: Dump directory '$default_avm_inputs_dump_dir' already exists. Failing instead of overwriting."
     exit 1
-  ;;
+  fi
+  mkdir -p "$default_avm_inputs_dump_dir"
+
+  # Set base dir for dumping - test_cmds will append test name subdirs
+  export DUMP_AVM_INPUTS_TO_DIR="$default_avm_inputs_dump_dir"
+
+  # Run tests in parallel (like regular test command)
+  test_cmds | filter_test_cmds | parallelize
+
+  # Use AVM_INPUTS_HASH if set (computed before build in CI), otherwise fall back to $hash
+  local avm_hash=${AVM_INPUTS_HASH:-$hash}
+  local tarball_name="e2e-avm-circuit-inputs-$avm_hash.tar.gz"
+
+  if [ -d "$default_avm_inputs_dump_dir" ] && [ "$(ls -A $default_avm_inputs_dump_dir 2>/dev/null)" ]; then
+    echo_header "Packaging and uploading AVM circuit inputs"
+    cache_upload "$tarball_name" "$default_avm_inputs_dump_dir"
+  else
+    echo_stderr "Warning: No AVM circuit inputs were dumped. Skipping upload."
+  fi
+
+  unset DUMP_AVM_INPUTS_TO_DIR
+}
+
+# Generates commands to run avm_check_circuit on all dumped AVM circuit inputs
+function avm_check_circuit_cmds {
+  local bb_avm="barretenberg/cpp/build/bin/bb-avm"
+  # Commands run from repo root via parallelize, so use path from top
+  local dump_dir_from_top="yarn-project/end-to-end/$default_avm_inputs_dump_dir"
+
+  # Specify timeout and resources
+  # WARNING: theoretically, transactions could need more CPU and MEM than we allocate by default.
+  # In that case, they might start timing out. For now, all of the e2e test txs seem to be relatively
+  # small and the AVM can run check-circuit with limited resources.
+  local prefix="$hash:ISOLATE=1:TIMEOUT=30s"
+
+  # Find all .bin files in the dump directory (handles nested dirs)
+  for input_file in "$default_avm_inputs_dump_dir"/*/*.bin "$default_avm_inputs_dump_dir"/*/*/*.bin; do
+    # Skip if no matches (glob didn't expand)
+    [ -e "$input_file" ] || continue
+
+    # Extract test name and tx hash for the command name
+    # e.g., dumped-avm-circuit-inputs/e2e_block_building/avm-circuit-inputs-tx-0x1234.bin
+    # -> avm_cc_e2e_block_building_0x1234
+    local rel_path="${input_file#$default_avm_inputs_dump_dir/}"
+    local test_dir=$(dirname "$rel_path")
+    local filename=$(basename "$input_file" .bin)
+    # Extract just the tx hash part (remove "avm-circuit-inputs-tx-" prefix)
+    local tx_hash="${filename#avm-circuit-inputs-tx-}"
+    # Shorten hash for readability
+    local short_hash="${tx_hash:0:10}"
+    # Create safe name (replace / with _)
+    local safe_test_dir="${test_dir//\//_}"
+    local name="avm_cc_${safe_test_dir}_${short_hash}"
+
+    # Use full path from repo root for the command (parallelize runs from there)
+    local input_path="$dump_dir_from_top/$rel_path"
+    echo "$prefix:NAME=$name $bb_avm avm_check_circuit -v --avm-inputs $input_path"
+  done
+}
+
+# Downloads cached AVM circuit inputs and runs check-circuit on all of them
+function avm_check_circuit {
+  echo_header "AVM check-circuit on dumped inputs"
+
+  # Use AVM_INPUTS_HASH if set (computed before build in CI), otherwise fall back to $hash
+  local avm_hash=${AVM_INPUTS_HASH:-$hash}
+  local tarball_name="e2e-avm-circuit-inputs-$avm_hash.tar.gz"
+
+  # Download the cached tarball
+  if ! cache_download "$tarball_name"; then
+    echo_stderr "Error: Could not download AVM circuit inputs tarball '$tarball_name'"
+    exit 1
+  fi
+
+  # Run check-circuit
+  avm_check_circuit_cmds | parallelize
+}
+
+case "$cmd" in
+  *)
+    default_cmd_handler "$@"
+    ;;
 esac

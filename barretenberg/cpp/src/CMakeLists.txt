@@ -17,6 +17,9 @@ add_compile_options(-Werror -Wall -Wextra -Wconversion -Wsign-conversion -Wfatal
 # Needed until https://github.com/codeinred/tuplet/issues/37 is solved.
 add_compile_options(-Wno-missing-braces)
 
+# For MessagePack.
+add_definitions(-DMSGPACK_NO_BOOST -DMSGPACK_USE_STD_VARIANT_ADAPTOR)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-fcolor-diagnostics -fconstexpr-steps=100000000)
 
@@ -79,7 +82,7 @@ if(NOT MOBILE)
 endif()
 add_subdirectory(barretenberg/boomerang_value_detection)
 add_subdirectory(barretenberg/circuit_checker)
-add_subdirectory(barretenberg/client_ivc)
+add_subdirectory(barretenberg/chonk)
 add_subdirectory(barretenberg/commitment_schemes)
 add_subdirectory(barretenberg/commitment_schemes_recursion)
 add_subdirectory(barretenberg/common)
@@ -112,27 +115,39 @@ add_subdirectory(barretenberg/translator_vm)
 add_subdirectory(barretenberg/ultra_honk)
 add_subdirectory(barretenberg/vm2_stub)
 add_subdirectory(barretenberg/wasi)
+add_subdirectory(barretenberg/lmdblib)
 
+
+# Upstream code:
 # if(NOT FUZZING AND NOT WASM)
-#     add_subdirectory(barretenberg/ipc)
-#     add_subdirectory(barretenberg/lmdblib)
-#     # Allow disabling nodejs_module for platforms that don't need it (e.g., iOS/Android)
-#     if(NOT DEFINED BUILD_NODEJS_MODULE OR BUILD_NODEJS_MODULE)
-#         add_subdirectory(barretenberg/nodejs_module)
-#     endif()
+#     # Fuzzing preset cannot be built with world_state as world_state cannot compile with MULTITHREADING=OFF
 #     add_subdirectory(barretenberg/world_state)
+#     # NOTE: Do not conditionally base this on the AVM flag as it defines a necessary vm2_sim library.
 #     add_subdirectory(barretenberg/vm2)
+#     add_subdirectory(barretenberg/ipc)
+#     add_subdirectory(barretenberg/nodejs_module)
 # endif()
 
+# modifications for devnet-20251212:
 if(NOT FUZZING AND NOT WASM)
     add_subdirectory(barretenberg/ipc)
-    add_subdirectory(barretenberg/lmdblib)
+
+    # looks like this is no longer needed in devnet-20251212?
+    # add_subdirectory(barretenberg/lmdblib)
 
     if (NOT MOBILE)
        add_subdirectory(barretenberg/nodejs_module)
+       # Fuzzing preset cannot be built with world_state as world_state cannot compile with MULTITHREADING=OFF
        add_subdirectory(barretenberg/world_state)
+       # NOTE: Do not conditionally base this on the AVM flag as it defines a necessary vm2_sim library.
        add_subdirectory(barretenberg/vm2)
     endif()
+endif()
+
+if(FUZZING_AVM)
+    add_subdirectory(barretenberg/world_state)
+    add_subdirectory(barretenberg/vm2)
+    add_subdirectory(barretenberg/avm_fuzzer)
 endif()
 
 if(SMT)
@@ -152,7 +167,7 @@ message(STATUS "Compiling all-in-one barretenberg archive")
 
 set(BARRETENBERG_TARGET_OBJECTS
     $<TARGET_OBJECTS:bbapi_objects>
-    $<TARGET_OBJECTS:client_ivc_objects>
+    $<TARGET_OBJECTS:chonk_objects>
     $<TARGET_OBJECTS:commitment_schemes_objects>
     $<TARGET_OBJECTS:common_objects>
     $<TARGET_OBJECTS:crypto_aes128_objects>
@@ -184,17 +199,13 @@ set(BARRETENBERG_TARGET_OBJECTS
     $<TARGET_OBJECTS:stdlib_blake2s_objects>
     $<TARGET_OBJECTS:stdlib_blake3s_objects>
     $<TARGET_OBJECTS:stdlib_circuit_builders_objects>
-    $<TARGET_OBJECTS:stdlib_client_ivc_verifier_objects>
+    $<TARGET_OBJECTS:stdlib_chonk_verifier_objects>
     $<TARGET_OBJECTS:stdlib_eccvm_verifier_objects>
-    $<TARGET_OBJECTS:stdlib_merge_verifier_objects>
     $<TARGET_OBJECTS:stdlib_honk_verifier_objects>
     $<TARGET_OBJECTS:stdlib_goblin_verifier_objects>
     $<TARGET_OBJECTS:stdlib_keccak_objects>
-    $<TARGET_OBJECTS:stdlib_pedersen_commitment_objects>
-    $<TARGET_OBJECTS:stdlib_pedersen_hash_objects>
     $<TARGET_OBJECTS:stdlib_poseidon2_objects>
     $<TARGET_OBJECTS:stdlib_primitives_objects>
-    $<TARGET_OBJECTS:stdlib_schnorr_objects>
     $<TARGET_OBJECTS:stdlib_sha256_objects>
     $<TARGET_OBJECTS:stdlib_translator_vm_verifier_objects>
     $<TARGET_OBJECTS:sumcheck_objects>

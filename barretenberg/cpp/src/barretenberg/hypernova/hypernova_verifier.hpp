@@ -5,6 +5,7 @@
 // =====================
 #pragma once
 
+#include "barretenberg/common/ref_array.hpp"
 #include "barretenberg/flavor/flavor.hpp"
 #include "barretenberg/flavor/mega_recursive_flavor.hpp"
 #include "barretenberg/hypernova/types.hpp"
@@ -17,6 +18,10 @@
 
 namespace bb {
 
+/**
+ * @brief HyperNova folding verifier (native + recursive). Verifies folding proofs and maintains accumulators.
+ * @details See: chonk/README.md#hypernova-folding-details
+ */
 template <typename Flavor_> class HypernovaFoldingVerifier {
   public:
     using Flavor = Flavor_;
@@ -61,23 +66,40 @@ template <typename Flavor_> class HypernovaFoldingVerifier {
     /**
      * @brief Verify folding proof. Return the new accumulator and the results of the two sumchecks.
      *
-     * @param proof
-     * @return std::tuple<bool, bool, Accumulator> Tuple of first and second sumcheck result, and new accumulator.
+     * @param instance The verifier instance for the incoming circuit
+     * @param proof The folding proof to verify
+     * @return std::tuple<instance_sumcheck_verified, batching_sumcheck_verified, new_accumulator>
+     *         - instance_sumcheck_verified: Did the Sumcheck on the incoming instance pass?
+     *         - batching_sumcheck_verified: Did the MultilinearBatching Sumcheck pass?
+     *         - new_accumulator: The combined accumulator (valid only if both checks pass)
      */
     std::tuple<bool, bool, Accumulator> verify_folding_proof(
         const std::shared_ptr<typename HypernovaFoldingVerifier::VerifierInstance>& instance, const Proof& proof);
 
   private:
+    /**
+     * @brief Perform sumcheck on the incoming instance.
+     *
+     * @details Executing this sumcheck we generate the random challenges at which the polynomial commitments have to be
+     * opened.
+     */
+    SumcheckOutput<Flavor> sumcheck_on_incoming_instance(const std::shared_ptr<VerifierInstance>& instance,
+                                                         const Proof& proof);
+
+    /**
+     * @brief Generate the challenges required to batch the incoming instance with the accumulator
+     */
+    std::pair<std::vector<FF>, std::vector<FF>> get_batching_challenges();
+
+    /**
+     * @brief Convert the output of the sumcheck run on the incoming instance into an accumulator.
+     */
     Accumulator sumcheck_output_to_accumulator(MegaSumcheckOutput& sumcheck_output,
                                                const std::shared_ptr<VerifierInstance>& instance);
 
-    Commitment batch_mul(const std::vector<Commitment>& points, const std::vector<FF>& scalars)
-    {
-        if constexpr (IsRecursiveFlavor<Flavor>) {
-            return Curve::Group::batch_mul(points, scalars);
-        } else {
-            return batch_mul_native(points, scalars);
-        }
-    }
+    /**
+     * @brief Utility to perform batch mul of commitments.
+     */
+    template <size_t N> Commitment batch_mul(const RefArray<Commitment, N>& _points, const std::vector<FF>& scalars);
 };
 } // namespace bb

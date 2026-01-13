@@ -5,17 +5,12 @@ import { generateClaimSecret } from '@aztec/aztec.js/ethereum';
 import { Fr } from '@aztec/aztec.js/fields';
 import { RollupCheatCodes } from '@aztec/aztec/testing';
 import { createBlobSinkServer } from '@aztec/blob-sink/server';
-import {
-  type ExtendedViemWalletClient,
-  type L1ContractAddresses,
-  L1TxUtils,
-  RegistryContract,
-  RollupContract,
-  createL1TxUtilsFromViemWallet,
-  defaultL1TxUtilsConfig,
-  deployL1Contract,
-  deployRollupForUpgrade,
-} from '@aztec/ethereum';
+import { RegistryContract, RollupContract } from '@aztec/ethereum/contracts';
+import { deployL1Contract, deployRollupForUpgrade } from '@aztec/ethereum/deploy-l1-contracts';
+import type { L1ContractAddresses } from '@aztec/ethereum/l1-contract-addresses';
+import { L1TxUtils, createL1TxUtilsFromViemWallet, defaultL1TxUtilsConfig } from '@aztec/ethereum/l1-tx-utils';
+import type { ExtendedViemWalletClient } from '@aztec/ethereum/types';
+import { CheckpointNumber, EpochNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { retryUntil } from '@aztec/foundation/retry';
 import { sleep } from '@aztec/foundation/sleep';
 import {
@@ -138,9 +133,9 @@ describe('e2e_p2p_add_rollup', () => {
       });
     };
 
-    const nextRoundTimestamp = await rollup.getTimestampForSlot(
-      ((await rollup.getSlotNumber()) / roundSize) * roundSize + roundSize,
-    );
+    const currentSlot = await rollup.getSlotNumber();
+    const nextRoundSlot = SlotNumber.fromBigInt((BigInt(currentSlot) / roundSize) * roundSize + roundSize);
+    const nextRoundTimestamp = await rollup.getTimestampForSlot(nextRoundSlot);
     await t.ctx.cheatCodes.eth.warp(Number(nextRoundTimestamp));
 
     // Now that we have passed on the registry, we can deploy the new rollup.
@@ -159,7 +154,8 @@ describe('e2e_p2p_add_rollup', () => {
         aztecSlotDuration: t.ctx.aztecNodeConfig.aztecSlotDuration,
         aztecEpochDuration: t.ctx.aztecNodeConfig.aztecEpochDuration,
         aztecTargetCommitteeSize: t.ctx.aztecNodeConfig.aztecTargetCommitteeSize,
-        lagInEpochs: t.ctx.aztecNodeConfig.lagInEpochs,
+        lagInEpochsForValidatorSet: t.ctx.aztecNodeConfig.lagInEpochsForValidatorSet,
+        lagInEpochsForRandao: t.ctx.aztecNodeConfig.lagInEpochsForRandao,
         aztecProofSubmissionEpochs: t.ctx.aztecNodeConfig.aztecProofSubmissionEpochs,
         slashingQuorum: t.ctx.aztecNodeConfig.slashingQuorum,
         slashingRoundSizeInEpochs: t.ctx.aztecNodeConfig.slashingRoundSizeInEpochs,
@@ -194,7 +190,7 @@ describe('e2e_p2p_add_rollup', () => {
     const govInfo = async () => {
       const bn = await t.ctx.cheatCodes.eth.blockNumber();
       const slot = await rollup.getSlotNumber();
-      const round = await governanceProposer.read.computeRound([slot]);
+      const round = await governanceProposer.read.computeRound([BigInt(slot)]);
 
       const info = await governanceProposer.read.getRoundData([
         t.ctx.deployL1ContractsValues.l1ContractAddresses.rollupAddress.toString(),
@@ -359,7 +355,7 @@ describe('e2e_p2p_add_rollup', () => {
         }) as {
           eventName: 'MessageConsumed';
           args: {
-            l2BlockNumber: bigint;
+            checkpointNumber: bigint;
             root: `0x${string}`;
             messageHash: `0x${string}`;
             leafId: bigint;
@@ -390,9 +386,9 @@ describe('e2e_p2p_add_rollup', () => {
       await sleep(t.ctx.aztecNodeConfig.ethereumSlotDuration * t.ctx.aztecNodeConfig.aztecSlotDuration * 1000);
     }
 
-    const nextRoundTimestamp2 = await rollup.getTimestampForSlot(
-      ((await rollup.getSlotNumber()) / roundSize) * roundSize + roundSize,
-    );
+    const currentSlot2 = await rollup.getSlotNumber();
+    const nextRoundSlot2 = SlotNumber.fromBigInt((BigInt(currentSlot2) / roundSize) * roundSize + roundSize);
+    const nextRoundTimestamp2 = await rollup.getTimestampForSlot(nextRoundSlot2);
     t.logger.info(`Warpping to ${nextRoundTimestamp2}`);
     await t.ctx.cheatCodes.eth.warp(Number(nextRoundTimestamp2));
 
@@ -479,8 +475,9 @@ describe('e2e_p2p_add_rollup', () => {
 
     // With all down, we make a time jump such that we ensure that we will be at a point where epochs are non-empty
     // This is to avoid conflicts when the checkpoints are looking further back.
-    const futureEpoch = 500n + (await newRollup.getCurrentEpochNumber());
-    const time = await newRollup.getTimestampForSlot(futureEpoch * BigInt(t.ctx.aztecNodeConfig.aztecEpochDuration));
+    const futureEpoch = EpochNumber.fromBigInt(500n + BigInt(await newRollup.getCurrentEpochNumber()));
+    const futureSlot = SlotNumber.fromBigInt(BigInt(futureEpoch) * BigInt(t.ctx.aztecNodeConfig.aztecEpochDuration));
+    const time = await newRollup.getTimestampForSlot(futureSlot);
     if (time > BigInt(await t.ctx.cheatCodes.eth.timestamp())) {
       await t.ctx.cheatCodes.eth.warp(Number(time));
       await waitL1Block();
@@ -533,8 +530,8 @@ describe('e2e_p2p_add_rollup', () => {
     // wait a bit for peers to discover each other
     await sleep(4000);
 
-    // The new rollup should have no blocks
-    expect(await newRollup.getBlockNumber()).toBe(0n);
+    // The new rollup should have no checkpoints
+    expect(await newRollup.getCheckpointNumber()).toBe(CheckpointNumber(0));
 
     // Bridge into and out of the new rollup to ensure that it works.
     await bridging(
@@ -546,9 +543,9 @@ describe('e2e_p2p_add_rollup', () => {
       newConfig.l1RpcUrls,
     );
 
-    // Both rollups should have a block number greater than 0
-    expect(await rollup.getBlockNumber()).toBeGreaterThan(0n);
-    expect(await newRollup.getBlockNumber()).toBeGreaterThan(0n);
+    // Both rollups should have a checkpoint number greater than 0
+    expect(await rollup.getCheckpointNumber()).toBeGreaterThan(CheckpointNumber(0));
+    expect(await newRollup.getCheckpointNumber()).toBeGreaterThan(CheckpointNumber(0));
 
     await blobSink.stop();
   }, 10_000_000);

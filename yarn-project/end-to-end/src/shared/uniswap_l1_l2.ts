@@ -5,14 +5,11 @@ import { Fr } from '@aztec/aztec.js/fields';
 import type { Logger } from '@aztec/aztec.js/log';
 import type { AztecNode } from '@aztec/aztec.js/node';
 import { CheatCodes } from '@aztec/aztec/testing';
-import {
-  type DeployL1ContractsReturnType,
-  type ExtendedViemWalletClient,
-  RollupContract,
-  deployL1Contract,
-  extractEvent,
-} from '@aztec/ethereum';
-import { sha256ToField } from '@aztec/foundation/crypto';
+import { RollupContract } from '@aztec/ethereum/contracts';
+import { type DeployL1ContractsReturnType, deployL1Contract } from '@aztec/ethereum/deploy-l1-contracts';
+import type { ExtendedViemWalletClient } from '@aztec/ethereum/types';
+import { extractEvent } from '@aztec/ethereum/utils';
+import { sha256ToField } from '@aztec/foundation/crypto/sha256';
 import { InboxAbi, UniswapPortalAbi, UniswapPortalBytecode } from '@aztec/l1-artifacts';
 import { UniswapContract } from '@aztec/noir-contracts.js/Uniswap';
 import { computeL2ToL1MessageHash } from '@aztec/stdlib/hash';
@@ -262,7 +259,7 @@ export const uniswapL1L2TestSuite = (
       await wethCrossChainHarness.expectPublicBalanceOnL2(uniswapL2Contract.address, 0n);
 
       // Since the outbox is only consumable when the block is proven, we need to set the block to be proven
-      await cheatCodes.rollup.markAsProven(await rollup.getBlockNumber());
+      await cheatCodes.rollup.markAsProven(await rollup.getCheckpointNumber());
 
       // 5. Consume L2 to L1 message by calling uniswapPortal.swap_private()
       logger.info('Execute withdraw and swap on the uniswapPortal!');
@@ -287,7 +284,7 @@ export const uniswapL1L2TestSuite = (
       const withdrawSiblingPath = withdrawResult!.siblingPath;
 
       const withdrawMessageMetadata = {
-        _l2BlockNumber: BigInt(l2UniswapInteractionReceipt.blockNumber!),
+        _checkpointNumber: BigInt(l2UniswapInteractionReceipt.blockNumber!),
         _leafIndex: BigInt(withdrawL2MessageIndex),
         _path: withdrawSiblingPath
           .toBufferArray()
@@ -295,7 +292,7 @@ export const uniswapL1L2TestSuite = (
       };
 
       const swapPrivateMessageMetadata = {
-        _l2BlockNumber: BigInt(l2UniswapInteractionReceipt.blockNumber!),
+        _checkpointNumber: BigInt(l2UniswapInteractionReceipt.blockNumber!),
         _leafIndex: BigInt(swapPrivateL2MessageIndex),
         _path: swapPrivateSiblingPath
           .toBufferArray()
@@ -506,7 +503,7 @@ export const uniswapL1L2TestSuite = (
     //   );
 
     //   const withdrawMessageMetadata = {
-    //     _l2BlockNumber: BigInt(uniswapL2Interaction.blockNumber!),
+    //     _checkpointNumber: BigInt(uniswapL2Interaction.blockNumber!),
     //     _leafIndex: BigInt(withdrawL2MessageIndex),
     //     _path: withdrawSiblingPath
     //       .toBufferArray()
@@ -514,7 +511,7 @@ export const uniswapL1L2TestSuite = (
     //   };
 
     //   const swapPrivateMessageMetadata = {
-    //     _l2BlockNumber: BigInt(uniswapL2Interaction.blockNumber!),
+    //     _checkpointNumber: BigInt(uniswapL2Interaction.blockNumber!),
     //     _leafIndex: BigInt(swapPrivateL2MessageIndex),
     //     _path: swapPrivateSiblingPath
     //       .toBufferArray()
@@ -872,7 +869,7 @@ export const uniswapL1L2TestSuite = (
       const withdrawSiblingPath = withdrawResult!.siblingPath;
 
       const withdrawMessageMetadata = {
-        _l2BlockNumber: BigInt(withdrawReceipt.blockNumber!),
+        _checkpointNumber: BigInt(withdrawReceipt.blockNumber!),
         _leafIndex: BigInt(withdrawL2MessageIndex),
         _path: withdrawSiblingPath
           .toBufferArray()
@@ -880,7 +877,7 @@ export const uniswapL1L2TestSuite = (
       };
 
       const swapPrivateMessageMetadata = {
-        _l2BlockNumber: BigInt(withdrawReceipt.blockNumber!),
+        _checkpointNumber: BigInt(withdrawReceipt.blockNumber!),
         _leafIndex: BigInt(swapPrivateL2MessageIndex),
         _path: swapPrivateSiblingPath
           .toBufferArray()
@@ -891,7 +888,7 @@ export const uniswapL1L2TestSuite = (
       await wethCrossChainHarness.expectPrivateBalanceOnL2(ownerAddress, wethL2BalanceBeforeSwap - wethAmountToBridge);
 
       // Since the outbox is only consumable when the block is proven, we need to set the block to be proven
-      await cheatCodes.rollup.markAsProven(await rollup.getBlockNumber());
+      await cheatCodes.rollup.markAsProven(await rollup.getCheckpointNumber());
 
       // On L1 call swap_public!
       logger.info('call swap_public on L1');
@@ -1007,7 +1004,7 @@ export const uniswapL1L2TestSuite = (
       const withdrawSiblingPath = withdrawResult!.siblingPath;
 
       const withdrawMessageMetadata = {
-        _l2BlockNumber: BigInt(withdrawReceipt.blockNumber!),
+        _checkpointNumber: BigInt(withdrawReceipt.blockNumber!),
         _leafIndex: BigInt(withdrawL2MessageIndex),
         _path: withdrawSiblingPath
           .toBufferArray()
@@ -1015,7 +1012,7 @@ export const uniswapL1L2TestSuite = (
       };
 
       const swapPublicMessageMetadata = {
-        _l2BlockNumber: BigInt(withdrawReceipt.blockNumber!),
+        _checkpointNumber: BigInt(withdrawReceipt.blockNumber!),
         _leafIndex: BigInt(swapPublicL2MessageIndex),
         _path: swapPublicSiblingPath
           .toBufferArray()
@@ -1026,7 +1023,7 @@ export const uniswapL1L2TestSuite = (
       await wethCrossChainHarness.expectPublicBalanceOnL2(ownerAddress, 0n);
 
       // Since the outbox is only consumable when the block is proven, we need to set the block to be proven
-      await cheatCodes.rollup.markAsProven(await rollup.getBlockNumber());
+      await cheatCodes.rollup.markAsProven(await rollup.getCheckpointNumber());
 
       // Call swap_private on L1
       logger.info('Execute withdraw and swap on the uniswapPortal!');

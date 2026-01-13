@@ -2,19 +2,17 @@ import { Blob, getBlobsPerL1Block, getPrefixedEthBlobCommitments } from '@aztec/
 import { HttpBlobSinkClient } from '@aztec/blob-sink/client';
 import { inboundTransform } from '@aztec/blob-sink/encoding';
 import type { EpochCache } from '@aztec/epoch-cache';
+import { type L1ContractsConfig, getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
 import {
   type EmpireSlashingProposerContract,
-  FormattedViemError,
-  type GasPrice,
   type GovernanceProposerContract,
-  type L1ContractsConfig,
-  type L1TxUtilsConfig,
   Multicall3,
-  RollupContract,
-  defaultL1TxUtilsConfig,
-  getL1ContractsConfigEnvVars,
-} from '@aztec/ethereum';
+  type RollupContract,
+} from '@aztec/ethereum/contracts';
+import { type GasPrice, type L1TxUtilsConfig, defaultL1TxUtilsConfig } from '@aztec/ethereum/l1-tx-utils';
 import type { L1TxUtilsWithBlobs } from '@aztec/ethereum/l1-tx-utils-with-blobs';
+import { FormattedViemError } from '@aztec/ethereum/utils';
+import { BlockNumber, EpochNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import { sleep } from '@aztec/foundation/sleep';
 import { TestDateProvider } from '@aztec/foundation/timer';
@@ -90,7 +88,7 @@ describe('SequencerPublisher', () => {
     mockBlobSinkServer = undefined;
     blobSinkClient = new HttpBlobSinkClient({ blobSinkUrl: BLOB_SINK_URL });
 
-    l2Block = await L2Block.random(42);
+    l2Block = await L2Block.random(BlockNumber(42));
 
     header = l2Block.getCheckpointHeader();
     archive = l2Block.archive.root.toBuffer();
@@ -139,8 +137,8 @@ describe('SequencerPublisher', () => {
     slashFactoryContract = mock<SlashFactoryContract>();
 
     const epochCache = mock<EpochCache>();
-    epochCache.getEpochAndSlotNow.mockReturnValue({ epoch: 1n, slot: 2n, ts: 3n, now: 3n });
-    epochCache.getCommittee.mockResolvedValue({ committee: [], seed: 1n, epoch: 1n });
+    epochCache.getEpochAndSlotNow.mockReturnValue({ epoch: EpochNumber(1), slot: SlotNumber(2), ts: 3n, now: 3n });
+    epochCache.getCommittee.mockResolvedValue({ committee: [], seed: 1n, epoch: EpochNumber(1) });
 
     publisher = new SequencerPublisher(config, {
       blobSinkClient,
@@ -172,7 +170,7 @@ describe('SequencerPublisher', () => {
 
     const currentL2Slot = publisher.getCurrentL2Slot();
 
-    l2Block = await L2Block.random(42, undefined, undefined, undefined, undefined, Number(currentL2Slot));
+    l2Block = await L2Block.random(BlockNumber(42), undefined, undefined, undefined, undefined, Number(currentL2Slot));
 
     header = l2Block.getCheckpointHeader();
     archive = l2Block.archive.root.toBuffer();
@@ -224,7 +222,7 @@ describe('SequencerPublisher', () => {
     const govPayload = EthAddress.random();
     const voteSig = Signature.random();
     governanceProposerContract.getRoundInfo.mockResolvedValue({
-      lastSignalSlot: 1n,
+      lastSignalSlot: SlotNumber(1),
       payloadWithMostSignals: govPayload.toString(),
       executed: false,
     });
@@ -256,7 +254,7 @@ describe('SequencerPublisher', () => {
     expect(
       await publisher.enqueueGovernanceCastSignal(
         govPayload,
-        2n,
+        SlotNumber(2),
         1n,
         EthAddress.fromString(testHarnessAttesterAccount.address),
         msg => testHarnessAttesterAccount.signTypedData(msg),
@@ -276,7 +274,6 @@ describe('SequencerPublisher', () => {
       {
         header: header.toViem(),
         archive: toHex(archive),
-        stateReference: l2Block.header.state.toViem(),
         oracleInput: {
           feeAssetPriceModifier: 0n,
         },
@@ -411,7 +408,7 @@ describe('SequencerPublisher', () => {
           args: [EthAddress.random().toString()],
         }),
       },
-      lastValidL2Slot: 1n,
+      lastValidL2Slot: SlotNumber(1),
       checkSuccess: () => true,
     });
 

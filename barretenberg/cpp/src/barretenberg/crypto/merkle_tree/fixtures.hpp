@@ -6,20 +6,26 @@
 
 #pragma once
 
+#include <cstdint>
+#include <ostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+// Upstream code:
+// #include "barretenberg/common/thread_pool.hpp"
+
+// modifications for devnet-20251212:
 #ifndef NO_MULTITHREADING
 #include "barretenberg/common/thread_pool.hpp"
 #else
 // Forward declare ThreadPool when multithreading is disabled
 namespace bb { class ThreadPool; }
 #endif
+
 #include "barretenberg/crypto/merkle_tree/lmdb_store/lmdb_tree_store.hpp"
 #include "barretenberg/ecc/curves/bn254/fr.hpp"
 #include "barretenberg/numeric/random/engine.hpp"
-#include <cstdint>
-#include <ostream>
-#include <sstream>
-#include <string>
-#include <vector>
 
 namespace bb::crypto::merkle_tree {
 
@@ -35,7 +41,7 @@ static auto create_values = [](uint32_t num_values = NUM_VALUES) {
     return values;
 };
 
-static std::vector<fr> VALUES = create_values();
+const fr& get_value(size_t index);
 
 inline std::string random_string()
 {
@@ -80,4 +86,5 @@ void inline print_store_data(LMDBTreeStore::SharedPtr db, std::ostream& os)
 
     os << stats;
 }
+
 } // namespace bb::crypto::merkle_tree

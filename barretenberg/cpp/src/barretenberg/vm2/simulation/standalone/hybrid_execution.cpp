@@ -1,14 +1,28 @@
 #include "barretenberg/vm2/simulation/standalone/hybrid_execution.hpp"
 
 #include "barretenberg/common/bb_bench.hpp"
+#include "barretenberg/common/log.hpp"
+#include "barretenberg/vm2/simulation/events/addressing_event.hpp"
+#include "barretenberg/vm2/simulation/events/gas_event.hpp"
+#include "barretenberg/vm2/simulation/interfaces/addressing.hpp"
+#include "barretenberg/vm2/simulation/interfaces/bytecode_manager.hpp"
+#include "barretenberg/vm2/simulation/interfaces/context.hpp"
+#include "barretenberg/vm2/simulation/interfaces/execution_components.hpp"
+#include "barretenberg/vm2/simulation/interfaces/gas_tracker.hpp"
+#include "barretenberg/vm2/simulation/lib/call_stack_metadata_collector.hpp"
 
 namespace bb::avm2::simulation {
 
 // This context interface is a top-level enqueued one.
 // NOTE: For the moment this trace is not returning the context back.
-ExecutionResult HybridExecution::execute(std::unique_ptr<ContextInterface> enqueued_call_context)
+EnqueuedCallResult HybridExecution::execute(std::unique_ptr<ContextInterface> enqueued_call_context)
 {
     BB_BENCH_NAME("HybridExecution::execute");
+    call_stack_metadata_collector.notify_enter_call(enqueued_call_context->get_address(),
+                                                    0,
+                                                    make_calldata_provider(*enqueued_call_context),
+                                                    enqueued_call_context->get_is_static(),
+                                                    enqueued_call_context->get_gas_limit());
     external_call_stack.push(std::move(enqueued_call_context));
 
     while (!external_call_stack.empty()) {
@@ -49,22 +63,22 @@ ExecutionResult HybridExecution::execute(std::unique_ptr<ContextInterface> enque
         // TODO(fcarreiro): handle this in a better way.
         catch (const BytecodeRetrievalError& e) {
             vinfo("Bytecode retrieval error:: ", e.what());
-            handle_exceptional_halt(context);
+            handle_exceptional_halt(context, e.what());
         } catch (const InstructionFetchingError& e) {
             vinfo("Instruction fetching error: ", e.what());
-            handle_exceptional_halt(context);
+            handle_exceptional_halt(context, e.what());
         } catch (const AddressingException& e) {
             vinfo("Addressing exception: ", e.what());
-            handle_exceptional_halt(context);
+            handle_exceptional_halt(context, e.what());
         } catch (const RegisterValidationException& e) {
             vinfo("Register validation exception: ", e.what());
-            handle_exceptional_halt(context);
+            handle_exceptional_halt(context, e.what());
         } catch (const OutOfGasException& e) {
             vinfo("Out of gas exception: ", e.what());
-            handle_exceptional_halt(context);
+            handle_exceptional_halt(context, e.what());
         } catch (const OpcodeExecutionException& e) {
             vinfo("Opcode execution exception: ", e.what());
-            handle_exceptional_halt(context);
+            handle_exceptional_halt(context, e.what());
         } catch (const std::exception& e) {
             // This is a coding error, we should not get here.
             // All exceptions should fall in the above catch blocks.
@@ -84,7 +98,11 @@ ExecutionResult HybridExecution::execute(std::unique_ptr<ContextInterface> enque
         }
     }
 
-    return get_execution_result();
+    ExecutionResult result = get_execution_result();
+    return {
+        .success = result.success,
+        .gas_used = result.gas_used,
+    };
 }
 
 } // namespace bb::avm2::simulation

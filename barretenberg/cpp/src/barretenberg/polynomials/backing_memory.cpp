@@ -19,9 +19,19 @@ void set_slow_low_memory(bool enabled) {
     }
 }
 
-// Storage budget is disabled for WASM builds
-#ifndef __wasm__
+// Storage budget is disabled for WASM builds unless ENABLE_WASM_BENCH is defined
+#if !defined(__wasm__) || defined(ENABLE_WASM_BENCH)
 
+#if defined(__wasm__) && defined(BB_NO_EXCEPTIONS)
+// Simplified version for WASM builds without exception support
+// For WASM benchmarking, we don't enforce storage budgets
+size_t parse_size_string(const std::string& /* size_str */)
+{
+    // Return unlimited budget for WASM builds
+    return std::numeric_limits<size_t>::max();
+}
+#else
+// Full version with exception handling for native builds
 // Parse storage size string (e.g., "500m", "2g", "1024k")
 size_t parse_size_string(const std::string& size_str)
 {
@@ -64,6 +74,7 @@ size_t parse_size_string(const std::string& size_str)
         throw_or_abort("Invalid storage size format: '" + size_str + "'. Value out of range");
     }
 }
+#endif
 
 namespace {
 // Parse storage budget from environment variable (supports k/m/g suffixes like Docker)
@@ -84,4 +95,4 @@ size_t storage_budget = parse_storage_budget();
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::atomic<size_t> current_storage_usage{ 0 };
 
-#endif // __wasm__
+#endif // !defined(__wasm__) || defined(ENABLE_WASM_BENCH)

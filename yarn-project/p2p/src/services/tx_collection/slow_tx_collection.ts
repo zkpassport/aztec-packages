@@ -1,9 +1,10 @@
+import { BlockNumber, EpochNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { chunk } from '@aztec/foundation/collection';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import { boundInclusive } from '@aztec/foundation/number';
 import { RunningPromise } from '@aztec/foundation/promise';
 import { DateProvider } from '@aztec/foundation/timer';
-import type { L2Block } from '@aztec/stdlib/block';
+import type { L2BlockNew } from '@aztec/stdlib/block';
 import { type L1RollupConstants, getEpochAtSlot, getTimestampRangeForEpoch } from '@aztec/stdlib/epoch-helpers';
 import { type Tx, TxHash } from '@aztec/stdlib/tx';
 
@@ -75,7 +76,7 @@ export class SlowTxCollection {
   }
 
   /** Starts collecting the given tx hashes for the given L2Block in the slow loop */
-  public startCollecting(block: L2Block, txHashes: TxHash[]) {
+  public startCollecting(block: L2BlockNew, txHashes: TxHash[]) {
     const slot = block.header.getSlot();
     const deadline = this.getDeadlineForSlot(slot);
     if (+deadline < this.dateProvider.now()) {
@@ -202,7 +203,7 @@ export class SlowTxCollection {
    * Stop collecting all txs for blocks less than or requal to the block number specified.
    * To be called when we no longer care about gathering txs up to a certain block, eg when they become proven or finalized.
    */
-  public stopCollectingForBlocksUpTo(blockNumber: number): void {
+  public stopCollectingForBlocksUpTo(blockNumber: BlockNumber): void {
     for (const [txHash, info] of this.missingTxs.entries()) {
       if (info.blockNumber <= blockNumber) {
         this.missingTxs.delete(txHash);
@@ -214,7 +215,7 @@ export class SlowTxCollection {
    * Stop collecting all txs for blocks greater than the block number specified.
    * To be called when there is a chain prune and previously mined txs are no longer relevant.
    */
-  public stopCollectingForBlocksAfter(blockNumber: number): void {
+  public stopCollectingForBlocksAfter(blockNumber: BlockNumber): void {
     for (const [txHash, info] of this.missingTxs.entries()) {
       if (info.blockNumber > blockNumber) {
         this.missingTxs.delete(txHash);
@@ -223,9 +224,9 @@ export class SlowTxCollection {
   }
 
   /** Computes the proof submission deadline for a given slot, a tx mined in this slot is no longer interesting after this deadline */
-  private getDeadlineForSlot(slotNumber: bigint): Date {
+  private getDeadlineForSlot(slotNumber: SlotNumber): Date {
     const epoch = getEpochAtSlot(slotNumber, this.constants);
-    const submissionEndEpoch = epoch + BigInt(this.constants.proofSubmissionEpochs);
+    const submissionEndEpoch = EpochNumber(epoch + this.constants.proofSubmissionEpochs);
     const submissionEndTimestamp = getTimestampRangeForEpoch(submissionEndEpoch, this.constants)[1];
     return new Date(Number(submissionEndTimestamp) * 1000);
   }

@@ -19,9 +19,7 @@ class IPATest : public CommitmentTest<Curve> {
     using Commitment = typename Curve::AffineElement;
 
     using ShplonkProver = ShplonkProver_<Curve>;
-    using ShplonkVerifier = ShplonkVerifier_<Curve>;
     using GeminiProver = GeminiProver_<Curve>;
-    using GeminiVerifier = GeminiVerifier_<Curve>;
     using ShpleminiVerifier = ShpleminiVerifier_<Curve>;
     using ClaimBatcher = ClaimBatcher_<Curve>;
     using ClaimBatch = ClaimBatcher::Batch;
@@ -59,8 +57,7 @@ class IPATest : public CommitmentTest<Curve> {
         PCS::compute_opening_proof(ck, { poly, opening_pair }, prover_transcript);
 
         // initialize verifier transcript from proof data
-        auto verifier_transcript = std::make_shared<NativeTranscript>();
-        verifier_transcript->load_proof(prover_transcript->export_proof());
+        auto verifier_transcript = std::make_shared<NativeTranscript>(prover_transcript->export_proof());
         // the native reduce_verify does a _complete_ IPA proof and returns whether or not the checks pass.
         bool result = PCS::reduce_verify(vk, opening_claim, verifier_transcript);
         return { result, prover_transcript, verifier_transcript };
@@ -271,8 +268,8 @@ TEST_F(IPATest, AIsZeroAfterOneRound)
 
 // Tests of batched MLPCS, where IPA is the final univariate commitment scheme.
 
-// Gemini + Shplonk + IPA. Two random polynomials, no shifts.
-TEST_F(IPATest, GeminiShplonkIPAWithoutShift)
+// Shplemini + IPA. Two random polynomials, no shifts.
+TEST_F(IPATest, ShpleminiIPAWithoutShift)
 {
     // Generate multilinear polynomials, their commitments (genuine and mocked) and evaluations (genuine) at a random
     // point.
@@ -281,7 +278,6 @@ TEST_F(IPATest, GeminiShplonkIPAWithoutShift)
     MockClaimGenerator mock_claims(n,
                                    /*num_polynomials*/ 2,
                                    /*num_to_be_shifted*/ 0,
-                                   /*num_to_be_right_shifted_by_k*/ 0,
                                    mle_opening_point,
                                    ck);
 
@@ -299,12 +295,16 @@ TEST_F(IPATest, GeminiShplonkIPAWithoutShift)
 
     auto verifier_transcript = NativeTranscript::verifier_init_empty(prover_transcript);
 
-    auto gemini_verifier_claim =
-        GeminiVerifier::reduce_verification(mle_opening_point, mock_claims.claim_batcher, verifier_transcript);
+    std::array<Fr, log_n> padding_indicator_array;
+    std::ranges::fill(padding_indicator_array, Fr{ 1 });
 
-    const auto shplonk_verifier_claim =
-        ShplonkVerifier::reduce_verification(vk.get_g1_identity(), gemini_verifier_claim, verifier_transcript);
-    auto result = PCS::reduce_verify(vk, shplonk_verifier_claim, verifier_transcript);
+    const auto batch_opening_claim = ShpleminiVerifier::compute_batch_opening_claim(padding_indicator_array,
+                                                                                    mock_claims.claim_batcher,
+                                                                                    mle_opening_point,
+                                                                                    vk.get_g1_identity(),
+                                                                                    verifier_transcript);
+
+    auto result = PCS::reduce_verify_batch_opening_claim(batch_opening_claim, vk, verifier_transcript);
 
     EXPECT_EQ(result, true);
 }
@@ -317,7 +317,6 @@ TEST_F(IPATest, ShpleminiIPAWithShift)
     MockClaimGenerator mock_claims(n,
                                    /*num_polynomials*/ 4,
                                    /*num_to_be_shifted*/ 1,
-                                   /*num_to_be_right_shifted_by_k*/ 0,
                                    mle_opening_point,
                                    ck);
     auto prover_transcript = NativeTranscript::prover_init_empty();
@@ -357,7 +356,6 @@ TEST_F(IPATest, ShpleminiIPAShiftsRemoval)
     MockClaimGenerator mock_claims(n,
                                    /*num_polynomials*/ 4,
                                    /*num_to_be_shifted*/ 2,
-                                   /*num_to_be_right_shifted_by_k*/ 0,
                                    mle_opening_point,
                                    ck);
 

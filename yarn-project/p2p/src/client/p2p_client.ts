@@ -1,16 +1,16 @@
-import { INITIAL_L2_BLOCK_NUM } from '@aztec/constants';
+import { GENESIS_BLOCK_HEADER_HASH, INITIAL_L2_BLOCK_NUM } from '@aztec/constants';
+import { BlockNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { createLogger } from '@aztec/foundation/log';
 import { DateProvider } from '@aztec/foundation/timer';
 import type { AztecAsyncKVStore, AztecAsyncMap, AztecAsyncSingleton } from '@aztec/kv-store';
 import type {
   EthAddress,
-  L2Block,
   L2BlockId,
+  L2BlockNew,
   L2BlockSource,
   L2BlockStream,
   L2BlockStreamEvent,
   L2Tips,
-  PublishedL2Block,
 } from '@aztec/stdlib/block';
 import type { ContractDataSource } from '@aztec/stdlib/contract';
 import { getTimestampForSlot } from '@aztec/stdlib/epoch-helpers';
@@ -62,10 +62,10 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
   private provenBlockNumberAtStart = -1;
   private finalizedBlockNumberAtStart = -1;
 
-  private synchedBlockHashes: AztecAsyncMap<number, string>;
-  private synchedLatestBlockNumber: AztecAsyncSingleton<number>;
-  private synchedProvenBlockNumber: AztecAsyncSingleton<number>;
-  private synchedFinalizedBlockNumber: AztecAsyncSingleton<number>;
+  private synchedBlockHashes: AztecAsyncMap<BlockNumber, string>;
+  private synchedLatestBlockNumber: AztecAsyncSingleton<BlockNumber>;
+  private synchedProvenBlockNumber: AztecAsyncSingleton<BlockNumber>;
+  private synchedFinalizedBlockNumber: AztecAsyncSingleton<BlockNumber>;
   private synchedLatestSlot: AztecAsyncSingleton<bigint>;
 
   private txPool: TxPool;
@@ -121,14 +121,14 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
       this.log.debug(`Received block proposal from ${sender.toString()}`);
       // TODO(palla/txs): Need to subtract validatorReexecuteDeadlineMs from this deadline (see ValidatorClient.getReexecutionDeadline)
       const constants = this.txCollection.getConstants();
-      const nextSlotTimestampSeconds = Number(getTimestampForSlot(block.slotNumber.toBigInt() + 1n, constants));
+      const nextSlotTimestampSeconds = Number(getTimestampForSlot(SlotNumber(block.slotNumber + 1), constants));
       const deadline = new Date(nextSlotTimestampSeconds * 1000);
       const parentBlock = await this.l2BlockSource.getBlockHeaderByArchive(block.payload.header.lastArchiveRoot);
       if (!parentBlock) {
         this.log.debug(`Cannot collect txs for proposal as parent block not found`);
         return;
       }
-      const blockNumber = parentBlock.getBlockNumber() + 1;
+      const blockNumber = BlockNumber(parentBlock.getBlockNumber() + 1);
       await this.txProvider.getTxsForBlockProposal(block, blockNumber, { pinnedPeer: sender, deadline });
       return undefined;
     });
@@ -162,7 +162,7 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
     return Promise.resolve(this.p2pService.getPeers(includePending));
   }
 
-  public getL2BlockHash(number: number): Promise<string | undefined> {
+  public getL2BlockHash(number: BlockNumber): Promise<string | undefined> {
     return this.synchedBlockHashes.getAsync(number);
   }
 
@@ -203,10 +203,12 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
       }
     }
 
+    const genesisHash = GENESIS_BLOCK_HEADER_HASH.toString();
+
     return {
-      latest: { hash: latestBlockHash!, number: latestBlockNumber },
-      proven: { hash: provenBlockHash!, number: provenBlockNumber },
-      finalized: { hash: finalizedBlockHash!, number: finalizedBlockNumber },
+      latest: { hash: latestBlockHash ?? genesisHash, number: latestBlockNumber },
+      proven: { hash: provenBlockHash ?? genesisHash, number: provenBlockNumber },
+      finalized: { hash: finalizedBlockHash ?? genesisHash, number: finalizedBlockNumber },
     };
   }
 
@@ -214,15 +216,16 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
     this.log.debug(`Handling block stream event ${event.type}`);
     switch (event.type) {
       case 'blocks-added':
-        await this.handleLatestL2Blocks(event.blocks);
+        await this.handleLatestL2Blocks(event.blocks.map(b => b.block.toL2Block()));
         break;
       case 'chain-finalized': {
         // TODO (alexg): I think we can prune the block hashes map here
         await this.setBlockHash(event.block);
-        const from = (await this.getSyncedFinalizedBlockNum()) + 1;
+        const from = BlockNumber((await this.getSyncedFinalizedBlockNum()) + 1);
         const limit = event.block.number - from + 1;
         if (limit > 0) {
-          await this.handleFinalizedL2Blocks(await this.l2BlockSource.getBlocks(from, limit));
+          const oldBlocks = await this.l2BlockSource.getBlocks(from, limit);
+          await this.handleFinalizedL2Blocks(oldBlocks.map(b => b.toL2Block()));
         }
         break;
       }
@@ -284,7 +287,7 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
       (this.attestationPool === undefined || (await this.attestationPool?.isEmpty()))
     ) {
       // if mempools are empty, we don't care about syncing prior blocks
-      this.initBlockStream(this.latestBlockNumberAtStart);
+      this.initBlockStream(BlockNumber(this.latestBlockNumberAtStart));
       this.setCurrentState(P2PClientState.RUNNING);
       this.syncPromise = Promise.resolve();
       await this.p2pService.start();
@@ -332,7 +335,7 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
     return this.p2pService.addReqRespSubProtocol(subProtocol, handler, validator);
   }
 
-  private initBlockStream(startingBlock?: number) {
+  private initBlockStream(startingBlock?: BlockNumber) {
     if (!this.blockStream) {
       const { blockRequestBatchSize: batchSize, blockCheckIntervalMS: pollIntervalMS } = this.config;
       this.blockStream = new TraceableL2BlockStream(
@@ -371,16 +374,21 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
   }
 
   @trackSpan('p2pClient.broadcastProposal', async proposal => ({
-    [Attributes.SLOT_NUMBER]: proposal.slotNumber.toNumber(),
+    [Attributes.SLOT_NUMBER]: proposal.slotNumber,
     [Attributes.BLOCK_ARCHIVE]: proposal.archive.toString(),
-    [Attributes.P2P_ID]: (await proposal.p2pMessageIdentifier()).toString(),
+    [Attributes.P2P_ID]: (await proposal.p2pMessageLoggingIdentifier()).toString(),
   }))
   public broadcastProposal(proposal: BlockProposal): Promise<void> {
-    this.log.verbose(`Broadcasting proposal for slot ${proposal.slotNumber.toNumber()} to peers`);
+    this.log.verbose(`Broadcasting proposal for slot ${proposal.slotNumber} to peers`);
     return this.p2pService.propagate(proposal);
   }
 
-  public async getAttestationsForSlot(slot: bigint, proposalId?: string): Promise<BlockAttestation[]> {
+  public async broadcastAttestations(attestations: BlockAttestation[]): Promise<void> {
+    this.log.verbose(`Broadcasting ${attestations.length} attestations to peers`);
+    await Promise.all(attestations.map(att => this.p2pService.propagate(att)));
+  }
+
+  public async getAttestationsForSlot(slot: SlotNumber, proposalId?: string): Promise<BlockAttestation[]> {
     return (
       (await (proposalId
         ? this.attestationPool?.getAttestationsForSlotAndProposal(slot, proposalId)
@@ -643,20 +651,20 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
    * Public function to check the latest block number that the P2P client is synced to.
    * @returns Block number of latest L2 Block we've synced with.
    */
-  public async getSyncedLatestBlockNum(): Promise<number> {
-    return (await this.synchedLatestBlockNumber.getAsync()) ?? INITIAL_L2_BLOCK_NUM - 1;
+  public async getSyncedLatestBlockNum(): Promise<BlockNumber> {
+    return (await this.synchedLatestBlockNumber.getAsync()) ?? BlockNumber(INITIAL_L2_BLOCK_NUM - 1);
   }
 
   /**
    * Public function to check the latest proven block number that the P2P client is synced to.
    * @returns Block number of latest proven L2 Block we've synced with.
    */
-  public async getSyncedProvenBlockNum(): Promise<number> {
-    return (await this.synchedProvenBlockNumber.getAsync()) ?? INITIAL_L2_BLOCK_NUM - 1;
+  public async getSyncedProvenBlockNum(): Promise<BlockNumber> {
+    return (await this.synchedProvenBlockNumber.getAsync()) ?? BlockNumber(INITIAL_L2_BLOCK_NUM - 1);
   }
 
-  public async getSyncedFinalizedBlockNum(): Promise<number> {
-    return (await this.synchedFinalizedBlockNumber.getAsync()) ?? INITIAL_L2_BLOCK_NUM - 1;
+  public async getSyncedFinalizedBlockNum(): Promise<BlockNumber> {
+    return (await this.synchedFinalizedBlockNumber.getAsync()) ?? BlockNumber(INITIAL_L2_BLOCK_NUM - 1);
   }
 
   /** Returns latest L2 slot for which we have seen an L2 block. */
@@ -672,7 +680,7 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
     const blockNumber = await this.getSyncedLatestBlockNum();
     const blockHash =
       blockNumber === 0
-        ? ''
+        ? GENESIS_BLOCK_HEADER_HASH.toString()
         : await this.l2BlockSource
             .getBlockHeader(blockNumber)
             .then(header => header?.hash())
@@ -680,8 +688,8 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
 
     return {
       state: this.currentState,
-      syncedToL2Block: { number: blockNumber, hash: blockHash },
-    } as P2PSyncState;
+      syncedToL2Block: { number: blockNumber, hash: blockHash! },
+    };
   }
 
   /**
@@ -689,10 +697,10 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
    * @param blocks - A list of existing blocks with txs that the P2P client needs to ensure the tx pool is reconciled with.
    * @returns Empty promise.
    */
-  private async markTxsAsMinedFromBlocks(blocks: L2Block[]): Promise<void> {
+  private async markTxsAsMinedFromBlocks(blocks: L2BlockNew[]): Promise<void> {
     for (const block of blocks) {
       const txHashes = block.body.txEffects.map(txEffect => txEffect.txHash);
-      await this.txPool.markAsMined(txHashes, block.getBlockHeader());
+      await this.txPool.markAsMined(txHashes, block.header);
     }
   }
 
@@ -701,33 +709,33 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
    * @param blocks - A list of existing blocks with txs that the P2P client needs to ensure the tx pool is reconciled with.
    * @returns Empty promise.
    */
-  private async handleLatestL2Blocks(blocks: PublishedL2Block[]): Promise<void> {
+  private async handleLatestL2Blocks(blocks: L2BlockNew[]): Promise<void> {
     if (!blocks.length) {
       return Promise.resolve();
     }
 
-    await this.markTxsAsMinedFromBlocks(blocks.map(b => b.block));
-    await this.startCollectingMissingTxs(blocks.map(b => b.block));
+    await this.markTxsAsMinedFromBlocks(blocks);
+    await this.startCollectingMissingTxs(blocks);
 
-    const lastBlock = blocks.at(-1)!.block;
+    const lastBlock = blocks.at(-1)!;
 
     await Promise.all(
       blocks.map(async block =>
         this.setBlockHash({
-          number: block.block.number,
-          hash: await block.block.hash().then(h => h.toString()),
+          number: block.number,
+          hash: await block.hash().then(h => h.toString()),
         }),
       ),
     );
 
     await this.synchedLatestBlockNumber.set(lastBlock.number);
-    await this.synchedLatestSlot.set(lastBlock.header.getSlot());
+    await this.synchedLatestSlot.set(BigInt(lastBlock.header.getSlot()));
     this.log.verbose(`Synched to latest block ${lastBlock.number}`);
     await this.startServiceIfSynched();
   }
 
   /** Request txs for unproven blocks so the prover node has more chances to get them. */
-  private async startCollectingMissingTxs(blocks: L2Block[]): Promise<void> {
+  private async startCollectingMissingTxs(blocks: L2BlockNew[]): Promise<void> {
     try {
       // TODO(#15435): If the archiver has lagged behind L1, the reported proven block number may
       // be much lower than the actual one, and it does not update until the pending chain is
@@ -760,7 +768,7 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
    * @param blocks - A list of finalized L2 blocks.
    * @returns Empty promise.
    */
-  private async handleFinalizedL2Blocks(blocks: L2Block[]): Promise<void> {
+  private async handleFinalizedL2Blocks(blocks: L2BlockNew[]): Promise<void> {
     if (!blocks.length) {
       return Promise.resolve();
     }
@@ -786,7 +794,7 @@ export class P2PClient<T extends P2PClientType = P2PClientType.Full>
    * Updates the tx pool after a chain prune.
    * @param latestBlock - The block number the chain was pruned to.
    */
-  private async handlePruneL2Blocks(latestBlock: number): Promise<void> {
+  private async handlePruneL2Blocks(latestBlock: BlockNumber): Promise<void> {
     const txsToDelete = new Map<string, TxHash>();
     const minedTxs = await this.txPool.getMinedTxHashes();
 

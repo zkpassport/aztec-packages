@@ -1,8 +1,8 @@
-import type { ExtendedViemWalletClient, ViemContract } from '@aztec/ethereum';
+import type { ExtendedViemWalletClient, ViemContract } from '@aztec/ethereum/types';
 import { extractEvent } from '@aztec/ethereum/utils';
-import { sha256ToField } from '@aztec/foundation/crypto';
+import { sha256ToField } from '@aztec/foundation/crypto/sha256';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import type { Logger } from '@aztec/foundation/log';
 import type { SiblingPath } from '@aztec/foundation/trees';
 import { FeeAssetHandlerAbi } from '@aztec/l1-artifacts/FeeAssetHandlerAbi';
@@ -177,17 +177,32 @@ export class L1FeeJuicePortalManager {
       hash: await this.contract.write.depositToAztecPublic(args),
     });
 
-    this.logger.info('Deposited to Aztec public successfully');
+    this.logger.info('Deposited to Aztec public successfully', { txReceipt });
 
     const log = extractEvent(
       txReceipt.logs,
       this.contract.address,
       this.contract.abi,
       'DepositToAztecPublic',
-      log =>
-        log.args.secretHash === claimSecretHash.toString() &&
-        log.args.amount === amountToBridge &&
-        log.args.to === to.toString(),
+      log => {
+        // Normalize hex strings for comparison (case-insensitive, handle different formats)
+        const normalizeHex = (val: string | bigint | number) => {
+          const hexStr = typeof val === 'string' ? val : `0x${val.toString(16).padStart(64, '0')}`;
+          return hexStr.toLowerCase();
+        };
+
+        const secretHashMatch = normalizeHex(log.args.secretHash) === normalizeHex(claimSecretHash.toString());
+        const amountMatch = log.args.amount === amountToBridge;
+        const toMatch = normalizeHex(log.args.to) === normalizeHex(to.toString());
+
+        this.logger.debug(
+          `Event filter matching: secretHash=${secretHashMatch} (${log.args.secretHash} vs ${claimSecretHash.toString()}), ` +
+            `amount=${amountMatch} (${log.args.amount} vs ${amountToBridge}), ` +
+            `to=${toMatch} (${log.args.to} vs ${to.toString()})`,
+        );
+
+        return secretHashMatch && amountMatch && toMatch;
+      },
       this.logger,
     );
 
@@ -282,10 +297,19 @@ export class L1ToL2TokenPortalManager {
       this.portal.address,
       this.portal.abi,
       'DepositToAztecPublic',
-      log =>
-        log.args.secretHash === claimSecretHash.toString() &&
-        log.args.amount === amount &&
-        log.args.to === to.toString(),
+      log => {
+        // Normalize hex strings for comparison (case-insensitive, handle different formats)
+        const normalizeHex = (val: string | bigint | number) => {
+          const hexStr = typeof val === 'string' ? val : `0x${val.toString(16).padStart(64, '0')}`;
+          return hexStr.toLowerCase();
+        };
+
+        return (
+          normalizeHex(log.args.secretHash) === normalizeHex(claimSecretHash.toString()) &&
+          log.args.amount === amount &&
+          normalizeHex(log.args.to) === normalizeHex(to.toString())
+        );
+      },
       this.logger,
     );
 
@@ -323,7 +347,18 @@ export class L1ToL2TokenPortalManager {
       this.portal.address,
       this.portal.abi,
       'DepositToAztecPrivate',
-      log => log.args.amount === amount && log.args.secretHashForL2MessageConsumption === claimSecretHash.toString(),
+      log => {
+        // Normalize hex strings for comparison (case-insensitive, handle different formats)
+        const normalizeHex = (val: string | bigint | number) => {
+          const hexStr = typeof val === 'string' ? val : `0x${val.toString(16).padStart(64, '0')}`;
+          return hexStr.toLowerCase();
+        };
+
+        return (
+          log.args.amount === amount &&
+          normalizeHex(log.args.secretHashForL2MessageConsumption) === normalizeHex(claimSecretHash.toString())
+        );
+      },
       this.logger,
     );
 
@@ -394,7 +429,7 @@ export class L1TokenPortalManager extends L1ToL2TokenPortalManager {
     );
 
     const messageLeafId = getL2ToL1MessageLeafId({ leafIndex: messageIndex, siblingPath });
-    const isConsumedBefore = await this.outbox.read.hasMessageBeenConsumedAtBlock([blockNumber, messageLeafId]);
+    const isConsumedBefore = await this.outbox.read.hasMessageBeenConsumedAtCheckpoint([blockNumber, messageLeafId]);
     if (isConsumedBefore) {
       throw new Error(
         `L1 to L2 message at block ${blockNumber} index ${messageIndex} height ${siblingPath.pathSize} has already been consumed`,
@@ -415,7 +450,7 @@ export class L1TokenPortalManager extends L1ToL2TokenPortalManager {
       hash: await this.extendedClient.writeContract(withdrawRequest),
     });
 
-    const isConsumedAfter = await this.outbox.read.hasMessageBeenConsumedAtBlock([blockNumber, messageLeafId]);
+    const isConsumedAfter = await this.outbox.read.hasMessageBeenConsumedAtCheckpoint([blockNumber, messageLeafId]);
     if (!isConsumedAfter) {
       throw new Error(
         `L1 to L2 message at block ${blockNumber} index ${messageIndex} height ${siblingPath.pathSize} not consumed after withdrawal`,

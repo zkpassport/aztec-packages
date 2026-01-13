@@ -7,16 +7,20 @@ const sidebar = {
   sidebar: [
     {
       type: "html",
-      value: '<span class="sidebar-title">Getting Started</span>',
+      value: '<span class="sidebar-title">Overview</span>',
       className: "sidebar-title",
     },
     {
       type: "doc",
-      id: "developers/getting_started_on_sandbox",
+      id: "developers/overview",
     },
     {
       type: "doc",
-      id: "developers/getting_started_on_testnet",
+      id: "developers/getting_started_on_local_network",
+    },
+    {
+      type: "doc",
+      id: "developers/getting_started_on_devnet",
     },
     {
       type: "link",
@@ -33,18 +37,9 @@ const sidebar = {
       dirName: "developers/docs",
     },
     {
-      type: "html",
-      value: '<span class="sidebar-title">Misc</span>',
-      className: "sidebar-title",
-    },
-    {
       type: "link",
       label: "Get Inspired",
       href: "https://github.com/AztecProtocol/horizon",
-    },
-    {
-      type: "doc",
-      id: "developers/migration_notes",
     },
   ],
 
@@ -85,31 +80,25 @@ const sidebar = {
       "items": [
         {
           "type": "doc",
+          "id": "the_aztec_network/operation/sequencer_management/registering_sequencer"
+        },
+        {
+          "type": "doc",
+          "id": "the_aztec_network/operation/sequencer_management/become_a_staking_provider"
+        },
+        {
+          "type": "doc",
           "id": "the_aztec_network/setup/high_availability_sequencers"
         }
       ]
     },
     {
-      "type": "category",
-      "label": "Running a Prover",
-      "link": {
-        "type": "doc",
-        "id": "the_aztec_network/setup/running_a_prover"
-      },
-      "items": [
-        {
-          "type": "doc",
-          "id": "the_aztec_network/setup/prover_single_machine"
-        },
-        {
-          "type": "doc",
-          "id": "the_aztec_network/setup/prover_distributed"
-        },
-        {
-          "type": "doc",
-          "id": "the_aztec_network/setup/prover_verification_troubleshooting"
-        }
-      ]
+      "type": "doc",
+      "id": "the_aztec_network/setup/running_a_prover"
+    },
+    {
+      "type": "doc",
+      "id": "the_aztec_network/setup/building_from_source"
     },
     {
       "type": "doc",
@@ -133,16 +122,26 @@ const sidebar = {
       },
       "items": [
         {
-          "type": "doc",
-          "id": "the_aztec_network/operation/otel_setup"
+          "type": "category",
+          "label": "Setup Guides",
+          "items": [
+            {
+              "type": "doc",
+              "id": "the_aztec_network/operation/otel_setup"
+            },
+            {
+              "type": "doc",
+              "id": "the_aztec_network/operation/prometheus_setup"
+            },
+            {
+              "type": "doc",
+              "id": "the_aztec_network/operation/grafana_setup"
+            }
+          ]
         },
         {
           "type": "doc",
-          "id": "the_aztec_network/operation/prometheus_setup"
-        },
-        {
-          "type": "doc",
-          "id": "the_aztec_network/operation/grafana_setup"
+          "id": "the_aztec_network/operation/metrics_reference"
         },
         {
           "type": "doc",
@@ -152,12 +151,16 @@ const sidebar = {
     },
     {
       "type": "category",
-      "label": "Advanced Keystore Usage",
+      "label": "Keystore Usage",
       "link": {
         "type": "doc",
         "id": "the_aztec_network/operation/keystore/advanced_keystore_guide"
       },
       "items": [
+        {
+          "type": "doc",
+          "id": "the_aztec_network/operation/keystore/creating_keystores"
+        },
         {
           "type": "doc",
           "id": "the_aztec_network/operation/keystore/storage_methods"
@@ -186,13 +189,17 @@ const sidebar = {
         },
         {
           "type": "doc",
-          "id": "the_aztec_network/operation/sequencer_management/running_delegated_stake"
+          "id": "the_aztec_network/operation/sequencer_management/slashing_and_offenses"
         },
         {
-          "type": "doc",
-          "id": "the_aztec_network/operation/sequencer_management/useful_commands"
-        }
-      ]
+          type: "doc",
+          id: "the_aztec_network/operation/sequencer_management/claiming_rewards",
+        },
+        {
+          type: "doc",
+          id: "the_aztec_network/operation/sequencer_management/useful_commands",
+        },
+      ],
     },
     {
       "type": "doc",

@@ -6,11 +6,12 @@ import {
   MULTI_CALL_ENTRYPOINT_ADDRESS,
   ROUTER_ADDRESS,
 } from '@aztec/constants';
-import { poseidon2Hash } from '@aztec/foundation/crypto';
-import { Fr } from '@aztec/foundation/fields';
+import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { jsonStringify } from '@aztec/foundation/json-rpc';
 import { type LogLevel, createLogger } from '@aztec/foundation/log';
 import { ProtocolContractAddress } from '@aztec/protocol-contracts';
+import { FunctionSelector } from '@aztec/stdlib/abi';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import type { ContractClassPublicWithCommitment, ContractInstanceWithAddress } from '@aztec/stdlib/contract';
 import { SerializableContractInstance } from '@aztec/stdlib/contract';
@@ -26,7 +27,7 @@ import { strict as assert } from 'assert';
 
 import type { AvmExecutionEnvironment } from '../avm/avm_execution_environment.js';
 import type { PublicContractsDBInterface } from '../db_interfaces.js';
-import { getPublicFunctionDebugName } from '../debug_fn_name.js';
+import { getPublicFunctionDebugName, getPublicFunctionSelectorAndName } from '../debug_fn_name.js';
 import type { PublicTreesDB } from '../public_db_sources.js';
 import {
   L1ToL2MessageIndexOutOfRangeError,
@@ -59,7 +60,7 @@ export class PublicPersistableStateManager {
     private readonly trace: PublicSideEffectTraceInterface,
     private readonly firstNullifier: Fr, // Needed for note hashes.
     private readonly timestamp: UInt64, // Needed for contract updates.
-    private readonly doMerkleOperations: boolean = false,
+    private readonly doMerkleOperations: boolean = true,
     private readonly publicStorage: PublicStorage = new PublicStorage(treesDB),
     private readonly nullifiers: NullifierManager = new NullifierManager(treesDB),
   ) {}
@@ -71,18 +72,10 @@ export class PublicPersistableStateManager {
     treesDB: PublicTreesDB,
     contractsDB: PublicContractsDBInterface,
     trace: PublicSideEffectTraceInterface,
-    doMerkleOperations: boolean = false,
     firstNullifier: Fr,
     timestamp: UInt64,
   ): PublicPersistableStateManager {
-    return new PublicPersistableStateManager(
-      treesDB,
-      contractsDB,
-      trace,
-      firstNullifier,
-      timestamp,
-      doMerkleOperations,
-    );
+    return new PublicPersistableStateManager(treesDB, contractsDB, trace, firstNullifier, timestamp);
   }
 
   /**
@@ -171,7 +164,6 @@ export class PublicPersistableStateManager {
     if (this.doMerkleOperations) {
       return await this.treesDB.storageRead(contractAddress, slot);
     } else {
-      // TODO(fcarreiro): I don't get this. PublicStorage CAN end up reading the tree. Why is it in the "dont do merkle operations" branch?
       const read = await this.publicStorage.read(contractAddress, slot);
       this.log.trace(
         `Storage read results (address=${contractAddress}, slot=${slot}): value=${read.value}, cached=${read.cached}`,
@@ -437,6 +429,8 @@ export class PublicPersistableStateManager {
         await this.readStorage(ProtocolContractAddress.ContractInstanceRegistry, storageSlot);
 
       const hash = await readDeployerStorage(delayedPublicMutableHashSlot);
+      // NOTE: The below reads are either not performed (if hash.isZero()) or only performed in unconstrained in c++ simulation.
+      // See UpdateCheck::check_current_class_id documentation - this means if we generate hints from the merkle db, they are unused:
       const delayedPublicMutableValues = await DelayedPublicMutableValues.readFromTree(
         delayedPublicMutableSlot,
         readDeployerStorage,
@@ -537,6 +531,12 @@ export class PublicPersistableStateManager {
 
   public async getPublicFunctionDebugName(avmEnvironment: AvmExecutionEnvironment): Promise<string> {
     return await getPublicFunctionDebugName(this.contractsDB, avmEnvironment.address, avmEnvironment.calldata);
+  }
+
+  public async getPublicFunctionSelectorAndName(
+    avmEnvironment: AvmExecutionEnvironment,
+  ): Promise<{ functionSelector?: FunctionSelector; functionName?: string }> {
+    return await getPublicFunctionSelectorAndName(this.contractsDB, avmEnvironment.address, avmEnvironment.calldata);
   }
 
   public async padTree(treeId: MerkleTreeId, leavesToInsert: number): Promise<void> {

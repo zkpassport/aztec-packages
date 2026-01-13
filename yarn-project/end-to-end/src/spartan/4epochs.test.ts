@@ -2,7 +2,7 @@ import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
 import type { AztecNode } from '@aztec/aztec.js/node';
 import { readFieldCompressedString } from '@aztec/aztec.js/utils';
 import { RollupCheatCodes } from '@aztec/aztec/testing';
-import { getL1ContractsConfigEnvVars } from '@aztec/ethereum';
+import { getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
 import { EthCheatCodesWithState } from '@aztec/ethereum/test';
 import { createLogger } from '@aztec/foundation/log';
 import { DateProvider } from '@aztec/foundation/timer';
@@ -15,7 +15,7 @@ import { getSponsoredFPCAddress } from '../fixtures/utils.js';
 import {
   type TestAccounts,
   createWalletAndAztecNodeClient,
-  deploySponsoredTestAccounts,
+  deploySponsoredTestAccountsWithTokens,
 } from './setup_test_wallets.js';
 import { setupEnvironment, startPortForwardForEthereum, startPortForwardForRPC } from './utils.js';
 
@@ -58,7 +58,7 @@ describe('token transfer test', () => {
     ({ wallet, aztecNode, cleanup } = await createWalletAndAztecNodeClient(rpcUrl, config.REAL_VERIFIER, logger));
 
     // Setup wallets
-    testAccounts = await deploySponsoredTestAccounts(wallet, aztecNode, MINT_AMOUNT, logger);
+    testAccounts = await deploySponsoredTestAccountsWithTokens(wallet, aztecNode, MINT_AMOUNT, logger);
 
     expect(ROUNDS).toBeLessThanOrEqual(MINT_AMOUNT);
     logger.info(`Tested wallets setup: ${ROUNDS} < ${MINT_AMOUNT}`);
@@ -119,7 +119,7 @@ describe('token transfer test', () => {
 
       await Promise.all(provenTxs.map(t => t.send().wait({ timeout: 600 })));
       const currentSlot = await rollupCheatCodes.getSlot();
-      expect(currentSlot).toBeLessThanOrEqual(startSlot + i + MAX_MISSED_SLOTS);
+      expect(BigInt(currentSlot)).toBeLessThanOrEqual(BigInt(startSlot) + i + MAX_MISSED_SLOTS);
       const startEpoch = await rollupCheatCodes.getEpoch();
       logger.debug(
         `Successfully reached slot ${currentSlot} (iteration ${

@@ -1,4 +1,4 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { setupCustomSnapshotSerializers } from '@aztec/foundation/testing';
 
 import { type FunctionAbi, FunctionType } from '../abi/index.js';
@@ -36,7 +36,7 @@ describe('ContractAddress', () => {
     const mockInitFn: FunctionAbi = {
       functionType: FunctionType.PRIVATE,
       isInitializer: false,
-      isInternal: false,
+      isOnlySelf: false,
       isStatic: false,
       name: 'fun',
       parameters: [{ name: 'param1', type: { kind: 'boolean' }, visibility: 'private' }],

@@ -1,4 +1,4 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import {
   CompleteAddress,
   type ContractInstanceWithAddress,
@@ -138,7 +138,7 @@ export class AccountManager {
       this.getPublicKeys(),
       this.wallet,
       artifact,
-      address => Contract.at(address, artifact, this.wallet),
+      instance => Contract.at(instance.address, artifact, this.wallet),
       new Fr(this.salt),
       constructorArgs,
       constructorName,

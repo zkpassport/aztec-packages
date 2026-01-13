@@ -6,8 +6,9 @@ import {
   DEFAULT_TEARDOWN_L2_GAS_LIMIT,
   NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP,
 } from '@aztec/constants';
-import { Schnorr } from '@aztec/foundation/crypto';
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Schnorr } from '@aztec/foundation/crypto/schnorr';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { LogLevels, type Logger, applyStringFormatting, createLogger } from '@aztec/foundation/log';
 import { TestDateProvider } from '@aztec/foundation/timer';
 import type { KeyStore } from '@aztec/key-store';
@@ -38,25 +39,26 @@ import {
   witnessMapToFields,
 } from '@aztec/simulator/client';
 import {
+  CppPublicTxSimulator,
   GuardedMerkleTreeOperations,
   PublicContractsDB,
   PublicProcessor,
-  PublicTxSimulator,
 } from '@aztec/simulator/server';
 import { type ContractArtifact, FunctionSelector, FunctionType } from '@aztec/stdlib/abi';
 import { AuthWitness } from '@aztec/stdlib/auth-witness';
+import { PublicSimulatorConfig } from '@aztec/stdlib/avm';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { Body, L2Block } from '@aztec/stdlib/block';
 import { type ContractInstanceWithAddress, computePartialAddress } from '@aztec/stdlib/contract';
 import { Gas, GasFees, GasSettings } from '@aztec/stdlib/gas';
-import { computeCalldataHash, siloNullifier } from '@aztec/stdlib/hash';
+import { computeCalldataHash, computeProtocolNullifier, siloNullifier } from '@aztec/stdlib/hash';
 import {
   PartialPrivateTailPublicInputsForPublic,
   PrivateKernelTailCircuitPublicInputs,
   PrivateToPublicAccumulatedData,
   PublicCallRequest,
 } from '@aztec/stdlib/kernel';
-import { ClientIvcProof } from '@aztec/stdlib/proofs';
+import { ChonkProof } from '@aztec/stdlib/proofs';
 import { makeAppendOnlyTreeSnapshot, makeGlobalVariables } from '@aztec/stdlib/testing';
 import { MerkleTreeId } from '@aztec/stdlib/trees';
 import {
@@ -131,8 +133,8 @@ export class TXEOracleTopLevelContext implements IMiscOracle, ITxeExecutionOracl
     this.logger[levelName](`${applyStringFormatting(message, fields)}`, { module: `${this.logger.module}:debug_log` });
   }
 
-  async txeGetNextBlockNumber(): Promise<number> {
-    return (await this.getLastBlockNumber()) + 1;
+  async txeGetNextBlockNumber(): Promise<BlockNumber> {
+    return BlockNumber((await this.getLastBlockNumber()) + 1);
   }
 
   txeGetNextBlockTimestamp(): Promise<bigint> {
@@ -291,8 +293,8 @@ export class TXEOracleTopLevelContext implements IMiscOracle, ITxeExecutionOracl
 
     const blockHeader = await this.pxeOracleInterface.getAnchorBlockHeader();
 
-    const txRequestHash = getSingleTxBlockRequestHash(blockNumber);
-    const noteCache = new ExecutionNoteCache(txRequestHash);
+    const protocolNullifier = await computeProtocolNullifier(getSingleTxBlockRequestHash(blockNumber));
+    const noteCache = new ExecutionNoteCache(protocolNullifier);
     const taggingIndexCache = new ExecutionTaggingIndexCache();
 
     const simulator = new WASMSimulator();
@@ -359,7 +361,7 @@ export class TXEOracleTopLevelContext implements IMiscOracle, ITxeExecutionOracl
     // According to the protocol rules, the nonce generator for the note hashes
     // can either be the first nullifier in the tx or the hash of the initial tx request
     // if there are none.
-    const nonceGenerator = result.firstNullifier.equals(Fr.ZERO) ? txRequestHash : result.firstNullifier;
+    const nonceGenerator = result.firstNullifier.equals(Fr.ZERO) ? protocolNullifier : result.firstNullifier;
     const { publicInputs } = await generateSimulatedProvingResult(result, nonceGenerator, this.contractDataProvider);
 
     const globals = makeGlobalVariables();
@@ -373,20 +375,24 @@ export class TXEOracleTopLevelContext implements IMiscOracle, ITxeExecutionOracl
 
     const contractsDB = new PublicContractsDB(new TXEPublicContractDataSource(blockNumber, this.contractDataProvider));
     const guardedMerkleTrees = new GuardedMerkleTreeOperations(forkedWorldTrees);
+    const config = PublicSimulatorConfig.from({
+      skipFeeEnforcement: true,
+      collectDebugLogs: true,
+      collectHints: false,
+      collectStatistics: false,
+      collectCallMetadata: true,
+    });
     const processor = new PublicProcessor(
       globals,
       guardedMerkleTrees,
       contractsDB,
-      new PublicTxSimulator(guardedMerkleTrees, contractsDB, globals, {
-        doMerkleOperations: true,
-        skipFeeEnforcement: true,
-      }),
+      new CppPublicTxSimulator(guardedMerkleTrees, contractsDB, globals, config),
       new TestDateProvider(),
     );
 
     const tx = await Tx.create({
       data: publicInputs,
-      clientIvcProof: ClientIvcProof.empty(),
+      chonkProof: ChonkProof.empty(),
       contractClassLogFields: [],
       publicFunctionCalldata: result.publicFunctionCalldata,
     });
@@ -486,10 +492,14 @@ export class TXEOracleTopLevelContext implements IMiscOracle, ITxeExecutionOracl
 
     const contractsDB = new PublicContractsDB(new TXEPublicContractDataSource(blockNumber, this.contractDataProvider));
     const guardedMerkleTrees = new GuardedMerkleTreeOperations(forkedWorldTrees);
-    const simulator = new PublicTxSimulator(guardedMerkleTrees, contractsDB, globals, {
-      doMerkleOperations: true,
+    const config = PublicSimulatorConfig.from({
       skipFeeEnforcement: true,
+      collectDebugLogs: true,
+      collectHints: false,
+      collectStatistics: false,
+      collectCallMetadata: true,
     });
+    const simulator = new CppPublicTxSimulator(guardedMerkleTrees, contractsDB, globals, config);
     const processor = new PublicProcessor(globals, guardedMerkleTrees, contractsDB, simulator, new TestDateProvider());
 
     // We're simulating a scenario in which private execution immediately enqueues a public call and halts. The private
@@ -497,9 +507,7 @@ export class TXEOracleTopLevelContext implements IMiscOracle, ITxeExecutionOracl
     // side-effect, which the AVM then expects to exist in order to use it as the nonce generator when siloing notes as
     // unique.
     const nonRevertibleAccumulatedData = PrivateToPublicAccumulatedData.empty();
-    if (!isStaticCall) {
-      nonRevertibleAccumulatedData.nullifiers[0] = getSingleTxBlockRequestHash(blockNumber);
-    }
+    nonRevertibleAccumulatedData.nullifiers[0] = getSingleTxBlockRequestHash(blockNumber);
 
     // The enqueued public call itself we make be revertible so that the public execution is itself revertible, as tests
     // may require producing reverts.
@@ -530,7 +538,7 @@ export class TXEOracleTopLevelContext implements IMiscOracle, ITxeExecutionOracl
 
     const tx = await Tx.create({
       data: txData,
-      clientIvcProof: ClientIvcProof.empty(),
+      chonkProof: ChonkProof.empty(),
       contractClassLogFields: [],
       publicFunctionCalldata: [calldataHashedValues],
     });
@@ -652,7 +660,8 @@ export class TXEOracleTopLevelContext implements IMiscOracle, ITxeExecutionOracl
     return [this.nextBlockTimestamp, this.authwits];
   }
 
-  private async getLastBlockNumber(): Promise<number> {
-    return (await this.stateMachine.node.getBlockHeader('latest'))?.globalVariables.blockNumber ?? 0;
+  private async getLastBlockNumber(): Promise<BlockNumber> {
+    const header = await this.stateMachine.node.getBlockHeader('latest');
+    return header ? header.globalVariables.blockNumber : BlockNumber.ZERO;
   }
 }

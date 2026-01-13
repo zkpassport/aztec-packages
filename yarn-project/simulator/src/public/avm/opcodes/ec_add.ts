@@ -1,5 +1,5 @@
-import { Grumpkin } from '@aztec/foundation/crypto';
-import { Point } from '@aztec/foundation/fields';
+import { Grumpkin } from '@aztec/foundation/crypto/grumpkin';
+import { Point } from '@aztec/foundation/curves/grumpkin';
 
 import type { AvmContext } from '../avm_context.js';
 import { Field, TypeTag, Uint1 } from '../avm_memory_types.js';
@@ -78,14 +78,13 @@ export class EcAdd extends Instruction {
       throw new EcAddPointNotOnCurveError(/*pointIndex=*/ 2, p2);
     }
 
-    const grumpkin = new Grumpkin();
     let dest;
     if (p1IsInfinite) {
       dest = p2;
     } else if (p2IsInfinite) {
       dest = p1;
     } else {
-      dest = await grumpkin.add(p1, p2);
+      dest = await Grumpkin.add(p1, p2);
     }
 
     // Important to use setSlice() and not set() in the two following statements as

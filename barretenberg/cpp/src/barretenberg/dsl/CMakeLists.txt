@@ -1,14 +1,14 @@
 set(DSL_DEPENDENCIES
-    client_ivc
+    chonk
     ultra_honk
     stdlib_sha256
     stdlib_aes128
+    stdlib_blake2s
     stdlib_blake3s
     stdlib_keccak
     stdlib_poseidon2
-    stdlib_schnorr
     stdlib_honk_verifier
-    stdlib_client_ivc_verifier)
+    stdlib_chonk_verifier)
 
 barretenberg_module(
     dsl
@@ -21,4 +21,7 @@ barretenberg_module(
 # if(NOT WASM AND NOT FUZZING)
 if(NOT WASM AND NOT FUZZING AND NOT MOBILE)
     target_link_libraries(dsl_tests PRIVATE vm2_stub)
+endif()
+if(FUZZING)
+    target_link_libraries(dsl_acir_dsl_fuzzer PRIVATE vm2_stub)
 endif()

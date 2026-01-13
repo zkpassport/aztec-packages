@@ -1,4 +1,4 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { computeNoteHashNonce, computeUniqueNoteHash, siloNoteHash, siloNullifier } from '@aztec/stdlib/hash';
 
@@ -44,9 +44,9 @@ export class ExecutionNoteCache {
    * We don't need to use the tx request hash for nonces if another non revertible nullifier is emitted.
    * In that case we disable injecting the tx request hash as a nullifier.
    */
-  private usedTxRequestHashForNonces = true;
+  private usedProtocolNullifierForNonces = true;
 
-  constructor(private readonly txRequestHash: Fr) {}
+  constructor(private readonly protocolNullifier: Fr) {}
 
   /**
    * Enters the revertible phase of the transaction.
@@ -60,12 +60,11 @@ export class ExecutionNoteCache {
     }
     this.inRevertiblePhase = true;
     this.minRevertibleSideEffectCounter = minRevertibleSideEffectCounter;
-
-    let nonceGenerator = this.txRequestHash;
+    let nonceGenerator = this.protocolNullifier;
     const nullifiers = this.getAllNullifiers();
     if (nullifiers.length > 0) {
       nonceGenerator = new Fr(nullifiers[0]);
-      this.usedTxRequestHashForNonces = false;
+      this.usedProtocolNullifierForNonces = false;
     }
 
     // The existing pending notes are all non-revertible.
@@ -92,14 +91,22 @@ export class ExecutionNoteCache {
     updatedNotes.forEach(n => this.#addNote(n));
   }
 
-  public finish() {
-    // If we never entered the revertible phase, we need to use the tx request hash as a nonce for the notes if no nullifiers have been emitted.
+  public isSideEffectCounterRevertible(sideEffectCounter: number): boolean {
     if (!this.inRevertiblePhase) {
-      this.usedTxRequestHashForNonces = this.getAllNullifiers().length === 0;
+      return false;
+    }
+    return sideEffectCounter >= this.minRevertibleSideEffectCounter;
+  }
+
+  public finish() {
+    // If we never entered the revertible phase, we need to use the protocol nullifier to compute the nonces for the
+    // notes if no nullifiers have been emitted.
+    if (!this.inRevertiblePhase) {
+      this.usedProtocolNullifierForNonces = this.getAllNullifiers().length === 0;
     }
     // If we entered the revertible phase, the nonce generator was decided based on wether or not a nullifier was emitted before entering.
     return {
-      usedTxRequestHashForNonces: this.usedTxRequestHashForNonces,
+      usedProtocolNullifierForNonces: this.usedProtocolNullifierForNonces,
     };
   }
 
@@ -166,11 +173,15 @@ export class ExecutionNoteCache {
    * Return notes created up to current point in execution.
    * If a nullifier for a note in this list is emitted, the note will be deleted.
    * @param contractAddress - Contract address of the notes.
+   * @param owner - Owner of the notes. If undefined, returns all notes regardless of owner.
    * @param storageSlot - Storage slot of the notes.
    **/
-  public getNotes(contractAddress: AztecAddress, storageSlot: Fr) {
+  public getNotes(contractAddress: AztecAddress, owner: AztecAddress | undefined, storageSlot: Fr) {
     const notes = this.noteMap.get(contractAddress.toBigInt()) ?? [];
-    return notes.filter(n => n.note.storageSlot.equals(storageSlot)).map(n => n.note);
+    return notes
+      .filter(n => owner === undefined || n.note.owner.equals(owner))
+      .filter(n => n.note.storageSlot.equals(storageSlot))
+      .map(n => n.note);
   }
 
   /**

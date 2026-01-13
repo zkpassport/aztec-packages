@@ -11,8 +11,8 @@
 
 namespace bb {
 template <typename FF_>
-CircuitBuilderBase<FF_>::CircuitBuilderBase(size_t size_hint, bool has_dummy_witnesses)
-    : _has_dummy_witnesses(has_dummy_witnesses)
+CircuitBuilderBase<FF_>::CircuitBuilderBase(size_t size_hint, bool is_write_vk_mode)
+    : _is_write_vk_mode(is_write_vk_mode)
 {
     variables.reserve(size_hint * 3);
     variable_names.reserve(size_hint * 3);
@@ -25,16 +25,6 @@ CircuitBuilderBase<FF_>::CircuitBuilderBase(size_t size_hint, bool has_dummy_wit
 template <typename FF_> size_t CircuitBuilderBase<FF_>::get_num_finalized_gates() const
 {
     return _num_gates;
-}
-
-template <typename FF_> size_t CircuitBuilderBase<FF_>::get_estimated_num_finalized_gates() const
-{
-    return _num_gates;
-}
-
-template <typename FF_> void CircuitBuilderBase<FF_>::print_num_estimated_finalized_gates() const
-{
-    info(_num_gates);
 }
 
 template <typename FF_> size_t CircuitBuilderBase<FF_>::get_num_variables() const
@@ -71,7 +61,7 @@ template <typename FF_> uint32_t CircuitBuilderBase<FF_>::add_variable(const FF&
     return index;
 }
 
-// AUDITTODO: is this used?
+// Only used in SMT verification
 template <typename FF_> void CircuitBuilderBase<FF_>::set_variable_name(uint32_t index, const std::string& name)
 {
     BB_ASSERT_DEBUG(variables.size() > index);
@@ -188,7 +178,7 @@ template <typename FF_> const std::string& CircuitBuilderBase<FF_>::err() const
 template <typename FF_> void CircuitBuilderBase<FF_>::failure(std::string msg)
 {
 #ifndef FUZZING_DISABLE_WARNINGS
-    if (!_has_dummy_witnesses) {
+    if (!_is_write_vk_mode) {
         // Not a catch-all error log. We have a builder failure when we have real witnesses which is a mistake.
         info("(Experimental) WARNING: Builder failure when we have real witnesses! Ignore if writing vk.");
     }

@@ -7,63 +7,62 @@ contract Updatable {
         macros::{functions::{external, initializer}, storage::storage},
         messages::message_delivery::MessageDelivery,
         protocol_types::{
-            constants::CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS,
+            address::AztecAddress, constants::CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS,
             contract_class_id::ContractClassId,
         },
-        state_vars::{PrivateMutable, PublicMutable},
+        state_vars::{Owned, PrivateMutable, PublicMutable},
     };
     use contract_instance_registry::ContractInstanceRegistry;
-    use value_note::value_note::ValueNote;
+    use field_note::field_note::FieldNote;
 
     #[storage]
     struct Storage<Context> {
-        private_value: PrivateMutable<ValueNote, Context>,
+        private_value: Owned<PrivateMutable<FieldNote, Context>, Context>,
         public_value: PublicMutable<Field, Context>,
     }
 
     #[initializer]
     #[external("private")]
     fn initialize(initial_value: Field) {
-        let owner = context.msg_sender().unwrap();
-        let new_value = ValueNote::new(initial_value, owner);
-        storage.private_value.initialize(new_value).emit(owner, MessageDelivery.CONSTRAINED_ONCHAIN);
-        Updatable::at(context.this_address()).set_public_value(initial_value).enqueue(&mut context);
+        let owner = self.msg_sender().unwrap();
+        let note = FieldNote { value: initial_value };
+        self.storage.private_value.at(owner).initialize(note).deliver(
+            MessageDelivery.CONSTRAINED_ONCHAIN,
+        );
+        self.enqueue_self.set_public_value(initial_value);
     }
 
     #[external("public")]
     fn set_public_value(new_value: Field) {
-        storage.public_value.write(new_value);
+        self.storage.public_value.write(new_value);
     }
 
     #[external("private")]
     fn update_to(new_class_id: ContractClassId) {
-        ContractInstanceRegistry::at(CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS)
-            .update(new_class_id)
-            .enqueue(&mut context);
+        self.enqueue(ContractInstanceRegistry::at(CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS)
+            .update(new_class_id));
     }
 
     #[external("private")]
     fn set_update_delay(new_delay: u64) {
-        ContractInstanceRegistry::at(CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS)
-            .set_update_delay(new_delay)
-            .enqueue(&mut context);
+        self.enqueue(ContractInstanceRegistry::at(CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS)
+            .set_update_delay(new_delay));
     }
 
     #[external("public")]
     fn get_update_delay() -> u64 {
-        ContractInstanceRegistry::at(CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS)
-            .get_update_delay()
-            .view(&mut context)
+        self.view(ContractInstanceRegistry::at(CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS)
+            .get_update_delay())
     }
 
     #[external("utility")]
-    unconstrained fn get_private_value() -> Field {
-        storage.private_value.view_note().value()
+    unconstrained fn get_private_value(owner: AztecAddress) -> Field {
+        self.storage.private_value.at(owner).view_note().value
     }
 
     #[external("utility")]
     unconstrained fn get_public_value() -> Field {
-        storage.public_value.read()
+        self.storage.public_value.read()
     }
 
 }

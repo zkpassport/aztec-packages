@@ -1,4 +1,5 @@
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import { KeyStore } from '@aztec/key-store';
 import { openTmpStore } from '@aztec/kv-store/lmdb-v2';
@@ -25,10 +26,10 @@ import type { AuthWitness } from '@aztec/stdlib/auth-witness';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { Body, L2Block } from '@aztec/stdlib/block';
 import { GasSettings } from '@aztec/stdlib/gas';
+import { computeProtocolNullifier } from '@aztec/stdlib/hash';
 import { PrivateContextInputs } from '@aztec/stdlib/kernel';
 import { makeAppendOnlyTreeSnapshot, makeGlobalVariables } from '@aztec/stdlib/testing';
 import { CallContext, GlobalVariables, TxContext } from '@aztec/stdlib/tx';
-import type { UInt32 } from '@aztec/stdlib/types';
 
 import { z } from 'zod';
 
@@ -66,7 +67,7 @@ type SessionState =
   | {
       name: 'PRIVATE';
       nextBlockGlobalVariables: GlobalVariables;
-      txRequestHash: Fr;
+      protocolNullifier: Fr;
       noteCache: ExecutionNoteCache;
       taggingIndexCache: ExecutionTaggingIndexCache;
     }
@@ -101,7 +102,7 @@ export type TXEOracleFunctionName = Exclude<
 export interface TXESessionStateHandler {
   enterTopLevelState(): Promise<void>;
   enterPublicState(contractAddress?: AztecAddress): Promise<void>;
-  enterPrivateState(contractAddress?: AztecAddress, anchorBlockNumber?: UInt32): Promise<PrivateContextInputs>;
+  enterPrivateState(contractAddress?: AztecAddress, anchorBlockNumber?: BlockNumber): Promise<PrivateContextInputs>;
   enterUtilityState(contractAddress?: AztecAddress): Promise<void>;
 }
 
@@ -270,7 +271,7 @@ export class TXESession implements TXESessionStateHandler {
 
   async enterPrivateState(
     contractAddress: AztecAddress = DEFAULT_ADDRESS,
-    anchorBlockNumber?: UInt32,
+    anchorBlockNumber?: BlockNumber,
   ): Promise<PrivateContextInputs> {
     this.exitTopLevelState();
 
@@ -288,14 +289,15 @@ export class TXESession implements TXESessionStateHandler {
     const latestBlock = await this.stateMachine.node.getBlockHeader('latest');
 
     const nextBlockGlobalVariables = makeGlobalVariables(undefined, {
-      blockNumber: latestBlock!.globalVariables.blockNumber + 1,
+      blockNumber: BlockNumber(latestBlock!.globalVariables.blockNumber + 1),
       timestamp: this.nextBlockTimestamp,
       version: this.version,
       chainId: this.chainId,
     });
 
     const txRequestHash = getSingleTxBlockRequestHash(nextBlockGlobalVariables.blockNumber);
-    const noteCache = new ExecutionNoteCache(txRequestHash);
+    const protocolNullifier = await computeProtocolNullifier(txRequestHash);
+    const noteCache = new ExecutionNoteCache(protocolNullifier);
     const taggingIndexCache = new ExecutionTaggingIndexCache();
 
     this.oracleHandler = new PrivateExecutionOracle(
@@ -316,7 +318,7 @@ export class TXESession implements TXESessionStateHandler {
     // difference resides in that the simulator has all information needed in order to run the simulation, while ours
     // will be ongoing as the different oracles will be invoked from the Noir test, until eventually the private
     // execution finishes.
-    this.state = { name: 'PRIVATE', nextBlockGlobalVariables, txRequestHash, noteCache, taggingIndexCache };
+    this.state = { name: 'PRIVATE', nextBlockGlobalVariables, protocolNullifier, noteCache, taggingIndexCache };
     this.logger.debug(`Entered state ${this.state.name}`);
 
     return (this.oracleHandler as PrivateExecutionOracle).getPrivateContextInputs();
@@ -329,7 +331,7 @@ export class TXESession implements TXESessionStateHandler {
     // the test. The block therefore gets the *next* block number and timestamp.
     const latestBlockNumber = (await this.stateMachine.node.getBlockHeader('latest'))!.globalVariables.blockNumber;
     const globalVariables = makeGlobalVariables(undefined, {
-      blockNumber: latestBlockNumber + 1,
+      blockNumber: BlockNumber(latestBlockNumber + 1),
       timestamp: this.nextBlockTimestamp,
       version: this.version,
       chainId: this.chainId,
@@ -392,7 +394,7 @@ export class TXESession implements TXESessionStateHandler {
     // logs (other effects like enqueued public calls don't need to be considered since those are not allowed).
     const txEffect = await makeTxEffect(
       this.state.noteCache,
-      this.state.txRequestHash,
+      this.state.protocolNullifier,
       this.state.nextBlockGlobalVariables.blockNumber,
     );
 

@@ -1,16 +1,12 @@
 import type { L1_TO_L2_MSG_TREE_HEIGHT } from '@aztec/constants';
 import { timesParallel } from '@aztec/foundation/collection';
-import { Fr, Point } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
+import { Point } from '@aztec/foundation/curves/grumpkin';
 import { createLogger } from '@aztec/foundation/log';
 import type { KeyStore } from '@aztec/key-store';
-import {
-  EventSelector,
-  type FunctionArtifactWithContractName,
-  FunctionSelector,
-  getFunctionArtifact,
-} from '@aztec/stdlib/abi';
+import { EventSelector, type FunctionArtifactWithContractName, FunctionSelector } from '@aztec/stdlib/abi';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
-import type { InBlock, L2Block, L2BlockNumber } from '@aztec/stdlib/block';
+import type { BlockParameter, DataInBlock, L2Block } from '@aztec/stdlib/block';
 import type { CompleteAddress, ContractInstance } from '@aztec/stdlib/contract';
 import { computeUniqueNoteHash, siloNoteHash, siloNullifier, siloPrivateLog } from '@aztec/stdlib/hash';
 import { type AztecNode, MAX_RPC_LEN } from '@aztec/stdlib/interfaces/client';
@@ -26,6 +22,7 @@ import {
 } from '@aztec/stdlib/logs';
 import { getNonNullifiedL1ToL2MessageWitness } from '@aztec/stdlib/messaging';
 import { Note, type NoteStatus } from '@aztec/stdlib/note';
+import { NoteDao } from '@aztec/stdlib/note';
 import { MerkleTreeId, type NullifierMembershipWitness, PublicDataWitness } from '@aztec/stdlib/trees';
 import type { BlockHeader } from '@aztec/stdlib/tx';
 import { TxHash } from '@aztec/stdlib/tx';
@@ -36,7 +33,6 @@ import { ORACLE_VERSION } from '../oracle_version.js';
 import type { AddressDataProvider } from '../storage/address_data_provider/address_data_provider.js';
 import type { CapsuleDataProvider } from '../storage/capsule_data_provider/capsule_data_provider.js';
 import type { ContractDataProvider } from '../storage/contract_data_provider/contract_data_provider.js';
-import { NoteDao } from '../storage/note_data_provider/note_dao.js';
 import type { NoteDataProvider } from '../storage/note_data_provider/note_data_provider.js';
 import type { PrivateEventDataProvider } from '../storage/private_event_data_provider/private_event_data_provider.js';
 import type { SyncDataProvider } from '../storage/sync_data_provider/sync_data_provider.js';
@@ -81,7 +77,7 @@ export class PXEOracleInterface implements ExecutionDataProvider {
     if (!completeAddress) {
       throw new Error(
         `No public key registered for address ${account}.
-        Register it by calling pxe.addAccount(...).\nSee docs for context: https://docs.aztec.network/developers/reference/debugging/aztecnr-errors#simulation-error-no-public-key-registered-for-address-0x0-register-it-by-calling-pxeregisterrecipient-or-pxeregisteraccount`,
+        Register it by calling pxe.addAccount(...).\nSee docs for context: https://docs.aztec.network/developers/resources/debugging/aztecnr-errors#simulation-error-no-public-key-registered-for-address-0x0-register-it-by-calling-pxeregisterrecipient-or-pxeregisteraccount`,
       );
     }
     return completeAddress;
@@ -95,23 +91,34 @@ export class PXEOracleInterface implements ExecutionDataProvider {
     return instance;
   }
 
-  async getNotes(contractAddress: AztecAddress, storageSlot: Fr, status: NoteStatus, scopes?: AztecAddress[]) {
+  async getNotes(
+    contractAddress: AztecAddress,
+    owner: AztecAddress | undefined,
+    storageSlot: Fr,
+    status: NoteStatus,
+    scopes?: AztecAddress[],
+  ) {
     const noteDaos = await this.noteDataProvider.getNotes({
       contractAddress,
+      owner,
       storageSlot,
       status,
       scopes,
     });
-    return noteDaos.map(({ contractAddress, storageSlot, noteNonce, note, noteHash, siloedNullifier, index }) => ({
-      contractAddress,
-      storageSlot,
-      noteNonce,
-      note,
-      noteHash,
-      siloedNullifier,
-      // PXE can use this index to get full MembershipWitness
-      index,
-    }));
+    return noteDaos.map(
+      ({ contractAddress, owner, storageSlot, randomness, noteNonce, note, noteHash, siloedNullifier, index }) => ({
+        contractAddress,
+        owner,
+        storageSlot,
+        randomness,
+        noteNonce,
+        note,
+        noteHash,
+        siloedNullifier,
+        // PXE can use this index to get full MembershipWitness
+        index,
+      }),
+    );
   }
 
   async getFunctionArtifact(
@@ -127,18 +134,6 @@ export class PXEOracleInterface implements ExecutionDataProvider {
       ...artifact,
       debug,
     };
-  }
-
-  async getFunctionArtifactByName(
-    contractAddress: AztecAddress,
-    functionName: string,
-  ): Promise<FunctionArtifactWithContractName | undefined> {
-    const instance = await this.contractDataProvider.getContractInstance(contractAddress);
-    if (!instance) {
-      return;
-    }
-    const artifact = await this.contractDataProvider.getContractArtifact(instance.currentContractClassId);
-    return artifact && getFunctionArtifact(artifact, functionName);
   }
 
   /**
@@ -169,12 +164,12 @@ export class PXEOracleInterface implements ExecutionDataProvider {
     return await this.#findLeafIndex('latest', MerkleTreeId.NULLIFIER_TREE, nullifier);
   }
 
-  async #findLeafIndex(blockNumber: L2BlockNumber, treeId: MerkleTreeId, leafValue: Fr): Promise<bigint | undefined> {
+  async #findLeafIndex(blockNumber: BlockParameter, treeId: MerkleTreeId, leafValue: Fr): Promise<bigint | undefined> {
     const [leafIndex] = await this.aztecNode.findLeavesIndexes(blockNumber, treeId, [leafValue]);
     return leafIndex?.data;
   }
 
-  public async getMembershipWitness(blockNumber: number, treeId: MerkleTreeId, leafValue: Fr): Promise<Fr[]> {
+  public async getMembershipWitness(blockNumber: BlockParameter, treeId: MerkleTreeId, leafValue: Fr): Promise<Fr[]> {
     const witness = await this.#tryGetMembershipWitness(blockNumber, treeId, leafValue);
     if (!witness) {
       throw new Error(`Leaf value ${leafValue} not found in tree ${MerkleTreeId[treeId]} at block ${blockNumber}`);
@@ -182,7 +177,11 @@ export class PXEOracleInterface implements ExecutionDataProvider {
     return witness;
   }
 
-  async #tryGetMembershipWitness(blockNumber: number, treeId: MerkleTreeId, value: Fr): Promise<Fr[] | undefined> {
+  async #tryGetMembershipWitness(
+    blockNumber: BlockParameter,
+    treeId: MerkleTreeId,
+    value: Fr,
+  ): Promise<Fr[] | undefined> {
     switch (treeId) {
       case MerkleTreeId.NULLIFIER_TREE:
         return (await this.aztecNode.getNullifierMembershipWitness(blockNumber, value))?.withoutPreimage().toFields();
@@ -203,42 +202,42 @@ export class PXEOracleInterface implements ExecutionDataProvider {
   }
 
   public getNullifierMembershipWitness(
-    blockNumber: number,
+    blockNumber: BlockParameter,
     nullifier: Fr,
   ): Promise<NullifierMembershipWitness | undefined> {
     return this.aztecNode.getNullifierMembershipWitness(blockNumber, nullifier);
   }
 
   public async getLowNullifierMembershipWitness(
-    blockNumber: number,
+    blockNumber: BlockParameter,
     nullifier: Fr,
   ): Promise<NullifierMembershipWitness | undefined> {
     const header = await this.getAnchorBlockHeader();
-    if (blockNumber > header.globalVariables.blockNumber) {
+    if (blockNumber !== 'latest' && blockNumber > header.globalVariables.blockNumber) {
       throw new Error(`Block number ${blockNumber} is higher than current block ${header.globalVariables.blockNumber}`);
     }
     return this.aztecNode.getLowNullifierMembershipWitness(blockNumber, nullifier);
   }
 
-  public async getBlock(blockNumber: number): Promise<L2Block | undefined> {
+  public async getBlock(blockNumber: BlockParameter): Promise<L2Block | undefined> {
     const header = await this.getAnchorBlockHeader();
-    if (blockNumber > header.globalVariables.blockNumber) {
+    if (blockNumber !== 'latest' && blockNumber > header.globalVariables.blockNumber) {
       throw new Error(`Block number ${blockNumber} is higher than current block ${header.globalVariables.blockNumber}`);
     }
     return await this.aztecNode.getBlock(blockNumber);
   }
 
-  public async getPublicDataWitness(blockNumber: number, leafSlot: Fr): Promise<PublicDataWitness | undefined> {
+  public async getPublicDataWitness(blockNumber: BlockParameter, leafSlot: Fr): Promise<PublicDataWitness | undefined> {
     const header = await this.getAnchorBlockHeader();
-    if (blockNumber > header.globalVariables.blockNumber) {
+    if (blockNumber !== 'latest' && blockNumber > header.globalVariables.blockNumber) {
       throw new Error(`Block number ${blockNumber} is higher than current block ${header.globalVariables.blockNumber}`);
     }
     return await this.aztecNode.getPublicDataWitness(blockNumber, leafSlot);
   }
 
-  public async getPublicStorageAt(blockNumber: number, contract: AztecAddress, slot: Fr): Promise<Fr> {
+  public async getPublicStorageAt(blockNumber: BlockParameter, contract: AztecAddress, slot: Fr): Promise<Fr> {
     const header = await this.getAnchorBlockHeader();
-    if (blockNumber > header.globalVariables.blockNumber) {
+    if (blockNumber !== 'latest' && blockNumber > header.globalVariables.blockNumber) {
       throw new Error(`Block number ${blockNumber} is higher than current block ${header.globalVariables.blockNumber}`);
     }
     return await this.aztecNode.getPublicStorageAt(blockNumber, contract, slot);
@@ -613,7 +612,9 @@ export class PXEOracleInterface implements ExecutionDataProvider {
     const noteDeliveries = noteValidationRequests.map(request =>
       this.deliverNote(
         request.contractAddress,
+        request.owner,
         request.storageSlot,
+        request.randomness,
         request.noteNonce,
         request.content,
         request.noteHash,
@@ -643,7 +644,9 @@ export class PXEOracleInterface implements ExecutionDataProvider {
 
   async deliverNote(
     contractAddress: AztecAddress,
+    owner: AztecAddress,
     storageSlot: Fr,
+    randomness: Fr,
     noteNonce: Fr,
     content: Fr[],
     noteHash: Fr,
@@ -677,6 +680,20 @@ export class PXEOracleInterface implements ExecutionDataProvider {
     const uniqueNoteHash = await computeUniqueNoteHash(noteNonce, await siloNoteHash(contractAddress, noteHash));
     const siloedNullifier = await siloNullifier(contractAddress, nullifier);
 
+    const txEffect = await this.aztecNode.getTxEffect(txHash);
+    if (!txEffect) {
+      throw new Error(`Could not find tx effect for tx hash ${txHash}`);
+    }
+
+    if (txEffect.l2BlockNumber > syncedBlockNumber) {
+      throw new Error(`Could not find tx effect for tx hash ${txHash} as of block number ${syncedBlockNumber}`);
+    }
+
+    const noteInTx = txEffect.data.noteHashes.some(nh => nh.equals(uniqueNoteHash));
+    if (!noteInTx) {
+      throw new Error(`Note hash ${noteHash} (uniqued as ${uniqueNoteHash}) is not present in tx ${txHash}`);
+    }
+
     // We store notes by their index in the global note hash tree, which has the convenient side effect of validating
     // note existence in said tree. We concurrently also check if the note's nullifier exists, performing all node
     // queries in a single round-trip.
@@ -694,17 +711,19 @@ export class PXEOracleInterface implements ExecutionDataProvider {
     const noteDao = new NoteDao(
       new Note(content),
       contractAddress,
+      owner,
       storageSlot,
+      randomness,
       noteNonce,
       noteHash,
       siloedNullifier,
       txHash,
-      uniqueNoteHashTreeIndexInBlock?.l2BlockNumber,
-      uniqueNoteHashTreeIndexInBlock?.l2BlockHash.toString(),
-      uniqueNoteHashTreeIndexInBlock?.data,
-      recipient,
+      uniqueNoteHashTreeIndexInBlock.l2BlockNumber,
+      uniqueNoteHashTreeIndexInBlock.l2BlockHash.toString(),
+      uniqueNoteHashTreeIndexInBlock.data,
     );
 
+    // The note was found by `recipient`, so we use that as the scope when storing the note.
     await this.noteDataProvider.addNotes([noteDao], recipient);
     this.log.verbose('Added note', {
       index: noteDao.index,
@@ -767,7 +786,7 @@ export class PXEOracleInterface implements ExecutionDataProvider {
             privateLog.firstNullifierInTx,
           );
         } else {
-          null;
+          return null;
         }
       }),
     );
@@ -789,15 +808,32 @@ export class PXEOracleInterface implements ExecutionDataProvider {
     content: Fr[],
     eventCommitment: Fr,
     txHash: TxHash,
-    recipient: AztecAddress,
+    scope: AztecAddress,
   ): Promise<void> {
     // While using 'latest' block number would be fine for private events since they cannot be accessed from Aztec.nr
     // (and thus we're less concerned about being ahead of the synced block), we use the synced block number to
     // maintain consistent behavior in the PXE. Additionally, events should never be ahead of the synced block here
     // since `fetchTaggedLogs` only processes logs up to the synced block.
-    const syncedBlockNumber = await this.syncDataProvider.getBlockNumber();
+    const [syncedBlockNumber, siloedEventCommitment, txEffect] = await Promise.all([
+      this.syncDataProvider.getBlockNumber(),
+      siloNullifier(contractAddress, eventCommitment),
+      this.aztecNode.getTxEffect(txHash),
+    ]);
 
-    const siloedEventCommitment = await siloNullifier(contractAddress, eventCommitment);
+    if (!txEffect) {
+      throw new Error(`Could not find tx effect for tx hash ${txHash}`);
+    }
+
+    if (txEffect.l2BlockNumber > syncedBlockNumber) {
+      throw new Error(`Could not find tx effect for tx hash ${txHash} as of block number ${syncedBlockNumber}`);
+    }
+
+    const eventInTx = txEffect.data.nullifiers.some(n => n.equals(siloedEventCommitment));
+    if (!eventInTx) {
+      throw new Error(
+        `Event commitment ${eventCommitment} (siloed as ${siloedEventCommitment}) is not present in tx ${txHash}`,
+      );
+    }
 
     const [nullifierIndex] = await this.aztecNode.findLeavesIndexes(syncedBlockNumber, MerkleTreeId.NULLIFIER_TREE, [
       siloedEventCommitment,
@@ -810,13 +846,16 @@ export class PXEOracleInterface implements ExecutionDataProvider {
     }
 
     return this.privateEventDataProvider.storePrivateEventLog(
-      contractAddress,
-      recipient,
       selector,
       content,
-      txHash,
       Number(nullifierIndex.data), // Index of the event commitment in the nullifier tree
-      nullifierIndex.l2BlockNumber, // Block in which the event was emitted
+      {
+        contractAddress,
+        scope,
+        txHash,
+        l2BlockNumber: nullifierIndex.l2BlockNumber, // Block number in which the event was emitted
+        l2BlockHash: nullifierIndex.l2BlockHash, // Block hash in which the event was emitted
+      },
     );
   }
 
@@ -934,10 +973,10 @@ export class PXEOracleInterface implements ExecutionDataProvider {
     const foundNullifiers = nullifiersToCheck
       .map((nullifier, i) => {
         if (nullifierIndexes[i] !== undefined) {
-          return { ...nullifierIndexes[i], ...{ data: nullifier } } as InBlock<Fr>;
+          return { ...nullifierIndexes[i], ...{ data: nullifier } } as DataInBlock<Fr>;
         }
       })
-      .filter(nullifier => nullifier !== undefined) as InBlock<Fr>[];
+      .filter(nullifier => nullifier !== undefined) as DataInBlock<Fr>[];
 
     const nullifiedNotes = await this.noteDataProvider.applyNullifiers(foundNullifiers);
     nullifiedNotes.forEach(noteDao => {

@@ -48,6 +48,12 @@ variable "VALIDATOR_PUBLISHER_MNEMONIC_START_INDEX" {
   type        = number
 }
 
+variable "VALIDATOR_PUBLISHERS_PER_VALIDATOR_KEY" {
+  description = "Number of publishers for each attester key"
+  type        = number
+  default     = 0
+}
+
 variable "AZTEC_DOCKER_IMAGE" {
   description = "The Aztec image to deploy"
   type        = string
@@ -57,7 +63,7 @@ variable "AZTEC_DOCKER_IMAGE" {
 variable "WEB3SIGNER_DOCKER_IMAGE" {
   description = "The web3signer image to use"
   type        = string
-  default     = "consensys/web3signer:25.3.0"
+  default     = "consensys/web3signer:25.11.0"
 }
 
 variable "KUBECTL_DOCKER_IMAGE" {

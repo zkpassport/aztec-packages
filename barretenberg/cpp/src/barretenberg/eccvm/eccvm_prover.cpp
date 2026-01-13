@@ -19,11 +19,8 @@
 
 namespace bb {
 
-ECCVMProver::ECCVMProver(CircuitBuilder& builder,
-                         const std::shared_ptr<Transcript>& transcript,
-                         const std::shared_ptr<Transcript>& ipa_transcript)
+ECCVMProver::ECCVMProver(CircuitBuilder& builder, const std::shared_ptr<Transcript>& transcript)
     : transcript(transcript)
-    , ipa_transcript(ipa_transcript)
 {
     BB_BENCH_NAME("ECCVMProver(CircuitBuilder&)");
 
@@ -61,6 +58,11 @@ void ECCVMProver::execute_wire_commitments_round()
 
     const size_t circuit_size = key->circuit_size;
     unmasked_witness_size = circuit_size - NUM_DISABLED_ROWS_IN_SUMCHECK;
+
+    // Create and commit to Gemini masking polynomial (for ZK-PCS)
+    key->polynomials.gemini_masking_poly = Polynomial::random(circuit_size);
+    auto masking_commitment = key->commitment_key.commit(key->polynomials.gemini_masking_poly);
+    transcript->send_to_verifier("Gemini:masking_poly_comm", masking_commitment);
 
     auto batch = key->commitment_key.start_batch();
     for (const auto& [wire, label] : zip_view(key->polynomials.get_wires(), commitment_labels.get_wires())) {
@@ -183,18 +185,16 @@ void ECCVMProver::execute_pcs_rounds()
     opening_claims.back() = std::move(multivariate_to_univariate_opening_claim);
 
     // Reduce the opening claims to a single opening claim via Shplonk
-    const OpeningClaim batch_opening_claim = Shplonk::prove(key->commitment_key, opening_claims, transcript);
-
-    // Compute the opening proof for the batched opening claim with the univariate PCS
-    PCS::compute_opening_proof(key->commitment_key, batch_opening_claim, ipa_transcript);
+    // IPA proving is performed externally
+    batch_opening_claim = Shplonk::prove(key->commitment_key, opening_claims, transcript);
 }
 
-ECCVMProof ECCVMProver::export_proof()
+ECCVMProver::Proof ECCVMProver::export_proof()
 {
-    return { transcript->export_proof(), ipa_transcript->export_proof() };
+    return { transcript->export_proof() };
 }
 
-ECCVMProof ECCVMProver::construct_proof()
+std::pair<ECCVMProver::Proof, ECCVMProver::OpeningClaim> ECCVMProver::construct_proof()
 {
     BB_BENCH_NAME("ECCVMProver::construct_proof");
 
@@ -205,7 +205,7 @@ ECCVMProof ECCVMProver::construct_proof()
     execute_relation_check_rounds();
     execute_pcs_rounds();
 
-    return export_proof();
+    return { export_proof(), batch_opening_claim };
 }
 
 /**

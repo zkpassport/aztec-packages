@@ -108,7 +108,6 @@ void place_holder_proof_and_vk(typename Flavor::CircuitBuilder& builder,
                                std::vector<fr>& place_holder_vk_fields,
                                HonkProof& place_holder_proof,
                                field_ct<typename Flavor::CircuitBuilder>& place_holder_vk_hash,
-                               bool has_valid_witness_assignments,
                                size_t proof_size,
                                size_t public_inputs_size,
                                const std::vector<field_ct<typename Flavor::CircuitBuilder>>& vk_fields,
@@ -116,9 +115,9 @@ void place_holder_proof_and_vk(typename Flavor::CircuitBuilder& builder,
 {
     using IO = std::conditional_t<HasIPAAccumulator<Flavor>,
                                   stdlib::recursion::honk::RollupIO,
-                                  stdlib::recursion::honk::DefaultIO<Builder>>;
+                                  stdlib::recursion::honk::DefaultIO<typename Flavor::CircuitBuilder>>;
     // Populate the key fields and proof fields with dummy values to prevent issues (e.g. points must be on curve).
-    if (!has_valid_witness_assignments) {
+    if (builder.is_write_vk_mode()) {
         // In the constraint, the agg object public inputs are still contained in the proof. To get the 'raw' size of
         // the proof and public_inputs we subtract and add the corresponding amount from the respective sizes.
         size_t size_of_proof_with_no_pub_inputs = proof_size - IO::PUBLIC_INPUTS_SIZE;
@@ -160,7 +159,7 @@ void place_holder_proof_and_vk(typename Flavor::CircuitBuilder& builder,
 
 template <typename Flavor>
 HonkRecursionConstraintOutput<typename Flavor::CircuitBuilder> create_honk_recursion_constraints(
-    typename Flavor::CircuitBuilder& builder, const RecursionConstraint& input, bool has_valid_witness_assignments)
+    typename Flavor::CircuitBuilder& builder, const RecursionConstraint& input)
     requires(IsRecursiveFlavor<Flavor> && IsUltraHonk<typename Flavor::NativeFlavor>)
 {
     using Builder = typename Flavor::CircuitBuilder;
@@ -178,7 +177,7 @@ HonkRecursionConstraintOutput<typename Flavor::CircuitBuilder> create_honk_recur
     // Construct an in-circuit representation of the verification key.
     // For now, the v-key is a circuit constant and is fixed for the circuit.
     // (We may need a separate recursion opcode for this to vary, or add more config witnesses to this opcode)
-    std::vector<field_ct<Builder>> vk_fields = RecursionConstraint::fields_from_witnesses(builder, input.key);
+    std::vector<field_ct<Builder>> vk_fields = fields_from_witnesses(builder, input.key);
 
     // Create circuit type for vkey hash.
     auto vk_hash = field_ct<Builder>::from_witness_index(&builder, input.key_hash);
@@ -186,7 +185,7 @@ HonkRecursionConstraintOutput<typename Flavor::CircuitBuilder> create_honk_recur
     // Create witness indices for the proof with public inputs reinserted
     std::vector<uint32_t> proof_indices =
         ProofSurgeon<uint256_t>::create_indices_for_reconstructed_proof(input.proof, input.public_inputs);
-    stdlib::Proof<Builder> proof_fields = RecursionConstraint::fields_from_witnesses(builder, proof_indices);
+    stdlib::Proof<Builder> proof_fields = fields_from_witnesses(builder, proof_indices);
 
     // Recursion constraints come with a predicate (e.g. when the black-box call is done in an if conditional depending
     // on a witness value in a Noir circuit) To keep the circuit constants (selectors and copy constraints) the same
@@ -201,7 +200,6 @@ HonkRecursionConstraintOutput<typename Flavor::CircuitBuilder> create_honk_recur
                                       place_holder_vk_fields,
                                       place_holder_proof,
                                       place_holder_vk_hash,
-                                      has_valid_witness_assignments,
                                       input.proof.size(),
                                       input.public_inputs.size(),
                                       vk_fields,
@@ -250,34 +248,83 @@ HonkRecursionConstraintOutput<typename Flavor::CircuitBuilder> create_honk_recur
     auto vk_and_hash = std::make_shared<RecursiveVKAndHash>(vkey, vk_hash);
     RecursiveVerifier verifier(&builder, vk_and_hash);
     UltraRecursiveVerifierOutput<Builder> verifier_output = verifier.template verify_proof<IO>(proof_fields);
-    // TODO(https://github.com/AztecProtocol/barretenberg/issues/996): investigate whether assert_equal on public inputs
-    // is important, like what the plonk recursion constraint does.
+
+#ifndef NDEBUG
+    native_verification_debug<Flavor>(vkey, proof_fields);
+#endif
+
+    // TODO(https://github.com/AztecProtocol/barretenberg/issues/996): investigate whether
+    // assert_equal on public inputs is important, like what the plonk recursion constraint does.
     return verifier_output;
 }
 
-template HonkRecursionConstraintOutput<UltraCircuitBuilder> create_honk_recursion_constraints<
-    UltraRecursiveFlavor_<UltraCircuitBuilder>>(UltraCircuitBuilder& builder,
-                                                const RecursionConstraint& input,
-                                                bool has_valid_witness_assignments);
+#ifndef NDEBUG
+/**
+ * @brief Natively verify the stdlib proof for debugging
+ */
+template <typename Flavor>
+void native_verification_debug(const std::shared_ptr<typename Flavor::VerificationKey> vkey,
+                               const bb::stdlib::Proof<typename Flavor::CircuitBuilder>& proof_fields)
+{
+    using NativeVerificationKey = typename Flavor::NativeFlavor::VerificationKey;
+    using NativeIO = std::conditional_t<HasIPAAccumulator<Flavor>, bb::RollupIO, bb::DefaultIO>;
 
-template HonkRecursionConstraintOutput<UltraCircuitBuilder> create_honk_recursion_constraints<
-    UltraRollupRecursiveFlavor_<UltraCircuitBuilder>>(UltraCircuitBuilder& builder,
-                                                      const RecursionConstraint& input,
-                                                      bool has_valid_witness_assignments);
+    auto native_vkey = std::make_shared<NativeVerificationKey>(vkey->get_value());
+    HonkProof native_proof = proof_fields.get_value();
 
-template HonkRecursionConstraintOutput<MegaCircuitBuilder> create_honk_recursion_constraints<
-    UltraRecursiveFlavor_<MegaCircuitBuilder>>(MegaCircuitBuilder& builder,
-                                               const RecursionConstraint& input,
-                                               bool has_valid_witness_assignments);
+    HonkProof honk_proof;
+    HonkProof ipa_proof;
+    if constexpr (HasIPAAccumulator<Flavor>) {
+        honk_proof = HonkProof(native_proof.begin(), native_proof.end() - IPA_PROOF_LENGTH);
+        ipa_proof = HonkProof(native_proof.end() - IPA_PROOF_LENGTH, native_proof.end());
+    } else {
+        honk_proof = native_proof;
+    }
 
-template HonkRecursionConstraintOutput<MegaCircuitBuilder> create_honk_recursion_constraints<
-    UltraZKRecursiveFlavor_<MegaCircuitBuilder>>(MegaCircuitBuilder& builder,
-                                                 const RecursionConstraint& input,
-                                                 bool has_valid_witness_assignments);
+    UltraVerifier_<typename Flavor::NativeFlavor> native_verifier(
+        native_vkey, VerifierCommitmentKey<curve::Grumpkin>(1 << CONST_ECCVM_LOG_N));
+    bool is_valid_proof(native_verifier.template verify_proof<NativeIO>(honk_proof, ipa_proof));
 
-template HonkRecursionConstraintOutput<UltraCircuitBuilder> create_honk_recursion_constraints<
-    UltraZKRecursiveFlavor_<UltraCircuitBuilder>>(UltraCircuitBuilder& builder,
-                                                  const RecursionConstraint& input,
-                                                  bool has_valid_witness_assignments);
+    info("===== HONK RECURSION CONSTRAINT DEBUG INFO =====");
+    std::string flavor;
+    if constexpr (HasIPAAccumulator<Flavor>) {
+        flavor = "Ultra Rollup Flavor";
+    } else if constexpr (Flavor::HasZK) {
+        flavor = "Ultra ZK Flavor";
+    } else {
+        flavor = "Ultra Flavor";
+    }
+    info("Flavor used: ", flavor);
+    info("Honk recursion constraint: input proof verifies natively: ", is_valid_proof ? "true" : "false");
+    info("===== END OF HONK RECURSION CONSTRAINT DEBUG INFO =====");
+}
+#endif
+
+#define INSTANTIATE_HONK_RECURSION_CONSTRAINT(Flavor)                                                                  \
+    template HonkRecursionConstraintOutput<typename Flavor::CircuitBuilder> create_honk_recursion_constraints<Flavor>( \
+        typename Flavor::CircuitBuilder & builder, const RecursionConstraint& input);
+
+INSTANTIATE_HONK_RECURSION_CONSTRAINT(UltraRecursiveFlavor_<UltraCircuitBuilder>)
+INSTANTIATE_HONK_RECURSION_CONSTRAINT(UltraRollupRecursiveFlavor_<UltraCircuitBuilder>)
+INSTANTIATE_HONK_RECURSION_CONSTRAINT(UltraRecursiveFlavor_<MegaCircuitBuilder>)
+INSTANTIATE_HONK_RECURSION_CONSTRAINT(UltraZKRecursiveFlavor_<MegaCircuitBuilder>)
+INSTANTIATE_HONK_RECURSION_CONSTRAINT(UltraZKRecursiveFlavor_<UltraCircuitBuilder>)
+
+#undef INSTANTIATE_HONK_RECURSION_CONSTRAINT
+
+#ifndef NDEBUG
+#define INSTANTIATE_NATIVE_VERIFICATION_DEBUG(Flavor)                                                                  \
+    template void native_verification_debug<Flavor>(const std::shared_ptr<typename Flavor::VerificationKey>,           \
+                                                    const bb::stdlib::Proof<typename Flavor::CircuitBuilder>&);
+
+INSTANTIATE_NATIVE_VERIFICATION_DEBUG(UltraRecursiveFlavor_<UltraCircuitBuilder>)
+INSTANTIATE_NATIVE_VERIFICATION_DEBUG(UltraRollupRecursiveFlavor_<UltraCircuitBuilder>)
+INSTANTIATE_NATIVE_VERIFICATION_DEBUG(UltraRecursiveFlavor_<MegaCircuitBuilder>)
+INSTANTIATE_NATIVE_VERIFICATION_DEBUG(UltraZKRecursiveFlavor_<MegaCircuitBuilder>)
+INSTANTIATE_NATIVE_VERIFICATION_DEBUG(UltraZKRecursiveFlavor_<UltraCircuitBuilder>)
+
+#undef INSTANTIATE_NATIVE_VERIFICATION_DEBUG
+
+#endif
 
 } // namespace acir_format

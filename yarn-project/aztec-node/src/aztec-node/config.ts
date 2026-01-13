@@ -1,10 +1,6 @@
 import { type ArchiverConfig, archiverConfigMappings } from '@aztec/archiver/config';
-import {
-  type GenesisStateConfig,
-  type L1ContractAddresses,
-  genesisStateConfigMappings,
-  l1ContractAddressesMapping,
-} from '@aztec/ethereum';
+import { type GenesisStateConfig, genesisStateConfigMappings } from '@aztec/ethereum/config';
+import { type L1ContractAddresses, l1ContractAddressesMapping } from '@aztec/ethereum/l1-contract-addresses';
 import { type ConfigMappingsType, booleanConfigHelper, getConfigFromMappings } from '@aztec/foundation/config';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import { type DataStoreConfig, dataConfigMappings } from '@aztec/kv-store/config';
@@ -55,6 +51,11 @@ export type AztecNodeConfig = ArchiverConfig &
     l1Contracts: L1ContractAddresses;
     /** Whether the validator is disabled for this node */
     disableValidator: boolean;
+    /** Whether to skip waiting for the archiver to be fully synced before starting other services */
+    skipArchiverInitialSync: boolean;
+
+    /** A flag to force verification of tx Chonk proofs. Only used for testnet */
+    debugForceTxProofVerification: boolean;
   };
 
 export const aztecNodeConfigMappings: ConfigMappingsType<AztecNodeConfig> = {
@@ -79,6 +80,16 @@ export const aztecNodeConfigMappings: ConfigMappingsType<AztecNodeConfig> = {
     env: 'VALIDATOR_DISABLED',
     description: 'Whether the validator is disabled for this node.',
     ...booleanConfigHelper(),
+  },
+  skipArchiverInitialSync: {
+    env: 'SKIP_ARCHIVER_INITIAL_SYNC',
+    description: 'Whether to skip waiting for the archiver to be fully synced before starting other services.',
+    ...booleanConfigHelper(false),
+  },
+  debugForceTxProofVerification: {
+    env: 'DEBUG_FORCE_TX_PROOF_VERIFICATION',
+    description: 'Whether to skip waiting for the archiver to be fully synced before starting other services.',
+    ...booleanConfigHelper(false),
   },
 };
 

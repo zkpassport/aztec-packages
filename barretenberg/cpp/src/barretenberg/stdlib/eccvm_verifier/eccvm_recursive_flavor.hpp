@@ -8,6 +8,7 @@
 #include "barretenberg/eccvm/eccvm_flavor.hpp"
 #include "barretenberg/stdlib/eccvm_verifier/verifier_commitment_key.hpp"
 #include "barretenberg/stdlib/primitives/curves/grumpkin.hpp"
+#include "barretenberg/stdlib/proof/proof.hpp"
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-const-or-ref-data-members) ?
 
@@ -111,8 +112,8 @@ class ECCVMRecursiveFlavor {
          * @param domain_separator
          * @param transcript
          */
-        FF hash_through_transcript([[maybe_unused]] const std::string& domain_separator,
-                                   [[maybe_unused]] Transcript& transcript) const override
+        FF hash_with_origin_tagging([[maybe_unused]] const std::string& domain_separator,
+                                    [[maybe_unused]] Transcript& transcript) const override
         {
             throw_or_abort("Not intended to be used because vk is hardcoded in circuit.");
         }
@@ -139,6 +140,9 @@ class ECCVMRecursiveFlavor {
     using VerifierCommitments = ECCVMFlavor::VerifierCommitments_<Commitment, VerificationKey>;
     // Reuse the transcript from ECCVM
     using Transcript = StdlibTranscript<CircuitBuilder>;
+
+    // Proof type for recursive verification
+    using Proof = stdlib::Proof<CircuitBuilder>;
 
     using VKAndHash = VKAndHash_<VerificationKey, FF>;
 

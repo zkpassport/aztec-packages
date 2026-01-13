@@ -1,5 +1,5 @@
 import { toBigIntBE, toBufferBE } from '@aztec/foundation/bigint-buffer';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { schemas } from '@aztec/foundation/schemas';
 import { BufferReader, serializeToBuffer } from '@aztec/foundation/serialize';
 import type { IndexedTreeLeaf, IndexedTreeLeafPreimage } from '@aztec/foundation/trees';
@@ -34,6 +34,24 @@ export class PublicDataTreeLeafPreimage implements IndexedTreeLeafPreimage {
         nextIndex: schemas.BigInt,
       })
       .transform(({ leaf, nextKey, nextIndex }) => new PublicDataTreeLeafPreimage(leaf, nextKey, nextIndex));
+  }
+
+  /**
+   * Creates a PublicDataTreeLeafPreimage from a plain object without Zod validation.
+   * This method is optimized for performance and skips validation, making it suitable
+   * for deserializing trusted data (e.g., from C++ via MessagePack).
+   * @param obj - Plain object containing PublicDataTreeLeafPreimage fields
+   * @returns A PublicDataTreeLeafPreimage instance
+   */
+  static fromPlainObject(obj: any): PublicDataTreeLeafPreimage {
+    if (obj instanceof PublicDataTreeLeafPreimage) {
+      return obj;
+    }
+    return new PublicDataTreeLeafPreimage(
+      PublicDataTreeLeaf.fromPlainObject(obj.leaf),
+      Fr.fromPlainObject(obj.nextKey),
+      typeof obj.nextIndex === 'bigint' ? obj.nextIndex : BigInt(obj.nextIndex),
+    );
   }
 
   static get leafSchema() {
@@ -171,5 +189,19 @@ export class PublicDataTreeLeaf implements IndexedTreeLeaf {
         value: schemas.Fr,
       })
       .transform(({ slot, value }) => new PublicDataTreeLeaf(slot, value));
+  }
+
+  /**
+   * Creates a PublicDataTreeLeaf from a plain object without Zod validation.
+   * This method is optimized for performance and skips validation, making it suitable
+   * for deserializing trusted data (e.g., from C++ via MessagePack).
+   * @param obj - Plain object containing PublicDataTreeLeaf fields
+   * @returns A PublicDataTreeLeaf instance
+   */
+  static fromPlainObject(obj: any): PublicDataTreeLeaf {
+    if (obj instanceof PublicDataTreeLeaf) {
+      return obj;
+    }
+    return new PublicDataTreeLeaf(Fr.fromPlainObject(obj.slot), Fr.fromPlainObject(obj.value));
   }
 }

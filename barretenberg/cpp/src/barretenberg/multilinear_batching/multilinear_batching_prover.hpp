@@ -3,7 +3,6 @@
 // external_1:  { status: not started, auditors: [], date: YYYY-MM-DD }
 // external_2:  { status: not started, auditors: [], date: YYYY-MM-DD }
 // =====================
-
 #pragma once
 #include "barretenberg/flavor/multilinear_batching_flavor.hpp"
 #include "barretenberg/honk/proof_system/types/proof.hpp"
@@ -14,6 +13,11 @@
 #include "barretenberg/sumcheck/sumcheck_output.hpp"
 
 namespace bb {
+
+/**
+ * @brief Multilinear batching prover. Reduces evaluation claims at different points to a single claim via sumcheck.
+ * @details See: chonk/README.md#batching-claims-into-accumulator
+ */
 class MultilinearBatchingProver {
   public:
     using Flavor = MultilinearBatchingFlavor;
@@ -36,17 +40,13 @@ class MultilinearBatchingProver {
     BB_PROFILE void execute_commitments_round();
     BB_PROFILE void execute_challenges_and_evaluations_round();
     BB_PROFILE void execute_relation_check_rounds();
-    BB_PROFILE void compute_new_claim();
+    BB_PROFILE MultilinearBatchingProverClaim compute_new_claim();
     HonkProof export_proof();
     HonkProof construct_proof();
-
-    MultilinearBatchingProverClaim get_new_claim() { return new_claim; };
 
     std::shared_ptr<Transcript> transcript;
 
     std::shared_ptr<MultilinearBatchingProvingKey> key;
-
-    MultilinearBatchingProverClaim new_claim;
 
     SumcheckOutput<Flavor> sumcheck_output;
 };

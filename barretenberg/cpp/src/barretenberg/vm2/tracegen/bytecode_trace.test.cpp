@@ -367,7 +367,7 @@ std::vector<size_t> gen_pcs(std::span<const WireOpCode> opcodes)
     size_t pc = 0;
     for (const auto& opcode : opcodes) {
         pcs.emplace_back(pc);
-        pc += WIRE_INSTRUCTION_SPEC.at(opcode).size_in_bytes;
+        pc += get_wire_instruction_spec().at(opcode).size_in_bytes;
     }
     return pcs;
 }
@@ -442,7 +442,7 @@ TEST(BytecodeTraceGenTest, InstrDecompositionInBytesEachOpcode)
         const auto w_opcode = static_cast<WireOpCode>(i);
 
         // Check size_in_bytes column
-        const auto expected_size_in_bytes = WIRE_INSTRUCTION_SPEC.at(w_opcode).size_in_bytes;
+        const auto expected_size_in_bytes = get_wire_instruction_spec().at(w_opcode).size_in_bytes;
         ASSERT_EQ(instr_encoded.size(), expected_size_in_bytes);
         EXPECT_EQ(FF(expected_size_in_bytes), trace.get(C::instr_fetching_instr_size, i + 1));
 
@@ -452,7 +452,7 @@ TEST(BytecodeTraceGenTest, InstrDecompositionInBytesEachOpcode)
         }
 
         // Check exection opcode
-        EXPECT_EQ(FF(static_cast<uint8_t>(WIRE_INSTRUCTION_SPEC.at(w_opcode).exec_opcode)),
+        EXPECT_EQ(FF(static_cast<uint8_t>(get_wire_instruction_spec().at(w_opcode).exec_opcode)),
                   trace.get(C::instr_fetching_exec_opcode, i + 1));
 
         // Check indirect
@@ -505,9 +505,10 @@ TEST(BytecodeTraceGenTest, InstrFetchingSingleBytecode)
 
     for (size_t i = 0; i < num_of_opcodes; i++) {
         const auto pc = pcs.at(i);
-        const auto instr_size = WIRE_INSTRUCTION_SPEC.at(opcodes.at(i)).size_in_bytes;
-        const auto has_tag = WIRE_INSTRUCTION_SPEC.at(opcodes.at(i)).tag_operand_idx.has_value();
-        const auto tag_is_op2 = has_tag ? WIRE_INSTRUCTION_SPEC.at(opcodes.at(i)).tag_operand_idx.value() == 2 : 0;
+        const auto instr_size = get_wire_instruction_spec().at(opcodes.at(i)).size_in_bytes;
+        const auto has_tag = get_wire_instruction_spec().at(opcodes.at(i)).tag_operand_idx.has_value();
+        const auto tag_is_op2 =
+            has_tag ? get_wire_instruction_spec().at(opcodes.at(i)).tag_operand_idx.value() == 2 : 0;
         const auto bytes_remaining = bytecode_size - pc;
         const auto bytes_to_read = std::min<size_t>(DECOMPOSE_WINDOW_SIZE, bytes_remaining);
 
@@ -605,19 +606,19 @@ TEST(BytecodeTraceGenTest, InstrFetchingParsingErrors)
         .bytecode_id = bytecode_id,
         .pc = 0,
         .bytecode = bytecode_ptr,
-        .error = simulation::InstrDeserializationError::OPCODE_OUT_OF_RANGE,
+        .error = simulation::InstrDeserializationEventError::OPCODE_OUT_OF_RANGE,
     });
     events.emplace_back(InstructionFetchingEvent{
         .bytecode_id = bytecode_id,
         .pc = 19,
         .bytecode = bytecode_ptr,
-        .error = simulation::InstrDeserializationError::INSTRUCTION_OUT_OF_RANGE,
+        .error = simulation::InstrDeserializationEventError::INSTRUCTION_OUT_OF_RANGE,
     });
     events.emplace_back(InstructionFetchingEvent{
         .bytecode_id = bytecode_id,
         .pc = 38,
         .bytecode = bytecode_ptr,
-        .error = simulation::InstrDeserializationError::PC_OUT_OF_RANGE,
+        .error = simulation::InstrDeserializationEventError::PC_OUT_OF_RANGE,
     });
 
     builder.process_instruction_fetching(events, trace);
@@ -696,7 +697,7 @@ TEST(BytecodeTraceGenTest, InstrFetchingErrorTagOutOfRange)
         .pc = 0,
         .instruction = deserialize_instruction(bytecode, 0), // Reflect more the real code path than passing instr_cast.
         .bytecode = bytecode_ptr,
-        .error = simulation::InstrDeserializationError::TAG_OUT_OF_RANGE,
+        .error = simulation::InstrDeserializationEventError::TAG_OUT_OF_RANGE,
     });
 
     events.emplace_back(InstructionFetchingEvent{
@@ -705,7 +706,7 @@ TEST(BytecodeTraceGenTest, InstrFetchingErrorTagOutOfRange)
         .instruction =
             deserialize_instruction(bytecode, cast_size), // Reflect more the real code path than passing instr_set.
         .bytecode = bytecode_ptr,
-        .error = simulation::InstrDeserializationError::TAG_OUT_OF_RANGE,
+        .error = simulation::InstrDeserializationEventError::TAG_OUT_OF_RANGE,
     });
 
     builder.process_instruction_fetching(events, trace);

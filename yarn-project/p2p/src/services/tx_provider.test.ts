@@ -1,11 +1,12 @@
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { times } from '@aztec/foundation/collection';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { Signature } from '@aztec/foundation/eth-signature';
-import { Fr } from '@aztec/foundation/fields';
 import { P2PClient, type PeerId, type TxPool, TxProvider } from '@aztec/p2p';
 import { BlockProposal, ConsensusPayload } from '@aztec/stdlib/p2p';
 import { CheckpointHeader } from '@aztec/stdlib/rollup';
 import { mockTx } from '@aztec/stdlib/testing';
-import { StateReference, Tx, type TxHash } from '@aztec/stdlib/tx';
+import { Tx, type TxHash } from '@aztec/stdlib/tx';
 
 import { jest } from '@jest/globals';
 import { type MockProxy, mock } from 'jest-mock-extended';
@@ -36,7 +37,7 @@ describe('TxProvider', () => {
   };
 
   const buildProposal = (txs: Tx[], txHashes: TxHash[]) => {
-    const payload = new ConsensusPayload(CheckpointHeader.empty(), Fr.random(), StateReference.empty());
+    const payload = new ConsensusPayload(CheckpointHeader.empty(), Fr.random());
     return new BlockProposal(payload, Signature.empty(), txHashes, txs);
   };
 
@@ -75,7 +76,7 @@ describe('TxProvider', () => {
       .map(({ value }) => value);
   };
 
-  const blockNumber = 1;
+  const blockNumber = BlockNumber(1);
 
   beforeEach(() => {
     txPools.clear();

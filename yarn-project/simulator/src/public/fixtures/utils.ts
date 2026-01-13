@@ -9,7 +9,7 @@ import {
   PRIVATE_LOG_SIZE_IN_FIELDS,
 } from '@aztec/constants';
 import { padArrayEnd } from '@aztec/foundation/collection';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { CONTRACT_INSTANCE_PUBLISHED_EVENT_TAG } from '@aztec/protocol-contracts';
 import { bufferAsFields } from '@aztec/stdlib/abi';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
@@ -25,7 +25,7 @@ import {
 } from '@aztec/stdlib/kernel';
 import { ContractClassLogFields, PrivateLog } from '@aztec/stdlib/logs';
 import type { ScopedL2ToL1Message } from '@aztec/stdlib/messaging';
-import { ClientIvcProof } from '@aztec/stdlib/proofs';
+import { ChonkProof } from '@aztec/stdlib/proofs';
 import {
   BlockHeader,
   GlobalVariables,
@@ -153,7 +153,7 @@ export async function createTxForPublicCalls(
 
   return await Tx.create({
     data: txData,
-    clientIvcProof: ClientIvcProof.random(),
+    chonkProof: ChonkProof.random(),
     contractClassLogFields: [],
     publicFunctionCalldata: calldata,
   });
@@ -184,7 +184,7 @@ export async function createTxForPrivateOnly(
   );
   return await Tx.create({
     data: txData,
-    clientIvcProof: ClientIvcProof.empty(),
+    chonkProof: ChonkProof.empty(),
     contractClassLogFields: [],
     publicFunctionCalldata: [],
   });

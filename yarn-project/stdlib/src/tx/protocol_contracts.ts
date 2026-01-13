@@ -1,8 +1,8 @@
 import { GeneratorIndex, MAX_PROTOCOL_CONTRACTS } from '@aztec/constants';
 import { makeTuple } from '@aztec/foundation/array';
 import { arraySerializedSizeOfNonEmpty } from '@aztec/foundation/collection';
-import { poseidon2HashWithSeparator } from '@aztec/foundation/crypto';
-import { Fr } from '@aztec/foundation/fields';
+import { poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import {
   BufferReader,
   FieldReader,
@@ -48,6 +48,22 @@ export class ProtocolContracts {
 
   static empty() {
     return new ProtocolContracts(makeTuple(MAX_PROTOCOL_CONTRACTS, () => AztecAddress.zero()));
+  }
+
+  /**
+   * Creates a ProtocolContracts instance from a plain object without Zod validation.
+   * This method is optimized for performance and skips validation, making it suitable
+   * for deserializing trusted data (e.g., from C++ via MessagePack).
+   * @param obj - Plain object containing ProtocolContracts fields
+   * @returns A ProtocolContracts instance
+   */
+  static fromPlainObject(obj: any): ProtocolContracts {
+    return new ProtocolContracts(
+      assertLength(
+        obj.derivedAddresses.map((addr: any) => AztecAddress.fromPlainObject(addr)),
+        MAX_PROTOCOL_CONTRACTS,
+      ),
+    );
   }
 
   getSize() {

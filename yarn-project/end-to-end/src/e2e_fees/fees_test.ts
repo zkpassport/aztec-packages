@@ -2,8 +2,11 @@ import type { AztecAddress } from '@aztec/aztec.js/addresses';
 import { type Logger, createLogger } from '@aztec/aztec.js/log';
 import type { AztecNode } from '@aztec/aztec.js/node';
 import { CheatCodes } from '@aztec/aztec/testing';
-import { type DeployL1ContractsArgs, RollupContract, createExtendedL1Client } from '@aztec/ethereum';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import { RollupContract } from '@aztec/ethereum/contracts';
+import type { DeployL1ContractsArgs } from '@aztec/ethereum/deploy-l1-contracts';
 import { ChainMonitor } from '@aztec/ethereum/test';
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import { sleep } from '@aztec/foundation/sleep';
 import { TestERC20Abi } from '@aztec/l1-artifacts';
@@ -85,7 +88,7 @@ export class FeesTest {
   public getGasBalanceFn!: BalancesFn;
   public getBananaPublicBalanceFn!: BalancesFn;
   public getBananaPrivateBalanceFn!: BalancesFn;
-  public getProverFee!: (blockNumber: number) => Promise<bigint>;
+  public getProverFee!: (blockNumber: BlockNumber) => Promise<bigint>;
 
   public readonly ALICE_INITIAL_BANANAS = BigInt(1e22);
   public readonly SUBSCRIPTION_AMOUNT = BigInt(1e19);
@@ -136,7 +139,7 @@ export class FeesTest {
   }
 
   async getBlockRewards() {
-    const blockReward = await this.rollupContract.getBlockReward();
+    const blockReward = await this.rollupContract.getCheckpointReward();
     const rewardConfig = await this.rollupContract.getRewardConfig();
 
     const balance = await this.feeJuiceBridgeTestHarness.getL1FeeJuiceBalance(
@@ -197,7 +200,7 @@ export class FeesTest {
         this.fpcAdmin = this.aliceAddress;
 
         const canonicalFeeJuice = await getCanonicalFeeJuice();
-        this.feeJuiceContract = await FeeJuiceContract.at(canonicalFeeJuice.address, this.wallet);
+        this.feeJuiceContract = FeeJuiceContract.at(canonicalFeeJuice.address, this.wallet);
       },
     );
   }
@@ -215,7 +218,7 @@ export class FeesTest {
       async (_data, context) => {
         this.context = context;
 
-        this.feeJuiceContract = await FeeJuiceContract.at(ProtocolContractAddress.FeeJuice, this.wallet);
+        this.feeJuiceContract = FeeJuiceContract.at(ProtocolContractAddress.FeeJuice, this.wallet);
 
         this.getGasBalanceFn = getBalancesFn(
           '⛽',
@@ -245,8 +248,8 @@ export class FeesTest {
         this.logger.info(`BananaCoin deployed at ${bananaCoin.address}`);
         return { bananaCoinAddress: bananaCoin.address };
       },
-      async ({ bananaCoinAddress }) => {
-        this.bananaCoin = await BananaCoin.at(bananaCoinAddress, this.wallet);
+      ({ bananaCoinAddress }) => {
+        this.bananaCoin = BananaCoin.at(bananaCoinAddress, this.wallet);
         const logger = this.logger;
         this.getBananaPublicBalanceFn = getBalancesFn(
           '🍌.public',
@@ -260,6 +263,7 @@ export class FeesTest {
           this.aliceAddress,
           logger,
         );
+        return Promise.resolve();
       },
     );
   }
@@ -287,8 +291,8 @@ export class FeesTest {
           rollupAddress: context.deployL1ContractsValues.l1ContractAddresses.rollupAddress,
         };
       },
-      async (data, context) => {
-        const bananaFPC = await FPCContract.at(data.bananaFPCAddress, this.wallet);
+      (data, context) => {
+        const bananaFPC = FPCContract.at(data.bananaFPCAddress, this.wallet);
         this.bananaFPC = bananaFPC;
 
         this.getCoinbaseBalance = async () => {
@@ -305,7 +309,7 @@ export class FeesTest {
           return await this.rollupContract.getSequencerRewards(this.coinbase);
         };
 
-        this.getProverFee = async (blockNumber: number) => {
+        this.getProverFee = async (blockNumber: BlockNumber) => {
           const block = await this.aztecNode.getBlock(blockNumber);
 
           // @todo @lherskind As we deal with #13601
@@ -328,6 +332,7 @@ export class FeesTest {
           const mana = block!.header.totalManaUsed.toBigInt();
           return mulDiv(mana * proverCost, price, 10n ** 9n);
         };
+        return Promise.resolve();
       },
     );
   }
@@ -346,8 +351,9 @@ export class FeesTest {
           sponsoredFPCAddress: sponsoredFPC.address,
         };
       },
-      async data => {
-        this.sponsoredFPC = await SponsoredFPCContract.at(data.sponsoredFPCAddress, this.wallet);
+      data => {
+        this.sponsoredFPC = SponsoredFPCContract.at(data.sponsoredFPCAddress, this.wallet);
+        return Promise.resolve();
       },
     );
   }

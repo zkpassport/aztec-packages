@@ -1,4 +1,5 @@
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { serializeToBuffer } from '@aztec/foundation/serialize';
 import { type IndexedTreeLeafPreimage, SiblingPath } from '@aztec/foundation/trees';
 import type {
@@ -18,7 +19,7 @@ import {
   PublicDataTreeLeafPreimage,
 } from '@aztec/stdlib/trees';
 import { type BlockHeader, PartialStateReference, StateReference } from '@aztec/stdlib/tx';
-import type { WorldStateRevision } from '@aztec/stdlib/world-state';
+import { type WorldStateRevision, WorldStateRevisionWithHandle } from '@aztec/stdlib/world-state';
 
 import assert from 'assert';
 
@@ -42,8 +43,8 @@ export class MerkleTreesFacade implements MerkleTreeReadOperations {
     return this.initialHeader;
   }
 
-  getRevision(): WorldStateRevision {
-    return this.revision;
+  getRevision(): WorldStateRevisionWithHandle {
+    return WorldStateRevisionWithHandle.fromWorldStateRevision(this.revision, this.instance.getHandle());
   }
 
   findLeafIndices(treeId: MerkleTreeId, values: MerkleTreeLeafType<MerkleTreeId>[]): Promise<(bigint | undefined)[]> {
@@ -191,14 +192,14 @@ export class MerkleTreesFacade implements MerkleTreeReadOperations {
   async getBlockNumbersForLeafIndices<ID extends MerkleTreeId>(
     treeId: ID,
     leafIndices: bigint[],
-  ): Promise<(bigint | undefined)[]> {
+  ): Promise<(BlockNumber | undefined)[]> {
     const response = await this.instance.call(WorldStateMessageType.GET_BLOCK_NUMBERS_FOR_LEAF_INDICES, {
       treeId,
       revision: this.revision,
       leafIndices,
     });
 
-    return response.blockNumbers.map(x => (x === undefined || x === null ? undefined : BigInt(x)));
+    return response.blockNumbers.map(x => (x === undefined || x === null ? undefined : BlockNumber(Number(x))));
   }
 }
 

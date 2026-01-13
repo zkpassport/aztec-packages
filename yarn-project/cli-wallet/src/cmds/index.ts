@@ -10,7 +10,7 @@ import {
   parseFieldFromHexString,
   parsePublicKey,
 } from '@aztec/cli/utils';
-import { randomBytes } from '@aztec/foundation/crypto';
+import { randomBytes } from '@aztec/foundation/crypto/random';
 import type { LogFn, Logger } from '@aztec/foundation/log';
 
 import { type Command, Option } from 'commander';
@@ -346,7 +346,7 @@ export function injectCommands(
       log,
     );
     if (db && sentTx) {
-      const txAlias = alias ? alias : `${functionName}-${randomBytes(16).toString()}`;
+      const txAlias = alias ? alias : `${functionName}-${randomBytes(16).toString('hex')}`;
       await db.storeTx(sentTx, log, txAlias);
     }
   });

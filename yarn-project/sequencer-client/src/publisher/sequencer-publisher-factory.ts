@@ -2,8 +2,10 @@ import { EthAddress } from '@aztec/aztec.js/addresses';
 import { type Logger, createLogger } from '@aztec/aztec.js/log';
 import type { BlobSinkClientInterface } from '@aztec/blob-sink/client';
 import type { EpochCache } from '@aztec/epoch-cache';
-import type { GovernanceProposerContract, PublisherFilter, PublisherManager, RollupContract } from '@aztec/ethereum';
+import type { GovernanceProposerContract, RollupContract } from '@aztec/ethereum/contracts';
 import type { L1TxUtilsWithBlobs } from '@aztec/ethereum/l1-tx-utils-with-blobs';
+import type { PublisherFilter, PublisherManager } from '@aztec/ethereum/publisher-manager';
+import { SlotNumber } from '@aztec/foundation/branded-types';
 import type { DateProvider } from '@aztec/foundation/timer';
 import type { SlashFactoryContract } from '@aztec/stdlib/l1-contracts';
 import type { TelemetryClient } from '@aztec/telemetry-client';
@@ -22,7 +24,7 @@ export class SequencerPublisherFactory {
   private publisherMetrics: SequencerPublisherMetrics;
 
   /** Stores the last slot in which every action was carried out by a publisher */
-  private lastActions: Partial<Record<Action, bigint>> = {};
+  private lastActions: Partial<Record<Action, SlotNumber>> = {};
 
   private logger: Logger;
 

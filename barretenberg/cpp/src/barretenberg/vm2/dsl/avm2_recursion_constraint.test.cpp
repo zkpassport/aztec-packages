@@ -7,7 +7,7 @@
 #include "barretenberg/stdlib/primitives/circuit_builders/circuit_builders_fwd.hpp"
 #include "barretenberg/ultra_honk/ultra_prover.hpp"
 #include "barretenberg/ultra_honk/ultra_verifier.hpp"
-#include "barretenberg/vm2/common/avm_inputs.hpp"
+#include "barretenberg/vm2/common/avm_io.hpp"
 #include "barretenberg/vm2/constraining/prover.hpp"
 #include "barretenberg/vm2/constraining/recursion/recursive_flavor.hpp"
 #include "barretenberg/vm2/constraining/recursion/recursive_verifier.hpp"
@@ -71,7 +71,7 @@ class AcirAvm2RecursionConstraint : public ::testing::Test {
 
         AcirProgram program;
 
-        SlabVector<fr>& witness = program.witness;
+        std::vector<fr>& witness = program.witness;
 
         for (const auto& inner_circuit_data : inner_circuits) {
             const std::vector<fr> key_witnesses = inner_circuit_data.verification_key->to_field_elements();
@@ -79,9 +79,9 @@ class AcirAvm2RecursionConstraint : public ::testing::Test {
             const std::vector<fr> public_inputs_witnesses = inner_circuit_data.public_inputs_flat;
 
             RecursionConstraint avm_recursion_constraint{
-                .key = add_to_witness_and_track_indices<bb::fr>(witness, key_witnesses),
-                .proof = add_to_witness_and_track_indices<bb::fr>(witness, proof_witnesses),
-                .public_inputs = add_to_witness_and_track_indices<bb::fr>(witness, public_inputs_witnesses),
+                .key = add_to_witness_and_track_indices(witness, key_witnesses),
+                .proof = add_to_witness_and_track_indices(witness, proof_witnesses),
+                .public_inputs = add_to_witness_and_track_indices(witness, public_inputs_witnesses),
                 .key_hash = 0, // not used
                 .proof_type = AVM,
             };
@@ -92,7 +92,7 @@ class AcirAvm2RecursionConstraint : public ::testing::Test {
         std::iota(avm_recursion_opcode_indices.begin(), avm_recursion_opcode_indices.end(), 0);
 
         AcirFormat& constraint_system = program.constraints;
-        constraint_system.varnum = static_cast<uint32_t>(witness.size());
+        constraint_system.max_witness_index = static_cast<uint32_t>(witness.size() - 1);
         constraint_system.num_acir_opcodes = static_cast<uint32_t>(avm_recursion_constraints.size());
         constraint_system.avm_recursion_constraints = avm_recursion_constraints;
         constraint_system.original_opcode_indices = create_empty_original_opcode_indices();
@@ -113,9 +113,9 @@ TEST_F(AcirAvm2RecursionConstraint, TestBasicSingleAvm2RecursionConstraint)
     std::vector<InnerCircuitData> layer_1_circuits;
     layer_1_circuits.push_back(create_inner_circuit_data());
     AcirProgram avm_verifier_program = construct_avm_verifier_program(layer_1_circuits);
-    auto layer_2_circuit = create_circuit(avm_verifier_program);
+    auto layer_2_circuit = create_circuit<OuterBuilder>(avm_verifier_program);
 
-    info("circuit gates = ", layer_2_circuit.get_estimated_num_finalized_gates());
+    info("circuit gates = ", layer_2_circuit.get_num_finalized_gates_inefficient());
 
     auto prover_instance = std::make_shared<OuterProverInstance>(layer_2_circuit);
     auto verification_key = std::make_shared<OuterVerificationKey>(prover_instance->get_precomputed());
@@ -137,6 +137,10 @@ TEST_F(AcirAvm2RecursionConstraint, TestBasicSingleAvm2RecursionConstraint)
  */
 TEST_F(AcirAvm2RecursionConstraint, TestGenerateVKFromConstraintsWithoutWitness)
 {
+    if (avm2::testing::skip_slow_tests()) {
+        GTEST_SKIP() << "Skipping slow test";
+    }
+
     // Generate AVM proof, verification key and public inputs
     InnerCircuitData avm_prover_output = create_inner_circuit_data();
 
@@ -147,9 +151,9 @@ TEST_F(AcirAvm2RecursionConstraint, TestGenerateVKFromConstraintsWithoutWitness)
         const ProgramMetadata metadata{
             .has_ipa_claim = true,
         };
-        auto layer_2_circuit = create_circuit(avm_verifier_program, metadata);
+        auto layer_2_circuit = create_circuit<OuterBuilder>(avm_verifier_program, metadata);
 
-        info("circuit gates = ", layer_2_circuit.get_estimated_num_finalized_gates());
+        info("circuit gates = ", layer_2_circuit.get_num_finalized_gates_inefficient());
 
         auto prover_instance = std::make_shared<OuterProverInstance>(layer_2_circuit);
         expected_vk = std::make_shared<OuterVerificationKey>(prover_instance->get_precomputed());
@@ -173,9 +177,9 @@ TEST_F(AcirAvm2RecursionConstraint, TestGenerateVKFromConstraintsWithoutWitness)
         // Clear the program witness then construct the bberg circuit as normal
         avm_verifier_program.witness.clear();
         const ProgramMetadata metadata{ .has_ipa_claim = true };
-        auto layer_2_circuit = create_circuit(avm_verifier_program, metadata);
+        auto layer_2_circuit = create_circuit<OuterBuilder>(avm_verifier_program, metadata);
 
-        info("circuit gates = ", layer_2_circuit.get_estimated_num_finalized_gates());
+        info("circuit gates = ", layer_2_circuit.get_num_finalized_gates_inefficient());
 
         auto prover_instance = std::make_shared<OuterProverInstance>(layer_2_circuit);
         actual_vk = std::make_shared<OuterVerificationKey>(prover_instance->get_precomputed());

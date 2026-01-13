@@ -1,5 +1,7 @@
-import { Grumpkin, poseidon2Hash } from '@aztec/foundation/crypto';
-import { type Fq, Fr, type Point } from '@aztec/foundation/fields';
+import { Grumpkin } from '@aztec/foundation/crypto/grumpkin';
+import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
+import { type Fq, Fr } from '@aztec/foundation/curves/bn254';
+import type { Point } from '@aztec/foundation/curves/grumpkin';
 
 import { z } from 'zod';
 
@@ -63,14 +65,13 @@ async function computeSharedTaggingSecret(
   const knownPreaddress = await computePreaddress(await localAddress.publicKeys.hash(), localAddress.partialAddress);
   // TODO: #8970 - Computation of address point from x coordinate might fail
   const externalAddressPoint = await externalAddress.toAddressPoint();
-  const curve = new Grumpkin();
   // Given A (local complete address) -> B (external address) and h == preaddress
   // Compute shared secret as S = (h_A + local_ivsk_A) * Addr_Point_B
 
   // Beware! h_a + local_ivsk_a (also known as the address secret) can lead to an address point with a negative
   // y-coordinate, since there's two possible candidates computeAddressSecret takes care of selecting the one that
   // leads to a positive y-coordinate, which is the only valid address point
-  return curve.mul(externalAddressPoint, await computeAddressSecret(knownPreaddress, localIvsk));
+  return Grumpkin.mul(externalAddressPoint, await computeAddressSecret(knownPreaddress, localIvsk));
 }
 
 export const DirectionalAppTaggingSecretSchema = z.object({

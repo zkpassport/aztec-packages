@@ -8,16 +8,16 @@ pub contract StaticChild {
         messages::message_delivery::MessageDelivery,
         note::note_getter_options::NoteGetterOptions,
         protocol_types::address::AztecAddress,
-        state_vars::{PrivateSet, PublicMutable},
+        state_vars::{Owned, PrivateSet, PublicMutable},
         utils::comparison::Comparator,
     };
-    use dep::value_note::value_note::ValueNote;
     use aztec::note::note_interface::NoteProperties;
+    use field_note::field_note::FieldNote;
 
     #[storage]
     struct Storage<Context> {
         current_value: PublicMutable<Field, Context>,
-        a_private_value: PrivateSet<ValueNote, Context>,
+        a_private_value: Owned<PrivateSet<FieldNote, Context>, Context>,
     }
 
     // Returns base_value + chain_id + version + block_number + timestamp statically
@@ -25,10 +25,10 @@ pub contract StaticChild {
     #[view]
     fn pub_get_value(base_value: Field) -> Field {
         let return_value = base_value
-            + context.chain_id()
-            + context.version()
-            + context.block_number() as Field
-            + context.timestamp() as Field;
+            + self.context.chain_id()
+            + self.context.version()
+            + self.context.block_number() as Field
+            + self.context.timestamp() as Field;
 
         return_value
     }
@@ -36,8 +36,8 @@ pub contract StaticChild {
     // Sets `current_value` to `new_value`
     #[external("public")]
     fn pub_set_value(new_value: Field) -> Field {
-        storage.current_value.write(new_value);
-        context.emit_public_log(new_value);
+        self.storage.current_value.write(new_value);
+        self.context.emit_public_log(new_value);
         new_value
     }
 
@@ -45,17 +45,21 @@ pub contract StaticChild {
     #[external("private")]
     #[view]
     fn private_illegal_set_value(new_value: Field, owner: AztecAddress) -> Field {
-        let note = ValueNote::new(new_value, owner);
-        storage.a_private_value.insert(note).emit(owner, MessageDelivery.CONSTRAINED_ONCHAIN);
+        let note = FieldNote { value: new_value };
+        self.storage.a_private_value.at(owner).insert(note).deliver(
+            MessageDelivery.CONSTRAINED_ONCHAIN,
+        );
         new_value
     }
 
     // Modify a note
     #[external("private")]
     fn private_set_value(new_value: Field, owner: AztecAddress, sender: AztecAddress) -> Field {
-        let note = ValueNote::new(new_value, owner);
+        let note = FieldNote { value: new_value };
 
-        storage.a_private_value.insert(note).emit(owner, MessageDelivery.CONSTRAINED_ONCHAIN);
+        self.storage.a_private_value.at(owner).insert(note).deliver(
+            MessageDelivery.CONSTRAINED_ONCHAIN,
+        );
         new_value
     }
 
@@ -63,21 +67,19 @@ pub contract StaticChild {
     #[external("private")]
     #[view]
     fn private_get_value(amount: Field, owner: AztecAddress) -> Field {
-        let mut options = NoteGetterOptions::new();
-        options = options
-            .select(ValueNote::properties().value, Comparator.EQ, amount)
-            .select(ValueNote::properties().owner, Comparator.EQ, owner)
+        let options = NoteGetterOptions::new()
+            .select(FieldNote::properties().value, Comparator.EQ, amount)
             .set_limit(1);
-        let retrieved_notes = storage.a_private_value.get_notes(options);
-        retrieved_notes.get(0).note.value()
+        let retrieved_notes = self.storage.a_private_value.at(owner).get_notes(options);
+        retrieved_notes.get(0).note.value
     }
 
     // Increments `current_value` by `new_value`
     #[external("public")]
     fn pub_inc_value(new_value: Field) -> Field {
-        let old_value = storage.current_value.read();
-        storage.current_value.write(old_value + new_value);
-        context.emit_public_log(new_value);
+        let old_value = self.storage.current_value.read();
+        self.storage.current_value.write(old_value + new_value);
+        self.context.emit_public_log(new_value);
         new_value
     }
 
@@ -85,9 +87,9 @@ pub contract StaticChild {
     #[external("public")]
     #[view]
     fn pub_illegal_inc_value(new_value: Field) -> Field {
-        let old_value = storage.current_value.read();
-        storage.current_value.write(old_value + new_value);
-        context.emit_public_log(new_value);
+        let old_value = self.storage.current_value.read();
+        self.storage.current_value.write(old_value + new_value);
+        self.context.emit_public_log(new_value);
         new_value
     }
 }

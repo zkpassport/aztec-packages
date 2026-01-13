@@ -9,7 +9,7 @@ import {
 } from '@aztec/constants';
 import { makeTuple } from '@aztec/foundation/array';
 import { padArrayEnd } from '@aztec/foundation/collection';
-import type { Fr } from '@aztec/foundation/fields';
+import type { Fr } from '@aztec/foundation/curves/bn254';
 import { type Tuple, assertLength } from '@aztec/foundation/serialize';
 import { MembershipWitness } from '@aztec/foundation/trees';
 import { privateKernelResetDimensionsConfig } from '@aztec/noir-protocol-circuits-types/client';
@@ -24,7 +24,6 @@ import {
   PrivateKernelResetDimensions,
   PrivateKernelResetHints,
   type PrivateKernelSimulateOutput,
-  type ReadRequest,
   ReadRequestActionEnum,
   ReadRequestResetActions,
   type ScopedKeyValidationRequestAndGenerator,
@@ -47,12 +46,10 @@ import type { PrivateKernelOracle } from '../private_kernel_oracle.js';
 
 function collectNestedReadRequests<N extends number>(
   executionStack: PrivateCallExecutionResult[],
-  extractReadRequests: (execution: PrivateCallExecutionResult) => ClaimedLengthArray<ReadRequest, N>,
+  extractReadRequests: (execution: PrivateCallExecutionResult) => ClaimedLengthArray<ScopedReadRequest, N>,
 ): ScopedReadRequest[] {
   return collectNested(executionStack, executionResult => {
-    return extractReadRequests(executionResult)
-      .getActiveItems()
-      .map(readRequest => new ScopedReadRequest(readRequest, executionResult.publicInputs.callContext.contractAddress));
+    return extractReadRequests(executionResult).getActiveItems();
   });
 }
 
@@ -104,7 +101,7 @@ export class PrivateKernelResetPrivateInputsBuilder {
     private previousKernelOutput: PrivateKernelSimulateOutput<PrivateKernelCircuitPublicInputs>,
     private executionStack: PrivateCallExecutionResult[],
     private noteHashNullifierCounterMap: Map<number, number>,
-    private validationRequestsSplitCounter: number,
+    private splitCounter: number,
   ) {
     this.previousKernel = previousKernelOutput.publicInputs;
     this.requestedDimensions = PrivateKernelResetDimensions.empty();
@@ -206,7 +203,6 @@ export class PrivateKernelResetPrivateInputsBuilder {
           oracle,
         ),
         this.transientDataSquashingHints,
-        this.validationRequestsSplitCounter,
       ),
       dimensions,
     );
@@ -403,7 +399,7 @@ export class PrivateKernelResetPrivateInputsBuilder {
       futureNoteHashReads,
       futureNullifierReads,
       this.noteHashNullifierCounterMap,
-      this.validationRequestsSplitCounter,
+      this.splitCounter,
     );
 
     if (this.nextIteration && !numTransientData) {

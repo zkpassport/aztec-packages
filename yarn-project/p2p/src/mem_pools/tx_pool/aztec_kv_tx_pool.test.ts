@@ -1,10 +1,11 @@
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { timesAsync } from '@aztec/foundation/collection';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { map, sort, toArray } from '@aztec/foundation/iterable';
 import { openTmpStore } from '@aztec/kv-store/lmdb-v2';
 import { GasFees } from '@aztec/stdlib/gas';
 import type { MerkleTreeReadOperations, WorldStateSynchronizer } from '@aztec/stdlib/interfaces/server';
-import { ClientIvcProof } from '@aztec/stdlib/proofs';
+import { ChonkProof } from '@aztec/stdlib/proofs';
 import { mockTx } from '@aztec/stdlib/testing';
 import { BlockHeader, GlobalVariables, Tx, TxHash, type TxValidationResult } from '@aztec/stdlib/tx';
 
@@ -23,12 +24,14 @@ describe('KV TX pool', () => {
   let mockTxSize: number;
   const mockFixedTxSize = 100;
 
-  const block1Header = BlockHeader.empty({ globalVariables: GlobalVariables.empty({ blockNumber: 1, timestamp: 0n }) });
+  const block1Header = BlockHeader.empty({
+    globalVariables: GlobalVariables.empty({ blockNumber: BlockNumber(1), timestamp: 0n }),
+  });
   const block2Header = BlockHeader.empty({
-    globalVariables: GlobalVariables.empty({ blockNumber: 2, timestamp: 36n }),
+    globalVariables: GlobalVariables.empty({ blockNumber: BlockNumber(2), timestamp: 36n }),
   });
   const block10Header = BlockHeader.empty({
-    globalVariables: GlobalVariables.empty({ blockNumber: 10, timestamp: 360n }),
+    globalVariables: GlobalVariables.empty({ blockNumber: BlockNumber(10), timestamp: 360n }),
   });
 
   const checkPendingTxConsistency = async () => {
@@ -73,7 +76,7 @@ describe('KV TX pool', () => {
     const txs = await timesAsync(5, i => mockTx(i + 1));
     await txPool.addTxs(txs);
 
-    const expectedArchivedTxs = txs.map(tx => Tx.from({ ...tx, clientIvcProof: ClientIvcProof.empty() }));
+    const expectedArchivedTxs = txs.map(tx => Tx.from({ ...tx, chonkProof: ChonkProof.empty() }));
 
     // delete two txs and assert that they are properly archived
     await txPool.deleteTxs([txs[0].getTxHash(), txs[1].getTxHash()]);
@@ -309,7 +312,7 @@ describe('KV TX pool', () => {
     const tx3 = await mockTx(3);
 
     // modify tx1 to return no archive indices
-    tx1.data.constants.anchorBlockHeader.globalVariables.blockNumber = 1;
+    tx1.data.constants.anchorBlockHeader.globalVariables.blockNumber = BlockNumber(1);
     const tx1HeaderHash = await tx1.data.constants.anchorBlockHeader.hash();
     txPool.mockArchiveCache.getArchiveIndices.mockImplementation((archives: Fr[]) => {
       if (archives[0].equals(tx1HeaderHash)) {

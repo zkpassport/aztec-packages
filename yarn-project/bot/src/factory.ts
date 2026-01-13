@@ -13,8 +13,9 @@ import type { L2AmountClaim } from '@aztec/aztec.js/ethereum';
 import { FeeJuicePaymentMethodWithClaim } from '@aztec/aztec.js/fee';
 import { createLogger } from '@aztec/aztec.js/log';
 import { waitForL1ToL2MessageReady } from '@aztec/aztec.js/messaging';
-import { createEthereumChain, createExtendedL1Client } from '@aztec/ethereum';
-import { Fr } from '@aztec/foundation/fields';
+import { createEthereumChain } from '@aztec/ethereum/chain';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { Timer } from '@aztec/foundation/timer';
 import { AMMContract } from '@aztec/noir-contracts.js/AMM';
 import { PrivateTokenContract } from '@aztec/noir-contracts.js/PrivateToken';
@@ -46,7 +47,13 @@ export class BotFactory {
    * Initializes a new bot by setting up the sender account, registering the recipient,
    * deploying the token contract, and minting tokens if necessary.
    */
-  public async setup() {
+  public async setup(): Promise<{
+    wallet: TestWallet;
+    defaultAccountAddress: AztecAddress;
+    token: TokenContract | PrivateTokenContract;
+    node: AztecNode;
+    recipient: AztecAddress;
+  }> {
     const recipient = (await this.wallet.createAccount()).address;
     const defaultAccountAddress = await this.setupAccount();
     const token = await this.setupToken(defaultAccountAddress);
@@ -54,7 +61,14 @@ export class BotFactory {
     return { wallet: this.wallet, defaultAccountAddress, token, node: this.aztecNode, recipient };
   }
 
-  public async setupAmm() {
+  public async setupAmm(): Promise<{
+    wallet: TestWallet;
+    defaultAccountAddress: AztecAddress;
+    amm: AMMContract;
+    token0: TokenContract;
+    token1: TokenContract;
+    node: AztecNode;
+  }> {
     const defaultAccountAddress = await this.setupAccount();
     const token0 = await this.setupTokenContract(defaultAccountAddress, this.config.tokenSalt, 'BotToken0', 'BOT0');
     const token1 = await this.setupTokenContract(defaultAccountAddress, this.config.tokenSalt, 'BotToken1', 'BOT1');

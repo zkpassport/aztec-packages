@@ -12,8 +12,10 @@
 #include "barretenberg/honk/execution_trace/gate_data.hpp"
 #include "barretenberg/public_input_component/public_component_key.hpp"
 #include "barretenberg/serialize/msgpack.hpp"
+#include "pairing_points_tagging.hpp"
 #include <utility>
 
+#include <algorithm>
 #include <unordered_map>
 
 namespace bb {
@@ -32,16 +34,15 @@ template <typename FF_> class CircuitBuilderBase {
 
     bool _public_inputs_finalized = false; // Addition of new public inputs disallowed after this is set to true.
 
-    // true if we have dummy witnesses (in the write_vk case)
-    bool _has_dummy_witnesses = false;
-
-    // index of next variable in equivalence class (=REAL_VARIABLE if you're last)
+    // index of next variable in equivalence class, which is `REAL_VARIABLE` if the current index is last in the cycle
+    // representing copy constraints containing the index. The name comes from the fact that if `next_var_index[idx] ==
+    // REAL_VARIABLE`, then `real_variable_index[idx] == idx`. See the commentary around `real_variable_index` for more
+    // details.
     std::vector<uint32_t> next_var_index;
-    // index of  previous variable in equivalence class (=FIRST if you're in a cycle alone)
+    // index of previous variable in equivalence class, which is `FIRST_VARIABLE_IN_CLASS` if the current index is the
+    // first in the cycle representing copy constraints containing the index (and in particular if the current index is
+    // not contained in any copy constraints).
     std::vector<uint32_t> prev_var_index;
-
-    bool _failed = false;
-    std::string _err;
 
     static constexpr uint32_t REAL_VARIABLE = UINT32_MAX - 1;
     static constexpr uint32_t FIRST_VARIABLE_IN_CLASS = UINT32_MAX - 2;
@@ -59,8 +60,6 @@ template <typename FF_> class CircuitBuilderBase {
     void update_real_variable_indices(uint32_t index, uint32_t new_real_index);
 
   protected:
-    std::unordered_map<uint32_t, std::string> variable_names;
-
     void set_zero_idx(uint32_t value) { _zero_idx = value; }
 
     /**
@@ -80,9 +79,12 @@ template <typename FF_> class CircuitBuilderBase {
     void assert_valid_variables(const std::vector<uint32_t>& variable_indices);
 
     /**
-     * @brief The permutation on variable tags
-     * @details See https://github.com/AztecProtocol/plonk-with-lookups-private/blob/new-stuff/GenPermuations.pdf
-     * DOCTODO(#231): replace with the relevant wiki link
+     * @brief The permutation on variable tags, as a constituent of the generalized permutation argument.
+     * @details See S6 of https://github.com/AztecProtocol/plonk-with-lookups-private/blob/new-stuff/GenPermuations.pdf
+     * See also relations/PERMUTATION_ARGUMENT_README.md
+     * @note The Generalized Permutation argument combines the usual permutation argument with several multiset-equality
+     * checks. It does this by modifying the sigma and ID polynomials at certain points with "tags".
+     * @note In the internal representation, the key/values of `_tau` are _real_ variable indicies.
      */
     std::unordered_map<uint32_t, uint32_t> _tau;
 
@@ -93,13 +95,26 @@ template <typename FF_> class CircuitBuilderBase {
      * object) to an index into the variables array. This extra layer of indirection is used to support copy
      * constraints by allowing, for example, two witnesses with differing witness indices to have the same "real
      * variable index" and thus the same witness value. If the witness is not involved in any copy constraints, then
-     * real_variable_index[index] == index, i.e. it is the identity map
+     * real_variable_index[index] == index, i.e., it is the identity map.
+     *
+     * @note If there is a copy constraint between witness indices idx_a and idx_b, then they will both point to
+     * the same element in real_variable_index.
+     * @note Copy cycles, the mediating data structure used to translate copy constraint into sigma polynomials, will be
+     * indexed on those real_variable_indices that are actually pointed to at the end of circuit construction.
      */
     std::vector<uint32_t> real_variable_index;
+    /**
+     * @brief `real_variable_tags` is the tagging mechanism for the the multiset-equality check.
+     *
+     * @details The generalized permutation argument checks both copy constraints and multiset equalities. This is
+     * mediated by a tag; each real variable has a tag. (By default, the tags are set to `DUMMY_TAG == 0`. We assume
+     * that these are not involved in any non-trivial multiset-equality checks.)
+     *
+     */
     std::vector<uint32_t> real_variable_tags;
     uint32_t current_tag = DUMMY_TAG;
 
-    CircuitBuilderBase(size_t size_hint = 0, bool has_dummy_witnesses = false);
+    CircuitBuilderBase(size_t size_hint = 0, bool is_write_vk_mode = false);
 
     CircuitBuilderBase(const CircuitBuilderBase& other) = default;
     CircuitBuilderBase(CircuitBuilderBase&& other) noexcept = default;
@@ -107,13 +122,9 @@ template <typename FF_> class CircuitBuilderBase {
     CircuitBuilderBase& operator=(CircuitBuilderBase&& other) noexcept = default;
     virtual ~CircuitBuilderBase() = default;
 
-    bool has_dummy_witnesses() const { return _has_dummy_witnesses; }
-
     bool operator==(const CircuitBuilderBase& other) const = default;
 
     virtual size_t get_num_finalized_gates() const;
-    virtual size_t get_estimated_num_finalized_gates() const;
-    virtual void print_num_estimated_finalized_gates() const;
     virtual size_t get_num_variables() const;
 
     // Get the current number of gates in the circuit
@@ -128,10 +139,6 @@ template <typename FF_> class CircuitBuilderBase {
     // Non-owning getter for the index at which a fixed witness 0 is stored
     uint32_t zero_idx() const { return _zero_idx; }
 
-    virtual void create_add_gate(const add_triple_<FF>& in) = 0;
-    virtual void create_mul_gate(const mul_triple_<FF>& in) = 0;
-    virtual void create_bool_gate(const uint32_t a) = 0;
-    virtual void create_poly_gate(const poly_triple_<FF>& in) = 0;
     virtual size_t get_num_constant_gates() const = 0;
 
     const std::vector<FF>& get_variables() const { return variables; }
@@ -143,6 +150,7 @@ template <typename FF_> class CircuitBuilderBase {
      */
     inline FF get_variable(const uint32_t index) const
     {
+        BB_ASSERT_DEBUG(real_variable_index.size() > index);
         BB_ASSERT_DEBUG(variables.size() > real_variable_index[index]);
         return variables[real_variable_index[index]];
     }
@@ -159,8 +167,9 @@ template <typename FF_> class CircuitBuilderBase {
      */
     inline void set_variable(const uint32_t index, const FF& value)
     {
+        BB_ASSERT(is_write_vk_mode());
+        BB_ASSERT_DEBUG(real_variable_index.size() > index);
         BB_ASSERT_DEBUG(variables.size() > real_variable_index[index]);
-        BB_ASSERT(has_dummy_witnesses());
         variables[real_variable_index[index]] = value;
     }
 
@@ -193,20 +202,6 @@ template <typename FF_> class CircuitBuilderBase {
     template <typename OT> uint32_t add_variable(const OT& in) = delete;
 
     /**
-     * @brief Assign a name to a variable (equivalence class)
-     * @details Should be one name per equivalence class
-     * @param index Index of the variable you want to name
-     * @param name Name of the variable
-     */
-    virtual void set_variable_name(uint32_t index, const std::string& name);
-
-    /**
-     * @brief Export the existing circuit as msgpack compatible buffer
-     * @return msgpack compatible buffer
-     */
-    virtual msgpack::sbuffer export_circuit();
-
-    /**
      * @brief Add a public variable to variables
      * @details The only difference between this and add_variable is that here it is also added to the public_inputs
      * vector
@@ -231,10 +226,47 @@ template <typename FF_> class CircuitBuilderBase {
 
     size_t num_public_inputs() const { return _public_inputs.size(); }
 
+    // ========================================================================================
+    // TOOLING: Debug, Error Tracking, and Circuit Export
+    // ========================================================================================
+
+  private:
+    bool _failed = false;
+    std::string _err;
+
+    // True if we are writing a vk; used to disable certain warnings
+    bool _is_write_vk_mode = false;
+
+  protected:
+    std::unordered_map<uint32_t, std::string> variable_names;
+
+  public:
+    /**
+     * @brief Assign a name to a variable (equivalence class)
+     * @details Should be one name per equivalence class
+     * @param index Index of the variable you want to name
+     * @param name Name of the variable
+     */
+    virtual void set_variable_name(uint32_t index, const std::string& name);
+
+    /**
+     * @brief Export the existing circuit as msgpack compatible buffer
+     * @return msgpack compatible buffer
+     */
+    virtual msgpack::sbuffer export_circuit();
+
     bool failed() const;
     const std::string& err() const;
 
     void failure(std::string msg);
+
+    /**
+     * @brief PairingPoints tagging tool, used to ensure that all pairing points created in this circuit are aggregated
+     * together. This is not related to circuit logic.
+     */
+    mutable PairingPointsTagging pairing_points_tagging;
+
+    bool is_write_vk_mode() const { return _is_write_vk_mode; }
 };
 
 /**
@@ -288,6 +320,7 @@ template <typename FF> struct CircuitSchemaInternal {
                    ram_states,
                    circuit_finalized);
 };
+// ========================================================================================
 } // namespace bb
 
 // TODO(#217)(Cody): This will need updating based on the approach we take to ensure no multivariate is zero.

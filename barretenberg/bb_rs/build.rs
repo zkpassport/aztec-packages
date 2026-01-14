@@ -149,6 +149,12 @@ fn main() {
             // // iOS doesn't need Node.js bindings, skip nodejs_module to avoid yarn/npm dependencies
             // .configure_arg("-DBUILD_NODEJS_MODULE=OFF");
         
+        // Allow C++ VLAs (Variable Length Arrays) - used in keccak.cpp, polynomial_arithmetic.cpp
+        // This must be outside Release block to apply to all iOS builds
+        // Need both: -Wno-error to prevent -Werror from making it fatal, and -Wno to suppress entirely
+        config.cxxflag("-Wno-error=vla-cxx-extension");
+        config.cxxflag("-Wno-vla-cxx-extension");
+        
         // Performance optimizations (Release mode only)
         if cmake_build_type == "Release" {
             // Enable Link-Time Optimization
@@ -464,6 +470,19 @@ fn main() {
         .allowlist_function("ecc_secp256k1__reduce512_buffer_mod_circuit_modulus")
         // BN254 field functions
         .allowlist_function("bn254_fr_sqrt")
+        .allowlist_function("bn254_fq_sqrt")
+        // BN254 G1 curve functions
+        .allowlist_function("ecc_bn254_g1__mul")
+        .allowlist_function("ecc_bn254_g1__add")
+        .allowlist_function("ecc_bn254_g1__neg")
+        .allowlist_function("ecc_bn254_g1__eq")
+        .allowlist_function("ecc_bn254_g1__is_on_curve")
+        .allowlist_function("ecc_bn254_g1__batch_mul")
+        // BN254 G2 curve functions
+        .allowlist_function("ecc_bn254_g2__mul")
+        .allowlist_function("ecc_bn254_g2__add")
+        .allowlist_function("ecc_bn254_g2__neg")
+        .allowlist_function("ecc_bn254_g2__eq")
         .allowlist_function("srs_init_srs")
         .allowlist_function("srs_init_grumpkin_srs")
         .allowlist_function("test_threads")

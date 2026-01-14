@@ -28,8 +28,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
     endif()
 
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 18)
-        # We target clang20 and need this, eventually warning should be fixed or this will be unconditional.
+    # if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 18)
+    # We target clang20 and need this, eventually warning should be fixed or this will be unconditional.
+    # VLA extension warning - unconditional for iOS/mobile builds since Xcode clang version numbering
+    # differs from LLVM clang. Also needed for newer clang versions (18+) in general.
+    if(MOBILE OR CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 18)
         add_compile_options(-Wno-vla-cxx-extension)
         # This gets in the way of a partial object initialization (i.e. MyClass my_class{ .my_member = init_value })
         add_compile_options(-Wno-missing-field-initializers)

@@ -6,9 +6,9 @@ This document outlines all modifications made to the `barretenberg/cpp/` directo
 
 **Total Changes:**
 
-- 25 files modified
-- ~215 insertions, ~30 deletions
-- Main focus: Mobile platform support (iOS/Android), conditional compilation, and memory management improvements
+- 26 files modified (+ `bb_rs/build.rs` for VLA flags)
+- ~230 insertions, ~30 deletions
+- Main focus: Mobile platform support (iOS/Android), conditional compilation, memory management improvements, and Xcode 26.x compatibility
 
 ## Change Categories
 
@@ -465,7 +465,52 @@ WASM_EXPORT void ecc_grumpkin__reduce512_buffer_mod_circuit_modulus(uint8_t* inp
 
 ---
 
-#### 6.3 UltraHonk to UltraZKHonk Migration
+#### 6.3 BN254 G1/G2 Curve C Bindings (NEW)
+
+**File:** `barretenberg/cpp/src/barretenberg/ecc/curves/bn254/c_bind.hpp`
+
+Expanded C bindings for BN254 curve operations (G1 and G2):
+
+```cpp
+// BN254 Fq (base field)
+WASM_EXPORT void bn254_fq_sqrt(uint8_t const* input, uint8_t* result);
+
+// BN254 G1 curve operations
+WASM_EXPORT void ecc_bn254_g1__mul(uint8_t const* point_buf, uint8_t const* scalar_buf, uint8_t* result);
+WASM_EXPORT void ecc_bn254_g1__add(uint8_t const* point_a_buf, uint8_t const* point_b_buf, uint8_t* result);
+WASM_EXPORT void ecc_bn254_g1__neg(uint8_t const* point_buf, uint8_t* result);
+WASM_EXPORT void ecc_bn254_g1__eq(uint8_t const* point_a_buf, uint8_t const* point_b_buf, bool* result);
+WASM_EXPORT void ecc_bn254_g1__is_on_curve(uint8_t const* point_buf, bool* result);
+WASM_EXPORT void ecc_bn254_g1__batch_mul(uint8_t const* point_buf, uint8_t const* scalar_buf, uint32_t num_points, uint8_t* result);
+
+// BN254 G2 curve operations
+WASM_EXPORT void ecc_bn254_g2__mul(uint8_t const* point_buf, uint8_t const* scalar_buf, uint8_t* result);
+WASM_EXPORT void ecc_bn254_g2__add(uint8_t const* point_a_buf, uint8_t const* point_b_buf, uint8_t* result);
+WASM_EXPORT void ecc_bn254_g2__neg(uint8_t const* point_buf, uint8_t* result);
+WASM_EXPORT void ecc_bn254_g2__eq(uint8_t const* point_a_buf, uint8_t const* point_b_buf, bool* result);
+```
+
+**File:** `barretenberg/cpp/src/barretenberg/ecc/curves/bn254/c_bind.cpp`
+
+Implementations added:
+
+- `bn254_fq_sqrt` — Base field square root (Fq)
+- `ecc_bn254_g1__mul` — G1 scalar multiplication
+- `ecc_bn254_g1__add` — G1 point addition
+- `ecc_bn254_g1__neg` — G1 point negation
+- `ecc_bn254_g1__eq` — G1 point equality
+- `ecc_bn254_g1__is_on_curve` — G1 curve membership check
+- `ecc_bn254_g1__batch_mul` — G1 batch multiplication (same scalar, multiple points)
+- `ecc_bn254_g2__mul` — G2 scalar multiplication
+- `ecc_bn254_g2__add` — G2 point addition
+- `ecc_bn254_g2__neg` — G2 point negation
+- `ecc_bn254_g2__eq` — G2 point equality
+
+**Impact:** Enables full BN254 curve arithmetic for mobile/WASM, required for pairing-based cryptography and advanced proving systems.
+
+---
+
+#### 6.4 UltraHonk to UltraZKHonk Migration
 
 **File:** `barretenberg/cpp/src/barretenberg/dsl/acir_proofs/c_bind.cpp`
 
@@ -493,20 +538,78 @@ WASM_EXPORT void acir_verify_ultra_zk_honk(...);
 
 ---
 
+### 7. Xcode 26.x / AppleClang 17+ Compatibility
+
+#### 7.1 VLA (Variable Length Array) Warning Suppression
+
+**File:** `barretenberg/cpp/src/CMakeLists.txt`
+
+Xcode 26.x (AppleClang 17+) treats C++ VLAs as errors by default. The following change adds `-Wno-vla-cxx-extension` for mobile builds:
+
+```cmake
+# Lines 31-41
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # ...
+    # VLA extension warning - for iOS/mobile builds since Xcode clang version numbering
+    # differs from LLVM clang. Also needed for newer clang versions (18+) in general.
+    if(MOBILE OR CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 18)
+        add_compile_options(-Wno-vla-cxx-extension)
+        add_compile_options(-Wno-missing-field-initializers)
+        add_compile_options(-Wno-deprecated-declarations)
+    endif()
+endif()
+```
+
+**Affected source files using VLAs:**
+
+- `barretenberg/cpp/src/barretenberg/crypto/keccak/keccak.cpp` (line 116)
+- `barretenberg/cpp/src/barretenberg/polynomials/polynomial_arithmetic.cpp` (line 693)
+
+**Impact:** Enables compilation on Xcode 26.x which uses AppleClang 17. AppleClang version numbers differ from LLVM Clang versions, so the `MOBILE` flag ensures the fix is applied regardless of version detection.
+
+---
+
+#### 7.2 Rust Build Script VLA Flags
+
+**File:** `barretenberg/bb_rs/build.rs`
+
+Additional VLA suppression flags added via Rust's cmake crate for iOS builds:
+
+```rust
+// Lines 152-156 (inside iOS build section)
+// Allow C++ VLAs (Variable Length Arrays) - used in keccak.cpp, polynomial_arithmetic.cpp
+// This must be outside Release block to apply to all iOS builds
+// Need both: -Wno-error to prevent -Werror from making it fatal, and -Wno to suppress entirely
+config.cxxflag("-Wno-error=vla-cxx-extension");
+config.cxxflag("-Wno-vla-cxx-extension");
+```
+
+**Why both flags:**
+
+- `-Wno-error=vla-cxx-extension`: Prevents `-Werror` from making VLA warnings fatal
+- `-Wno-vla-cxx-extension`: Suppresses the warning entirely
+
+**Impact:** Ensures VLA compilation works even if the CMake-level flags aren't applied first in the compile command.
+
+---
+
 ## Status Summary
 
-### Changes (25 files)
+### Changes (26 files + build.rs)
 
 - ✅ Mobile build flag support
 - ✅ Platform-specific compilation guards
 - ✅ Tracy instrumentation conditionals
 - ✅ Memory management improvements
 - ✅ Threading support for single-threaded builds
-- ✅ New C bindings for BN254 and Grumpkin
+- ✅ New C bindings for BN254 Fr sqrt and Grumpkin
+- ✅ **NEW: BN254 G1/G2 curve C bindings** (mul, add, neg, eq, is_on_curve, batch_mul)
+- ✅ **NEW: BN254 Fq sqrt** (base field square root)
 - ✅ UltraZKHonk as default flavor
 - ✅ iOS/Android compatibility fixes
 - ✅ Test framework conditional inclusion
 - ✅ CLI integration with low-memory mode API
+- ✅ **NEW: Xcode 26.x / AppleClang 17+ VLA compatibility** (CMakeLists.txt + build.rs)
 
 ---
 
@@ -544,15 +647,22 @@ cmake -DMOBILE=ON \
 
 ## Compatibility Matrix
 
-| Platform     | Status     | Notes                  |
-| ------------ | ---------- | ---------------------- |
-| Linux x86_64 | ✅ Full    | All features available |
-| macOS x86_64 | ✅ Full    | All features available |
-| macOS ARM64  | ✅ Full    | All features available |
-| iOS          | ✅ Mobile  | Use `-DMOBILE=ON`      |
-| Android      | ✅ Mobile  | Use `-DMOBILE=ON`      |
-| WASM         | ✅ Partial | Some modules excluded  |
-| Windows      | ✅ Full    | All features available |
+| Platform     | Status     | Notes                            |
+| ------------ | ---------- | -------------------------------- |
+| Linux x86_64 | ✅ Full    | All features available           |
+| macOS x86_64 | ✅ Full    | All features available           |
+| macOS ARM64  | ✅ Full    | All features available           |
+| iOS          | ✅ Mobile  | Use `-DMOBILE=ON`, Xcode 26.x OK |
+| Android      | ✅ Mobile  | Use `-DMOBILE=ON`                |
+| WASM         | ✅ Partial | Some modules excluded            |
+| Windows      | ✅ Full    | All features available           |
+
+### Xcode Version Support
+
+| Xcode Version | AppleClang | Status | Notes                          |
+| ------------- | ---------- | ------ | ------------------------------ |
+| Xcode 15.x    | 15.x       | ✅     | Works without VLA flags        |
+| Xcode 26.x    | 17.x       | ✅     | Requires VLA suppression flags |
 
 ---
 
@@ -590,6 +700,7 @@ When merging upstream changes from future versions:
    - Changes to Tracy instrumentation - ensure guards are maintained
    - New platform-specific code - may need iOS/Android variants
    - Test linking changes - apply `MOBILE` conditionals
+   - **New VLA usage** - may need additional `-Wno-vla-cxx-extension` handling
 
 2. **Maintain:**
 
@@ -597,12 +708,15 @@ When merging upstream changes from future versions:
    - Platform-specific includes (`__APPLE__`, `ANDROID`)
    - `MOBILE` conditionals in CMake files
    - Low-memory prover API
+   - **VLA warning suppression** in `src/CMakeLists.txt` (lines 31-41)
+   - **VLA flags** in `bb_rs/build.rs` (lines 152-156)
 
 3. **Test after merge:**
    - Desktop build with all features
    - Mobile build with `-DMOBILE=ON`
    - Single-threaded build with `-DNO_MULTITHREADING=ON`
    - WASM build
+   - **iOS build with Xcode 26.x** (AppleClang 17+)
 
 ---
 
@@ -610,7 +724,7 @@ When merging upstream changes from future versions:
 
 - **Based on tag:** v3.0.0-devnet.20251212
 - **Branch:** pr/obsidion-mobile-devnet
-- **Commit:** f907701132
+- **Last updated:** 2026-01-14 (Xcode 26.x VLA compatibility)
 
 ---
 
@@ -627,3 +741,4 @@ Key achievements:
 - ✅ New cryptographic APIs for mobile/WASM integration
 - ✅ Robust build system with proper test framework exclusion
 - ✅ Clean build output with minimal warnings
+- ✅ **Xcode 26.x / AppleClang 17+ compatibility** via VLA warning suppression

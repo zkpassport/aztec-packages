@@ -5,8 +5,6 @@
 // =====================
 
 /**
- * @file ultra_circuit_builder.cpp
- * @author Luke (ledwards2225) and Kesha (Rumata888)
  * @brief This file contains the implementation of field-agnostic UltraCircuitBuilder class that defines the logic
  * of ultra-style circuits and is intended for the use in UltraHonk
  *
@@ -72,6 +70,23 @@ void UltraCircuitBuilder_<ExecutionTrace>::finalize_circuit(const bool ensure_no
 }
 
 /**
+ * @brief Copy the public input idx data into the public inputs trace block
+ */
+template <typename ExecutionTrace> void UltraCircuitBuilder_<ExecutionTrace>::populate_public_inputs_block()
+{
+    BB_BENCH_NAME("populate_public_inputs_block");
+
+    // Update the public inputs block
+    for (const auto& idx : this->public_inputs()) {
+        // first two wires get a copy of the public inputs
+        blocks.pub_inputs.populate_wires(idx, idx, this->zero_idx(), this->zero_idx());
+        for (auto& selector : this->blocks.pub_inputs.get_selectors()) {
+            selector.emplace_back(0);
+        }
+    }
+}
+
+/**
  * @brief Ensure all polynomials have at least one non-zero coefficient to avoid commiting to the zero-polynomial
  *
  * @param in Structure containing variables and witness selectors
@@ -83,123 +98,74 @@ template <typename ExecutionTrace>
 void UltraCircuitBuilder_<ExecutionTrace>::add_gates_to_ensure_all_polys_are_non_zero()
 {
     // q_m, q_1, q_2, q_3, q_4
-    blocks.arithmetic.populate_wires(this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    blocks.arithmetic.populate_wires(this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
     blocks.arithmetic.q_m().emplace_back(1);
     blocks.arithmetic.q_1().emplace_back(1);
     blocks.arithmetic.q_2().emplace_back(1);
     blocks.arithmetic.q_3().emplace_back(1);
     blocks.arithmetic.q_4().emplace_back(1);
     blocks.arithmetic.q_c().emplace_back(0);
-    blocks.arithmetic.q_delta_range().emplace_back(0);
-    blocks.arithmetic.q_arith().emplace_back(0);
-    blocks.arithmetic.q_lookup_type().emplace_back(0);
-    blocks.arithmetic.q_elliptic().emplace_back(0);
-    blocks.arithmetic.q_memory().emplace_back(0);
-    blocks.arithmetic.q_nnf().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_external().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.arithmetic.pad_additional();
-    }
+    blocks.arithmetic.set_gate_selector(0);
     check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 
     // q_delta_range
-    blocks.delta_range.populate_wires(this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    blocks.delta_range.populate_wires(this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
     blocks.delta_range.q_m().emplace_back(0);
     blocks.delta_range.q_1().emplace_back(0);
     blocks.delta_range.q_2().emplace_back(0);
     blocks.delta_range.q_3().emplace_back(0);
     blocks.delta_range.q_4().emplace_back(0);
     blocks.delta_range.q_c().emplace_back(0);
-    blocks.delta_range.q_delta_range().emplace_back(1);
-    blocks.delta_range.q_arith().emplace_back(0);
-    blocks.delta_range.q_lookup_type().emplace_back(0);
-    blocks.delta_range.q_elliptic().emplace_back(0);
-    blocks.delta_range.q_memory().emplace_back(0);
-    blocks.delta_range.q_nnf().emplace_back(0);
-    blocks.delta_range.q_poseidon2_external().emplace_back(0);
-    blocks.delta_range.q_poseidon2_internal().emplace_back(0);
+    blocks.delta_range.set_gate_selector(1);
 
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.delta_range.pad_additional();
-    }
     check_selector_length_consistency();
-    ++this->num_gates;
-    create_dummy_gate(blocks.delta_range, this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    this->increment_num_gates();
+    create_unconstrained_gate(
+        blocks.delta_range, this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
 
     // q_elliptic
-    blocks.elliptic.populate_wires(this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    blocks.elliptic.populate_wires(this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
     blocks.elliptic.q_m().emplace_back(0);
     blocks.elliptic.q_1().emplace_back(0);
     blocks.elliptic.q_2().emplace_back(0);
     blocks.elliptic.q_3().emplace_back(0);
     blocks.elliptic.q_4().emplace_back(0);
     blocks.elliptic.q_c().emplace_back(0);
-    blocks.elliptic.q_delta_range().emplace_back(0);
-    blocks.elliptic.q_arith().emplace_back(0);
-    blocks.elliptic.q_lookup_type().emplace_back(0);
-    blocks.elliptic.q_elliptic().emplace_back(1);
-    blocks.elliptic.q_memory().emplace_back(0);
-    blocks.elliptic.q_nnf().emplace_back(0);
-    blocks.elliptic.q_poseidon2_external().emplace_back(0);
-    blocks.elliptic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.elliptic.pad_additional();
-    }
+    blocks.elliptic.set_gate_selector(1);
     check_selector_length_consistency();
-    ++this->num_gates;
-    create_dummy_gate(blocks.elliptic, this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    this->increment_num_gates();
+    create_unconstrained_gate(blocks.elliptic, this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
 
     // q_memory
-    blocks.memory.populate_wires(this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    blocks.memory.populate_wires(this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
     blocks.memory.q_m().emplace_back(0);
     blocks.memory.q_1().emplace_back(0);
     blocks.memory.q_2().emplace_back(0);
     blocks.memory.q_3().emplace_back(0);
     blocks.memory.q_4().emplace_back(0);
     blocks.memory.q_c().emplace_back(0);
-    blocks.memory.q_delta_range().emplace_back(0);
-    blocks.memory.q_arith().emplace_back(0);
-    blocks.memory.q_lookup_type().emplace_back(0);
-    blocks.memory.q_elliptic().emplace_back(0);
-    blocks.memory.q_memory().emplace_back(1);
-    blocks.memory.q_nnf().emplace_back(0);
-    blocks.memory.q_poseidon2_external().emplace_back(0);
-    blocks.memory.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.memory.pad_additional();
-    }
+    blocks.memory.set_gate_selector(1);
     check_selector_length_consistency();
-    ++this->num_gates;
-    create_dummy_gate(blocks.memory, this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    this->increment_num_gates();
+    create_unconstrained_gate(blocks.memory, this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
 
     // q_nnf
-    blocks.nnf.populate_wires(this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    blocks.nnf.populate_wires(this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
     blocks.nnf.q_m().emplace_back(0);
     blocks.nnf.q_1().emplace_back(0);
     blocks.nnf.q_2().emplace_back(0);
     blocks.nnf.q_3().emplace_back(0);
     blocks.nnf.q_4().emplace_back(0);
     blocks.nnf.q_c().emplace_back(0);
-    blocks.nnf.q_delta_range().emplace_back(0);
-    blocks.nnf.q_arith().emplace_back(0);
-    blocks.nnf.q_lookup_type().emplace_back(0);
-    blocks.nnf.q_elliptic().emplace_back(0);
-    blocks.nnf.q_memory().emplace_back(0);
-    blocks.nnf.q_nnf().emplace_back(1);
-    blocks.nnf.q_poseidon2_external().emplace_back(0);
-    blocks.nnf.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.nnf.pad_additional();
-    }
+    blocks.nnf.set_gate_selector(1);
     check_selector_length_consistency();
-    ++this->num_gates;
-    create_dummy_gate(blocks.nnf, this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    this->increment_num_gates();
+    create_unconstrained_gate(blocks.nnf, this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
 
     // Add nonzero values in w_4 and q_c (q_4*w_4 + q_c --> 1*1 - 1 = 0)
-    this->one_idx = put_constant_variable(FF::one());
-    create_big_add_gate({ this->zero_idx, this->zero_idx, this->zero_idx, this->one_idx, 0, 0, 0, 1, -1 });
+    uint32_t one_idx = put_constant_variable(FF::one());
+    create_big_add_gate({ this->zero_idx(), this->zero_idx(), this->zero_idx(), one_idx, 0, 0, 0, 1, -1 });
 
     // Take care of all polys related to lookups (q_lookup, tables, sorted, etc)
     // by doing a dummy lookup with a special table.
@@ -232,54 +198,36 @@ void UltraCircuitBuilder_<ExecutionTrace>::add_gates_to_ensure_all_polys_are_non
     }
 
     // mock a poseidon external gate, with all zeros as input
-    blocks.poseidon2_external.populate_wires(this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    blocks.poseidon2_external.populate_wires(this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
     blocks.poseidon2_external.q_m().emplace_back(0);
     blocks.poseidon2_external.q_1().emplace_back(0);
     blocks.poseidon2_external.q_2().emplace_back(0);
     blocks.poseidon2_external.q_3().emplace_back(0);
     blocks.poseidon2_external.q_c().emplace_back(0);
-    blocks.poseidon2_external.q_arith().emplace_back(0);
     blocks.poseidon2_external.q_4().emplace_back(0);
-    blocks.poseidon2_external.q_delta_range().emplace_back(0);
-    blocks.poseidon2_external.q_lookup_type().emplace_back(0);
-    blocks.poseidon2_external.q_elliptic().emplace_back(0);
-    blocks.poseidon2_external.q_memory().emplace_back(0);
-    blocks.poseidon2_external.q_nnf().emplace_back(0);
-    blocks.poseidon2_external.q_poseidon2_external().emplace_back(1);
-    blocks.poseidon2_external.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.poseidon2_external.pad_additional();
-    }
+    blocks.poseidon2_external.set_gate_selector(1);
     check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 
-    // dummy gate to be read into by previous poseidon external gate via shifts
-    this->create_dummy_gate(blocks.poseidon2_external, this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    // unconstrained gate to be read into by previous poseidon external gate via shifts
+    create_unconstrained_gate(
+        blocks.poseidon2_external, this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
 
     // mock a poseidon internal gate, with all zeros as input
-    blocks.poseidon2_internal.populate_wires(this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    blocks.poseidon2_internal.populate_wires(this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
     blocks.poseidon2_internal.q_m().emplace_back(0);
     blocks.poseidon2_internal.q_1().emplace_back(0);
     blocks.poseidon2_internal.q_2().emplace_back(0);
     blocks.poseidon2_internal.q_3().emplace_back(0);
     blocks.poseidon2_internal.q_c().emplace_back(0);
-    blocks.poseidon2_internal.q_arith().emplace_back(0);
     blocks.poseidon2_internal.q_4().emplace_back(0);
-    blocks.poseidon2_internal.q_delta_range().emplace_back(0);
-    blocks.poseidon2_internal.q_lookup_type().emplace_back(0);
-    blocks.poseidon2_internal.q_elliptic().emplace_back(0);
-    blocks.poseidon2_internal.q_memory().emplace_back(0);
-    blocks.poseidon2_internal.q_nnf().emplace_back(0);
-    blocks.poseidon2_internal.q_poseidon2_external().emplace_back(0);
-    blocks.poseidon2_internal.q_poseidon2_internal().emplace_back(1);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.poseidon2_internal.pad_additional();
-    }
+    blocks.poseidon2_internal.set_gate_selector(1);
     check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 
     // dummy gate to be read into by previous poseidon internal gate via shifts
-    create_dummy_gate(blocks.poseidon2_internal, this->zero_idx, this->zero_idx, this->zero_idx, this->zero_idx);
+    create_unconstrained_gate(
+        blocks.poseidon2_internal, this->zero_idx(), this->zero_idx(), this->zero_idx(), this->zero_idx());
 }
 
 /**
@@ -292,28 +240,16 @@ void UltraCircuitBuilder_<ExecutionTrace>::add_gates_to_ensure_all_polys_are_non
  */
 template <typename ExecutionTrace> void UltraCircuitBuilder_<ExecutionTrace>::create_add_gate(const add_triple_<FF>& in)
 {
-    this->assert_valid_variables({ in.a, in.b, in.c });
-
-    blocks.arithmetic.populate_wires(in.a, in.b, in.c, this->zero_idx);
-    blocks.arithmetic.q_m().emplace_back(0);
-    blocks.arithmetic.q_1().emplace_back(in.a_scaling);
-    blocks.arithmetic.q_2().emplace_back(in.b_scaling);
-    blocks.arithmetic.q_3().emplace_back(in.c_scaling);
-    blocks.arithmetic.q_c().emplace_back(in.const_scaling);
-    blocks.arithmetic.q_arith().emplace_back(1);
-    blocks.arithmetic.q_4().emplace_back(0);
-    blocks.arithmetic.q_delta_range().emplace_back(0);
-    blocks.arithmetic.q_lookup_type().emplace_back(0);
-    blocks.arithmetic.q_elliptic().emplace_back(0);
-    blocks.arithmetic.q_memory().emplace_back(0);
-    blocks.arithmetic.q_nnf().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_external().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.arithmetic.pad_additional();
-    }
-    check_selector_length_consistency();
-    ++this->num_gates;
+    // Delegate to create_big_add_gate with 4th wire set to zero
+    create_big_add_gate({ .a = in.a,
+                          .b = in.b,
+                          .c = in.c,
+                          .d = this->zero_idx(),
+                          .a_scaling = in.a_scaling,
+                          .b_scaling = in.b_scaling,
+                          .c_scaling = in.c_scaling,
+                          .d_scaling = 0,
+                          .const_scaling = in.const_scaling });
 }
 
 /**
@@ -330,25 +266,19 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_big_mul_add_gate(const mul_qua
 {
     this->assert_valid_variables({ in.a, in.b, in.c, in.d });
     blocks.arithmetic.populate_wires(in.a, in.b, in.c, in.d);
-    blocks.arithmetic.q_m().emplace_back(include_next_gate_w_4 ? in.mul_scaling * FF(2) : in.mul_scaling);
+    // If include_next_gate_w_4 is true then we set q_arith = 2. In this case, the linear term in the ArithmeticRelation
+    // is scaled by a factor of 2. We compensate here by scaling the quadratic term by 2 to achieve the constraint:
+    //      2 * [q_m * w_1 * w_2 + \sum_{i=1..4} q_i * w_i + q_c + w_4_shift] = 0
+    const FF mul_scaling = include_next_gate_w_4 ? in.mul_scaling * FF(2) : in.mul_scaling;
+    blocks.arithmetic.q_m().emplace_back(mul_scaling);
     blocks.arithmetic.q_1().emplace_back(in.a_scaling);
     blocks.arithmetic.q_2().emplace_back(in.b_scaling);
     blocks.arithmetic.q_3().emplace_back(in.c_scaling);
     blocks.arithmetic.q_c().emplace_back(in.const_scaling);
-    blocks.arithmetic.q_arith().emplace_back(include_next_gate_w_4 ? 2 : 1);
     blocks.arithmetic.q_4().emplace_back(in.d_scaling);
-    blocks.arithmetic.q_delta_range().emplace_back(0);
-    blocks.arithmetic.q_lookup_type().emplace_back(0);
-    blocks.arithmetic.q_elliptic().emplace_back(0);
-    blocks.arithmetic.q_memory().emplace_back(0);
-    blocks.arithmetic.q_nnf().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_external().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.arithmetic.pad_additional();
-    }
+    blocks.arithmetic.set_gate_selector(include_next_gate_w_4 ? 2 : 1);
     check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 }
 
 /**
@@ -370,184 +300,12 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_big_add_gate(const add_quad_<F
     blocks.arithmetic.q_2().emplace_back(in.b_scaling);
     blocks.arithmetic.q_3().emplace_back(in.c_scaling);
     blocks.arithmetic.q_c().emplace_back(in.const_scaling);
-    blocks.arithmetic.q_arith().emplace_back(include_next_gate_w_4 ? 2 : 1);
     blocks.arithmetic.q_4().emplace_back(in.d_scaling);
-    blocks.arithmetic.q_delta_range().emplace_back(0);
-    blocks.arithmetic.q_lookup_type().emplace_back(0);
-    blocks.arithmetic.q_elliptic().emplace_back(0);
-    blocks.arithmetic.q_memory().emplace_back(0);
-    blocks.arithmetic.q_nnf().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_external().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.arithmetic.pad_additional();
-    }
+    blocks.arithmetic.set_gate_selector(include_next_gate_w_4 ? 2 : 1);
     check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 }
 
-/**
- * @brief A legacy method that was used to extract a bit from c-4d by using gate selectors in the
- * Turboplonk, but is simulated here for ultraplonk
- *
- * @param in Structure with variables and witness selector values
- */
-template <typename ExecutionTrace>
-void UltraCircuitBuilder_<ExecutionTrace>::create_big_add_gate_with_bit_extraction(const add_quad_<FF>& in)
-{
-    // This method is an artifact of a turbo plonk feature that implicitly extracts
-    // a high or low bit from a base-4 quad and adds it into the arithmetic gate relationship.
-    // This has been removed in the plookup composer due to it's infrequent use not being worth the extra
-    // cost incurred by the prover for the extra field muls required.
-
-    // We have wires a, b, c, d, where
-    // a + b + c + d + 6 * (extracted bit) = 0
-    // (extracted bit) is the high bit pulled from c - 4d
-
-    this->assert_valid_variables({ in.a, in.b, in.c, in.d });
-
-    const uint256_t quad = this->get_variable(in.c) - this->get_variable(in.d) * 4;
-    const auto lo_bit = quad & uint256_t(1);
-    const auto hi_bit = (quad & uint256_t(2)) >> 1;
-    const auto lo_idx = this->add_variable(lo_bit);
-    const auto hi_idx = this->add_variable(hi_bit);
-    // lo + hi * 2 - c + 4 * d = 0
-    create_big_add_gate({
-        lo_idx,
-        hi_idx,
-        in.c,
-        in.d,
-        1,
-        2,
-        -1,
-        4,
-        0,
-    });
-
-    // create temporary variable t = in.a * in.a_scaling + 6 * hi_bit
-    const auto t = this->get_variable(in.a) * in.a_scaling + FF(hi_bit) * 6;
-    const auto t_idx = this->add_variable(t);
-    create_big_add_gate({
-        in.a,
-        hi_idx,
-        t_idx,
-        this->zero_idx,
-        in.a_scaling,
-        6,
-        -1,
-        0,
-        0,
-    });
-    // (t = a + 6 * hi_bit) + b + c + d = 0
-    create_big_add_gate({
-        t_idx,
-        in.b,
-        in.c,
-        in.d,
-        1,
-        in.b_scaling,
-        in.c_scaling,
-        in.d_scaling,
-        in.const_scaling,
-    });
-}
-/**
- * @brief Create a basic multiplication gate q_m * a * b + q_1 * a + q_2 * b + q_3 * c + q_4 * d + q_c = 0 (q_arith = 1)
- *
- * @param in Structure containing variables and witness selectors
- */
-template <typename ExecutionTrace>
-void UltraCircuitBuilder_<ExecutionTrace>::create_big_mul_gate(const mul_quad_<FF>& in)
-{
-    this->assert_valid_variables({ in.a, in.b, in.c, in.d });
-
-    blocks.arithmetic.populate_wires(in.a, in.b, in.c, in.d);
-    blocks.arithmetic.q_m().emplace_back(in.mul_scaling);
-    blocks.arithmetic.q_1().emplace_back(in.a_scaling);
-    blocks.arithmetic.q_2().emplace_back(in.b_scaling);
-    blocks.arithmetic.q_3().emplace_back(in.c_scaling);
-    blocks.arithmetic.q_c().emplace_back(in.const_scaling);
-    blocks.arithmetic.q_arith().emplace_back(1);
-    blocks.arithmetic.q_4().emplace_back(in.d_scaling);
-    blocks.arithmetic.q_delta_range().emplace_back(0);
-    blocks.arithmetic.q_lookup_type().emplace_back(0);
-    blocks.arithmetic.q_elliptic().emplace_back(0);
-    blocks.arithmetic.q_memory().emplace_back(0);
-    blocks.arithmetic.q_nnf().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_external().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.arithmetic.pad_additional();
-    }
-    check_selector_length_consistency();
-    ++this->num_gates;
-}
-
-// Creates a width-4 addition gate, where the fourth witness must be a boolean.
-// Can be used to normalize a 32-bit addition
-template <typename ExecutionTrace>
-void UltraCircuitBuilder_<ExecutionTrace>::create_balanced_add_gate(const add_quad_<FF>& in)
-{
-    this->assert_valid_variables({ in.a, in.b, in.c, in.d });
-
-    blocks.arithmetic.populate_wires(in.a, in.b, in.c, in.d);
-    blocks.arithmetic.q_m().emplace_back(0);
-    blocks.arithmetic.q_1().emplace_back(in.a_scaling);
-    blocks.arithmetic.q_2().emplace_back(in.b_scaling);
-    blocks.arithmetic.q_3().emplace_back(in.c_scaling);
-    blocks.arithmetic.q_c().emplace_back(in.const_scaling);
-    blocks.arithmetic.q_arith().emplace_back(1);
-    blocks.arithmetic.q_4().emplace_back(in.d_scaling);
-    blocks.arithmetic.q_delta_range().emplace_back(0);
-    blocks.arithmetic.q_lookup_type().emplace_back(0);
-    blocks.arithmetic.q_elliptic().emplace_back(0);
-    blocks.arithmetic.q_memory().emplace_back(0);
-    blocks.arithmetic.q_nnf().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_external().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.arithmetic.pad_additional();
-    }
-    check_selector_length_consistency();
-    ++this->num_gates;
-
-    // Range constrain the 4-th wire to {0, 1}. Since the inputs being added never exceed (2^x - 1)
-    // during uintx arithmetic, we can safely use a 1-bit range check here. In other words, we do not
-    // allow lazy uintx addition.
-    create_new_range_constraint(in.d, 1);
-}
-/**
- * @brief Create a multiplication gate with q_m * a * b + q_3 * c + q_const = 0
- *
- * @details q_arith == 1
- *
- * @param in Structure containing variables and witness selectors
- */
-template <typename ExecutionTrace> void UltraCircuitBuilder_<ExecutionTrace>::create_mul_gate(const mul_triple_<FF>& in)
-{
-    this->assert_valid_variables({ in.a, in.b, in.c });
-
-    blocks.arithmetic.populate_wires(in.a, in.b, in.c, this->zero_idx);
-    blocks.arithmetic.q_m().emplace_back(in.mul_scaling);
-    blocks.arithmetic.q_1().emplace_back(0);
-    blocks.arithmetic.q_2().emplace_back(0);
-    blocks.arithmetic.q_3().emplace_back(in.c_scaling);
-    blocks.arithmetic.q_c().emplace_back(in.const_scaling);
-    blocks.arithmetic.q_arith().emplace_back(1);
-    blocks.arithmetic.q_4().emplace_back(0);
-    blocks.arithmetic.q_delta_range().emplace_back(0);
-    blocks.arithmetic.q_lookup_type().emplace_back(0);
-    blocks.arithmetic.q_elliptic().emplace_back(0);
-    blocks.arithmetic.q_memory().emplace_back(0);
-    blocks.arithmetic.q_nnf().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_external().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.arithmetic.pad_additional();
-    }
-    check_selector_length_consistency();
-    ++this->num_gates;
-}
 /**
  * @brief Generate an arithmetic gate equivalent to x^2 - x = 0, which forces x to be 0 or 1
  *
@@ -558,27 +316,16 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_bool_gate(const uint32_t varia
 {
     this->assert_valid_variables({ variable_index });
 
-    blocks.arithmetic.populate_wires(variable_index, variable_index, this->zero_idx, this->zero_idx);
+    blocks.arithmetic.populate_wires(variable_index, variable_index, this->zero_idx(), this->zero_idx());
     blocks.arithmetic.q_m().emplace_back(1);
     blocks.arithmetic.q_1().emplace_back(-1);
     blocks.arithmetic.q_2().emplace_back(0);
     blocks.arithmetic.q_3().emplace_back(0);
     blocks.arithmetic.q_c().emplace_back(0);
-    blocks.arithmetic.q_delta_range().emplace_back(0);
-
-    blocks.arithmetic.q_arith().emplace_back(1);
     blocks.arithmetic.q_4().emplace_back(0);
-    blocks.arithmetic.q_lookup_type().emplace_back(0);
-    blocks.arithmetic.q_elliptic().emplace_back(0);
-    blocks.arithmetic.q_memory().emplace_back(0);
-    blocks.arithmetic.q_nnf().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_external().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.arithmetic.pad_additional();
-    }
+    blocks.arithmetic.set_gate_selector(1);
     check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 }
 
 /**
@@ -588,156 +335,118 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_bool_gate(const uint32_t varia
  * @param in Structure containing variables and witness selectors
  */
 template <typename ExecutionTrace>
-void UltraCircuitBuilder_<ExecutionTrace>::create_poly_gate(const poly_triple_<FF>& in)
+void UltraCircuitBuilder_<ExecutionTrace>::create_arithmetic_gate(const arithmetic_triple_<FF>& in)
 {
     this->assert_valid_variables({ in.a, in.b, in.c });
 
-    blocks.arithmetic.populate_wires(in.a, in.b, in.c, this->zero_idx);
+    blocks.arithmetic.populate_wires(in.a, in.b, in.c, this->zero_idx());
     blocks.arithmetic.q_m().emplace_back(in.q_m);
     blocks.arithmetic.q_1().emplace_back(in.q_l);
     blocks.arithmetic.q_2().emplace_back(in.q_r);
     blocks.arithmetic.q_3().emplace_back(in.q_o);
     blocks.arithmetic.q_c().emplace_back(in.q_c);
-    blocks.arithmetic.q_delta_range().emplace_back(0);
-
-    blocks.arithmetic.q_arith().emplace_back(1);
     blocks.arithmetic.q_4().emplace_back(0);
-    blocks.arithmetic.q_lookup_type().emplace_back(0);
-    blocks.arithmetic.q_elliptic().emplace_back(0);
-    blocks.arithmetic.q_memory().emplace_back(0);
-    blocks.arithmetic.q_nnf().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_external().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.arithmetic.pad_additional();
-    }
+    blocks.arithmetic.set_gate_selector(1);
     check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 }
 
 /**
  * @brief Create an elliptic curve addition gate
+ * @details Adds either one or two gates. In general, this method creates two gates with the following structure:
  *
- * @details x and y are defined over scalar field.
+ *      | q_ecc | w1  | w2  | w3  | w4  |
+ *      |-------|-----|-----|-----|-----|
+ *      |    1  |  -  | x1  | y1  |  -  | --> constrained
+ *      |    0  | x2  | x3  | y3  | y2  | --> "unconstrained" (utilized by previous gate via shifts)
  *
- * @param in Elliptic curve point addition gate parameters, including the affine coordinates of the two points being
- * added, the resulting point coordinates and the selector values that describe whether the second point is negated.
+ * However, if the "output" of the previous gate is equal to the "input" of the current gate, i.e. (x3, y3)_{i-1} ==
+ * (x1, y1)_i, we can fuse them together by simply setting the selector values of the previous gate {i-1} to q_ecc = 1
+ * and q_1 = sign_coefficient (which in the relation translates to q_sign). We take advantage of this frequently when
+ * performing chained additions or doubling operations.
+ *
+ * @param in Elliptic curve point addition gate parameters
  */
 template <typename ExecutionTrace>
 void UltraCircuitBuilder_<ExecutionTrace>::create_ecc_add_gate(const ecc_add_gate_<FF>& in)
 {
-    /**
-     * gate structure:
-     * | 1  | 2  | 3  | 4  |
-     * | -- | x1 | y1 | -- |
-     * | x2 | x3 | y3 | y2 |
-     * we can chain successive ecc_add_gates if x3 y3 of previous gate equals x1 y1 of current gate
-     **/
-
     this->assert_valid_variables({ in.x1, in.x2, in.x3, in.y1, in.y2, in.y3 });
 
     auto& block = blocks.elliptic;
 
-    bool previous_elliptic_gate_exists = block.size() > 0;
-    bool can_fuse_into_previous_gate = previous_elliptic_gate_exists;
-    // TODO(https://github.com/AztecProtocol/barretenberg/issues/1482): scrutinize and clean up this logic
-    if (can_fuse_into_previous_gate) {
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.w_r()[block.size() - 1] == in.x1);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.w_o()[block.size() - 1] == in.y1);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.q_3()[block.size() - 1] == 0);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.q_4()[block.size() - 1] == 0);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.q_1()[block.size() - 1] == 0);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.q_arith()[block.size() - 1] == 0);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.q_m()[block.size() - 1] == 0);
-    }
+    // Determine whether we can fuse this addition operation into the previous gate in the block
+    bool can_fuse_into_previous_gate =
+        block.size() > 0 &&                       /* a previous gate exists in the block */
+        block.w_r()[block.size() - 1] == in.x1 && /* output x coord of previous gate is input of this one */
+        block.w_o()[block.size() - 1] == in.y1;   /* output y coord of previous gate is input of this one */
 
     if (can_fuse_into_previous_gate) {
-        block.q_1().set(block.size() - 1, in.sign_coefficient);
-        block.q_elliptic().set(block.size() - 1, 1);
+        block.q_1().set(block.size() - 1, in.sign_coefficient); // set q_sign of previous gate
+        block.q_elliptic().set(block.size() - 1, 1);            // set q_ecc of previous gate to 1
     } else {
-        block.populate_wires(this->zero_idx, in.x1, in.y1, this->zero_idx);
+        block.populate_wires(this->zero_idx(), in.x1, in.y1, this->zero_idx());
         block.q_3().emplace_back(0);
         block.q_4().emplace_back(0);
         block.q_1().emplace_back(in.sign_coefficient);
 
-        block.q_arith().emplace_back(0);
         block.q_2().emplace_back(0);
         block.q_m().emplace_back(0);
         block.q_c().emplace_back(0);
-        block.q_delta_range().emplace_back(0);
-        block.q_lookup_type().emplace_back(0);
-        block.q_elliptic().emplace_back(1);
-        block.q_memory().emplace_back(0);
-        block.q_nnf().emplace_back(0);
-        block.q_poseidon2_external().emplace_back(0);
-        block.q_poseidon2_internal().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
+        block.set_gate_selector(1);
         check_selector_length_consistency();
-        ++this->num_gates;
+        this->increment_num_gates();
     }
-    create_dummy_gate(block, in.x2, in.x3, in.y3, in.y2);
+    // Create the unconstrained gate with the output of the doubling to be read into by the previous gate via shifts
+    create_unconstrained_gate(block, in.x2, in.x3, in.y3, in.y2);
 }
 
 /**
  * @brief Create an elliptic curve doubling gate
+ * @details Adds either one or two gates. In general, this method creates two gates with the following structure:
+ *
+ *      | q_ecc | w1  | w2  | w3  | w4  |
+ *      |-------|-----|-----|-----|-----|
+ *      |    1  |  -  | x1  | y1  |  -  | --> constrained
+ *      |    0  |  -  | x3  | y3  |  -  | --> "unconstrained" (utilized by previous gate via shifts)
+ *
+ * However, if the "output" of the previous gate is equal to the "input" of the current gate, i.e. (x3, y3)_{i-1} ==
+ * (x1, y1)_i, we can fuse them together by simply setting the selector values of the previous gate {i-1} to q_ecc = 1
+ * and q_m = 1 (which in the relation translates to q_is_double = 1). We take advantage of this frequently when
+ * performing chained additions or doubling operations.
  *
  * @param in Elliptic curve point doubling gate parameters
  */
 template <typename ExecutionTrace>
 void UltraCircuitBuilder_<ExecutionTrace>::create_ecc_dbl_gate(const ecc_dbl_gate_<FF>& in)
 {
-    auto& block = blocks.elliptic;
-
-    /**
-     * gate structure:
-     * | 1  | 2  | 3  | 4  |
-     * | -  | x1 | y1 | -  |
-     * | -  | x3 | y3 | -  |
-     * we can chain an ecc_add_gate + an ecc_dbl_gate if x3 y3 of previous add_gate equals x1 y1 of current gate
-     * can also chain double gates together
-     **/
     this->assert_valid_variables({ in.x1, in.x3, in.y1, in.y3 });
 
-    bool previous_elliptic_gate_exists = block.size() > 0;
-    bool can_fuse_into_previous_gate = previous_elliptic_gate_exists;
-    // TODO(https://github.com/AztecProtocol/barretenberg/issues/1482): scrutinize and clean up this logic
-    if (can_fuse_into_previous_gate) {
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.w_r()[block.size() - 1] == in.x1);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.w_o()[block.size() - 1] == in.y1);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.q_arith()[block.size() - 1] == 0);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.q_lookup_type()[block.size() - 1] == 0);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.q_memory()[block.size() - 1] == 0);
-        can_fuse_into_previous_gate = can_fuse_into_previous_gate && (block.q_nnf()[block.size() - 1] == 0);
-    }
+    auto& block = blocks.elliptic;
 
+    // Determine whether we can fuse this doubling operation into the previous gate in the block
+    bool can_fuse_into_previous_gate =
+        block.size() > 0 &&                       /* a previous gate exists in the block */
+        block.w_r()[block.size() - 1] == in.x1 && /* output x coord of previous gate is input of this one */
+        block.w_o()[block.size() - 1] == in.y1;   /* output y coord of previous gate is input of this one */
+
+    // If possible, update the previous gate to be the first gate in the pair, otherwise create a new gate
     if (can_fuse_into_previous_gate) {
-        block.q_elliptic().set(block.size() - 1, 1);
-        block.q_m().set(block.size() - 1, 1);
+        block.q_elliptic().set(block.size() - 1, 1); // set q_ecc of previous gate to 1
+        block.q_m().set(block.size() - 1, 1);        // set q_m (q_is_double) of previous gate to 1
     } else {
-        block.populate_wires(this->zero_idx, in.x1, in.y1, this->zero_idx);
-        block.q_elliptic().emplace_back(1);
+        block.populate_wires(this->zero_idx(), in.x1, in.y1, this->zero_idx());
         block.q_m().emplace_back(1);
         block.q_1().emplace_back(0);
         block.q_2().emplace_back(0);
         block.q_3().emplace_back(0);
         block.q_c().emplace_back(0);
-        block.q_arith().emplace_back(0);
         block.q_4().emplace_back(0);
-        block.q_delta_range().emplace_back(0);
-        block.q_lookup_type().emplace_back(0);
-        block.q_memory().emplace_back(0);
-        block.q_nnf().emplace_back(0);
-        block.q_poseidon2_external().emplace_back(0);
-        block.q_poseidon2_internal().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
+        block.set_gate_selector(1);
         check_selector_length_consistency();
-        ++this->num_gates;
+        this->increment_num_gates();
     }
-    create_dummy_gate(block, this->zero_idx, in.x3, in.y3, this->zero_idx);
+    // Create the unconstrained gate with the output of the doubling to be read into by the previous gate via shifts
+    create_unconstrained_gate(block, this->zero_idx(), in.x3, in.y3, this->zero_idx());
 }
 
 /**
@@ -751,26 +460,16 @@ void UltraCircuitBuilder_<ExecutionTrace>::fix_witness(const uint32_t witness_in
 {
     this->assert_valid_variables({ witness_index });
 
-    blocks.arithmetic.populate_wires(witness_index, this->zero_idx, this->zero_idx, this->zero_idx);
+    blocks.arithmetic.populate_wires(witness_index, this->zero_idx(), this->zero_idx(), this->zero_idx());
     blocks.arithmetic.q_m().emplace_back(0);
     blocks.arithmetic.q_1().emplace_back(1);
     blocks.arithmetic.q_2().emplace_back(0);
     blocks.arithmetic.q_3().emplace_back(0);
     blocks.arithmetic.q_c().emplace_back(-witness_value);
-    blocks.arithmetic.q_arith().emplace_back(1);
     blocks.arithmetic.q_4().emplace_back(0);
-    blocks.arithmetic.q_delta_range().emplace_back(0);
-    blocks.arithmetic.q_lookup_type().emplace_back(0);
-    blocks.arithmetic.q_elliptic().emplace_back(0);
-    blocks.arithmetic.q_memory().emplace_back(0);
-    blocks.arithmetic.q_nnf().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_external().emplace_back(0);
-    blocks.arithmetic.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        blocks.arithmetic.pad_additional();
-    }
+    blocks.arithmetic.set_gate_selector(1);
     check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 }
 
 template <typename ExecutionTrace>
@@ -808,9 +507,31 @@ plookup::BasicTable& UltraCircuitBuilder_<ExecutionTrace>::get_table(const plook
 }
 
 /**
- * @brief Perform a series of lookups, one for each 'row' in read_values.
+ * @brief Create gates from pre-computed accumulator values which simultaneously establish individual basic-table
+ * lookups and the reconstruction of the desired result from those components.
+ *
+ * @details To perform a lookup, we often need to decompose inputs into smaller "limbs", look up each limb in a
+ * BasicTable, then reconstruct the result. E.g., to perform a 32-bit XOR, we decompose into 6-bit limbs, look up each
+ * limb's XOR in a 6-bit XOR table, then reconstruct the full 32-bit XOR from those.
+ *
+ * This method creates a sequence of lookup gates that simultaneously establish (1) the individual BasicTable lookups,
+ * and (2) the reconstruction of the final result from the results of the BasicTable lookups. This is done via an
+ * accumulator pattern where the wires in each gate store accumulated sums and we use step size coefficients (stored in
+ * q_2, q_m, q_c) to extract actual table entries via an expression of the form `derived_entry_i = w_i - step_size_i *
+ * w_i_shift` where w_i is the wire value at the current row, w_i_shift is the wire value at the next row.
+ *
+ * The last lookup has zero step size coefficients (q_2 = q_m = q_c = 0) because there's no next accumulator to
+ * subtract; its wire values already contain the raw slices.
+ *
+ * @param id MultiTable identifier specifying which lookup operation to perform
+ * @param read_values Pre-computed accumulator values and lookup entries from plookup::get_lookup_accumulators
+ * @param key_a_index Witness index for first input; reused in first lookup gate to avoid creating duplicate variables
+ * @param key_b_index Optional witness index for second input (2-to-1 lookups); reused in first lookup if provided
+ *
+ * @return ReadData<uint32_t> containing witness indices for all created gates. Primary use: [C3][0] contains the
+ * result of the lookup operation. All indices are returned (not just the result) because some algorithms like SHA256
+ * need access to the intermediate decomposed limb values.
  */
-
 template <typename ExecutionTrace>
 plookup::ReadData<uint32_t> UltraCircuitBuilder_<ExecutionTrace>::create_gates_from_plookup_accumulators(
     const plookup::MultiTableId& id,
@@ -818,46 +539,45 @@ plookup::ReadData<uint32_t> UltraCircuitBuilder_<ExecutionTrace>::create_gates_f
     const uint32_t key_a_index,
     std::optional<uint32_t> key_b_index)
 {
+    using plookup::ColumnIdx;
+
     const auto& multi_table = plookup::get_multitable(id);
-    const size_t num_lookups = read_values[plookup::ColumnIdx::C1].size();
+    const size_t num_lookups = read_values[ColumnIdx::C1].size();
     plookup::ReadData<uint32_t> read_data;
+
     for (size_t i = 0; i < num_lookups; ++i) {
-        // get basic lookup table; construct and add to builder.lookup_tables if not already present
-        auto& table = get_table(multi_table.basic_table_ids[i]);
+        const bool is_first_lookup = (i == 0);
+        const bool is_last_lookup = (i == num_lookups - 1);
 
-        table.lookup_gates.emplace_back(read_values.lookup_entries[i]); // used for constructing sorted polynomials
+        // Get basic lookup table; construct and add to builder.lookup_tables if not already present
+        plookup::BasicTable& table = get_table(multi_table.basic_table_ids[i]);
+        table.lookup_gates.emplace_back(read_values.lookup_entries[i]);
 
-        const auto first_idx = (i == 0) ? key_a_index : this->add_variable(read_values[plookup::ColumnIdx::C1][i]);
-        const auto second_idx = (i == 0 && (key_b_index.has_value()))
-                                    ? key_b_index.value()
-                                    : this->add_variable(read_values[plookup::ColumnIdx::C2][i]);
-        const auto third_idx = this->add_variable(read_values[plookup::ColumnIdx::C3][i]);
+        // Create witness variables: first lookup reuses user's input indices, subsequent create new variables
+        const auto first_idx = is_first_lookup ? key_a_index : this->add_variable(read_values[ColumnIdx::C1][i]);
+        const auto second_idx = (is_first_lookup && key_b_index.has_value())
+                                    ? *key_b_index
+                                    : this->add_variable(read_values[ColumnIdx::C2][i]);
+        const auto third_idx = this->add_variable(read_values[ColumnIdx::C3][i]);
 
-        read_data[plookup::ColumnIdx::C1].push_back(first_idx);
-        read_data[plookup::ColumnIdx::C2].push_back(second_idx);
-        read_data[plookup::ColumnIdx::C3].push_back(third_idx);
+        read_data[ColumnIdx::C1].push_back(first_idx);
+        read_data[ColumnIdx::C2].push_back(second_idx);
+        read_data[ColumnIdx::C3].push_back(third_idx);
         this->assert_valid_variables({ first_idx, second_idx, third_idx });
 
-        blocks.lookup.q_lookup_type().emplace_back(FF(1));
-        blocks.lookup.q_3().emplace_back(FF(table.table_index));
-        blocks.lookup.populate_wires(first_idx, second_idx, third_idx, this->zero_idx);
-        blocks.lookup.q_1().emplace_back(0);
-        blocks.lookup.q_2().emplace_back((i == (num_lookups - 1) ? 0 : -multi_table.column_1_step_sizes[i + 1]));
-        blocks.lookup.q_m().emplace_back((i == (num_lookups - 1) ? 0 : -multi_table.column_2_step_sizes[i + 1]));
-        blocks.lookup.q_c().emplace_back((i == (num_lookups - 1) ? 0 : -multi_table.column_3_step_sizes[i + 1]));
-        blocks.lookup.q_arith().emplace_back(0);
-        blocks.lookup.q_4().emplace_back(0);
-        blocks.lookup.q_delta_range().emplace_back(0);
-        blocks.lookup.q_elliptic().emplace_back(0);
-        blocks.lookup.q_memory().emplace_back(0);
-        blocks.lookup.q_nnf().emplace_back(0);
-        blocks.lookup.q_poseidon2_external().emplace_back(0);
-        blocks.lookup.q_poseidon2_internal().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            blocks.lookup.pad_additional();
-        }
+        // Populate lookup gate: wire values and selectors
+        blocks.lookup.populate_wires(first_idx, second_idx, third_idx, this->zero_idx());
+        blocks.lookup.set_gate_selector(1);                      // mark as lookup gate
+        blocks.lookup.q_3().emplace_back(FF(table.table_index)); // unique table identifier
+        // Step size coefficients: zero for last lookup (no next accumulator), negative step sizes otherwise
+        blocks.lookup.q_2().emplace_back(is_last_lookup ? 0 : -multi_table.column_1_step_sizes[i + 1]);
+        blocks.lookup.q_m().emplace_back(is_last_lookup ? 0 : -multi_table.column_2_step_sizes[i + 1]);
+        blocks.lookup.q_c().emplace_back(is_last_lookup ? 0 : -multi_table.column_3_step_sizes[i + 1]);
+        blocks.lookup.q_1().emplace_back(0); // unused
+        blocks.lookup.q_4().emplace_back(0); // unused
+
         check_selector_length_consistency();
-        ++this->num_gates;
+        this->increment_num_gates();
     }
     return read_data;
 }
@@ -872,27 +592,27 @@ typename UltraCircuitBuilder_<ExecutionTrace>::RangeList UltraCircuitBuilder_<Ex
     RangeList result;
     const auto range_tag = get_new_tag(); // current_tag + 1;
     const auto tau_tag = get_new_tag();   // current_tag + 2;
-    create_tag(range_tag, tau_tag);
-    create_tag(tau_tag, range_tag);
+    set_tau_transposition(range_tag, tau_tag);
     result.target_range = target_range;
     result.range_tag = range_tag;
     result.tau_tag = tau_tag;
 
     uint64_t num_multiples_of_three = (target_range / DEFAULT_PLOOKUP_RANGE_STEP_SIZE);
 
+    // AUDITTODO: This is not reserving the correct amount of space. Ensure this isn't indicative of a larger issue.
     result.variable_indices.reserve((uint32_t)num_multiples_of_three);
     for (uint64_t i = 0; i <= num_multiples_of_three; ++i) {
-        const uint32_t index = this->add_variable(i * DEFAULT_PLOOKUP_RANGE_STEP_SIZE);
+        const uint32_t index = this->add_variable(fr(i * DEFAULT_PLOOKUP_RANGE_STEP_SIZE));
         result.variable_indices.emplace_back(index);
         assign_tag(index, result.range_tag);
     }
     {
-        const uint32_t index = this->add_variable(target_range);
+        const uint32_t index = this->add_variable(fr(target_range));
         result.variable_indices.emplace_back(index);
         assign_tag(index, result.range_tag);
     }
     // Need this because these variables will not appear in the witness otherwise
-    create_dummy_constraints(result.variable_indices);
+    create_unconstrained_gates(result.variable_indices);
 
     return result;
 }
@@ -943,7 +663,7 @@ std::vector<uint32_t> UltraCircuitBuilder_<ExecutionTrace>::decompose_into_defau
         accumulator = accumulator >> target_range_bitnum;
     }
     for (size_t i = 0; i < sublimbs.size(); ++i) {
-        const auto limb_idx = this->add_variable(sublimbs[i]);
+        const auto limb_idx = this->add_variable(bb::fr(sublimbs[i]));
         sublimb_indices.emplace_back(limb_idx);
         if ((i == sublimbs.size() - 1) && has_remainder_bits) {
             create_new_range_constraint(limb_idx, last_limb_range);
@@ -971,9 +691,9 @@ std::vector<uint32_t> UltraCircuitBuilder_<ExecutionTrace>::decompose_into_defau
             real_limbs[2] ? sublimbs[3 * i + 2] : 0,
         };
         const uint32_t new_limbs[3]{
-            real_limbs[0] ? sublimb_indices[3 * i] : this->zero_idx,
-            real_limbs[1] ? sublimb_indices[3 * i + 1] : this->zero_idx,
-            real_limbs[2] ? sublimb_indices[3 * i + 2] : this->zero_idx,
+            real_limbs[0] ? sublimb_indices[3 * i] : this->zero_idx(),
+            real_limbs[1] ? sublimb_indices[3 * i + 1] : this->zero_idx(),
+            real_limbs[2] ? sublimb_indices[3 * i + 2] : this->zero_idx(),
         };
         const uint64_t shifts[3]{
             target_range_bitnum * (3 * i),
@@ -999,7 +719,7 @@ std::vector<uint32_t> UltraCircuitBuilder_<ExecutionTrace>::decompose_into_defau
             ((i == num_limb_triples - 1) ? false : true));
         // TODO(https://github.com/AztecProtocol/barretenberg/issues/1450): this is probably creating an unused
         // wire/variable in the circuit, in the last iteration of the loop.
-        accumulator_idx = this->add_variable(new_accumulator);
+        accumulator_idx = this->add_variable(fr(new_accumulator));
         accumulator = new_accumulator;
     }
     return sublimb_indices;
@@ -1019,10 +739,9 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_new_range_constraint(const uin
                                                                        const uint64_t target_range,
                                                                        std::string const msg)
 {
-    if (uint256_t(this->get_variable(variable_index)).data[0] > target_range) {
-        if (!this->failed()) {
-            this->failure(msg);
-        }
+    const bool is_out_of_range = (uint256_t(this->get_variable(variable_index)).data[0] > target_range);
+    if (is_out_of_range && !this->failed()) {
+        this->failure(msg);
     }
     if (range_lists.count(target_range) == 0) {
         range_lists.insert({ target_range, create_range_list(target_range) });
@@ -1050,7 +769,7 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_new_range_constraint(const uin
                         const uint32_t copied_witness = this->add_variable(this->get_variable(variable_index));
                         create_add_gate({ .a = variable_index,
                                           .b = copied_witness,
-                                          .c = this->zero_idx,
+                                          .c = this->zero_idx(),
                                           .a_scaling = 1,
                                           .b_scaling = -1,
                                           .c_scaling = 0,
@@ -1061,7 +780,7 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_new_range_constraint(const uin
                     }
                 }
             }
-            ASSERT(found_tag);
+            BB_ASSERT(found_tag);
         }
         assign_tag(variable_index, list.range_tag);
         list.variable_indices.emplace_back(variable_index);
@@ -1112,10 +831,10 @@ template <typename ExecutionTrace> void UltraCircuitBuilder_<ExecutionTrace>::pr
         padding += gate_width;
     }
     for (size_t i = 0; i < padding; ++i) {
-        indices.emplace_back(this->zero_idx);
+        indices.emplace_back(this->zero_idx());
     }
     for (const auto sorted_value : sorted_list) {
-        const uint32_t index = this->add_variable(sorted_value);
+        const uint32_t index = this->add_variable(fr(sorted_value));
         assign_tag(index, list.tau_tag);
         indices.emplace_back(index);
     }
@@ -1153,47 +872,40 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_sort_constraint(const std::vec
         blocks.delta_range.populate_wires(
             variable_index[i], variable_index[i + 1], variable_index[i + 2], variable_index[i + 3]);
 
-        ++this->num_gates;
+        this->increment_num_gates();
         blocks.delta_range.q_m().emplace_back(0);
         blocks.delta_range.q_1().emplace_back(0);
         blocks.delta_range.q_2().emplace_back(0);
         blocks.delta_range.q_3().emplace_back(0);
         blocks.delta_range.q_c().emplace_back(0);
-        blocks.delta_range.q_arith().emplace_back(0);
         blocks.delta_range.q_4().emplace_back(0);
-        blocks.delta_range.q_delta_range().emplace_back(1);
-        blocks.delta_range.q_elliptic().emplace_back(0);
-        blocks.delta_range.q_lookup_type().emplace_back(0);
-        blocks.delta_range.q_memory().emplace_back(0);
-        blocks.delta_range.q_nnf().emplace_back(0);
-        blocks.delta_range.q_poseidon2_external().emplace_back(0);
-        blocks.delta_range.q_poseidon2_internal().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            blocks.delta_range.pad_additional();
-        }
+        blocks.delta_range.set_gate_selector(1);
         check_selector_length_consistency();
     }
     // dummy gate needed because of sort widget's check of next row
-    create_dummy_gate(
-        blocks.delta_range, variable_index[variable_index.size() - 1], this->zero_idx, this->zero_idx, this->zero_idx);
+    create_unconstrained_gate(blocks.delta_range,
+                              variable_index[variable_index.size() - 1],
+                              this->zero_idx(),
+                              this->zero_idx(),
+                              this->zero_idx());
 }
 
 // useful to put variables in the witness that aren't already used - e.g. the dummy variables of the range constraint in
 // multiples of four
 template <typename ExecutionTrace>
-void UltraCircuitBuilder_<ExecutionTrace>::create_dummy_constraints(const std::vector<uint32_t>& variable_index)
+void UltraCircuitBuilder_<ExecutionTrace>::create_unconstrained_gates(const std::vector<uint32_t>& variable_index)
 {
     std::vector<uint32_t> padded_list = variable_index;
     constexpr size_t gate_width = NUM_WIRES;
     const uint64_t padding = (gate_width - (padded_list.size() % gate_width)) % gate_width;
     for (uint64_t i = 0; i < padding; ++i) {
-        padded_list.emplace_back(this->zero_idx);
+        padded_list.emplace_back(this->zero_idx());
     }
     this->assert_valid_variables(variable_index);
     this->assert_valid_variables(padded_list);
 
     for (size_t i = 0; i < padded_list.size(); i += gate_width) {
-        create_dummy_gate(
+        create_unconstrained_gate(
             blocks.arithmetic, padded_list[i], padded_list[i + 1], padded_list[i + 2], padded_list[i + 3]);
     }
 }
@@ -1212,30 +924,20 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_sort_constraint_with_edges(
     auto& block = blocks.delta_range;
 
     // Add an arithmetic gate to ensure the first input is equal to the start value of the range being checked
-    create_add_gate({ variable_index[0], this->zero_idx, this->zero_idx, 1, 0, 0, -start });
+    create_add_gate({ variable_index[0], this->zero_idx(), this->zero_idx(), 1, 0, 0, -start });
 
     // enforce range check for all but the final row
     for (size_t i = 0; i < variable_index.size() - gate_width; i += gate_width) {
 
         block.populate_wires(variable_index[i], variable_index[i + 1], variable_index[i + 2], variable_index[i + 3]);
-        ++this->num_gates;
+        this->increment_num_gates();
         block.q_m().emplace_back(0);
         block.q_1().emplace_back(0);
         block.q_2().emplace_back(0);
         block.q_3().emplace_back(0);
         block.q_c().emplace_back(0);
-        block.q_arith().emplace_back(0);
         block.q_4().emplace_back(0);
-        block.q_delta_range().emplace_back(1);
-        block.q_elliptic().emplace_back(0);
-        block.q_lookup_type().emplace_back(0);
-        block.q_memory().emplace_back(0);
-        block.q_nnf().emplace_back(0);
-        block.q_poseidon2_external().emplace_back(0);
-        block.q_poseidon2_internal().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
+        block.set_gate_selector(1);
         check_selector_length_consistency();
     }
     // enforce range checks of last row and ending at end
@@ -1244,24 +946,14 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_sort_constraint_with_edges(
                              variable_index[variable_index.size() - 3],
                              variable_index[variable_index.size() - 2],
                              variable_index[variable_index.size() - 1]);
-        ++this->num_gates;
+        this->increment_num_gates();
         block.q_m().emplace_back(0);
         block.q_1().emplace_back(0);
         block.q_2().emplace_back(0);
         block.q_3().emplace_back(0);
         block.q_c().emplace_back(0);
-        block.q_arith().emplace_back(0);
         block.q_4().emplace_back(0);
-        block.q_delta_range().emplace_back(1);
-        block.q_elliptic().emplace_back(0);
-        block.q_lookup_type().emplace_back(0);
-        block.q_memory().emplace_back(0);
-        block.q_nnf().emplace_back(0);
-        block.q_poseidon2_external().emplace_back(0);
-        block.q_poseidon2_internal().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
+        block.set_gate_selector(1);
         check_selector_length_consistency();
     }
 
@@ -1269,78 +961,9 @@ void UltraCircuitBuilder_<ExecutionTrace>::create_sort_constraint_with_edges(
     // (and remove dummy gate). This used to be a single gate before trace sorting based on gate types. The dummy gate
     // has been added to allow the previous gate to access the required wire data via shifts, allowing the arithmetic
     // gate to occur out of sequence. More details on the linked Github issue.
-    create_dummy_gate(block, variable_index[variable_index.size() - 1], this->zero_idx, this->zero_idx, this->zero_idx);
-    create_add_gate({ variable_index[variable_index.size() - 1], this->zero_idx, this->zero_idx, 1, 0, 0, -end });
-}
-
-// range constraint a value by decomposing it into limbs whose size should be the default range constraint size
-
-template <typename ExecutionTrace>
-std::vector<uint32_t> UltraCircuitBuilder_<ExecutionTrace>::decompose_into_default_range_better_for_oddlimbnum(
-    const uint32_t variable_index, const size_t num_bits, std::string const& msg)
-{
-    std::vector<uint32_t> sums;
-    const size_t limb_num = (size_t)num_bits / DEFAULT_PLOOKUP_RANGE_BITNUM;
-    const size_t last_limb_size = num_bits - (limb_num * DEFAULT_PLOOKUP_RANGE_BITNUM);
-    if (limb_num < 3) {
-        std::cerr
-            << "number of bits in range must be an integer multipe of DEFAULT_PLOOKUP_RANGE_BITNUM of size at least 3"
-            << std::endl;
-        return sums;
-    }
-
-    const uint256_t val = (uint256_t)(this->get_variable(variable_index));
-    // check witness value is indeed in range (commented out cause interferes with negative tests)
-    // ASSERT(val < ((uint256_t)1 << num_bits) - 1); // Q:ask Zac what happens with wrapping when converting scalar
-    // field to uint256 ASSERT(limb_num % 3 == 0); // TODO: write version of method that doesn't need this
-    std::vector<uint32_t> val_limbs;
-    std::vector<fr> val_slices;
-    for (size_t i = 0; i < limb_num; i++) {
-        val_slices.emplace_back(
-            FF(val.slice(DEFAULT_PLOOKUP_RANGE_BITNUM * i, DEFAULT_PLOOKUP_RANGE_BITNUM * (i + 1) - 1)));
-        val_limbs.emplace_back(this->add_variable(val_slices[i]));
-        create_new_range_constraint(val_limbs[i], DEFAULT_PLOOKUP_RANGE_SIZE);
-    }
-
-    uint64_t last_limb_range = ((uint64_t)1 << last_limb_size) - 1;
-    FF last_slice(0);
-    uint32_t last_limb(this->zero_idx);
-    size_t total_limb_num = limb_num;
-    if (last_limb_size > 0) {
-        val_slices.emplace_back(FF(val.slice(num_bits - last_limb_size, num_bits)));
-        val_limbs.emplace_back(this->add_variable(last_slice));
-        create_new_range_constraint(last_limb, last_limb_range);
-        total_limb_num++;
-    }
-    // pad slices and limbs in case they are not 2 mod 3
-    if (total_limb_num % 3 == 1) {
-        val_limbs.emplace_back(this->zero_idx); // TODO: check this is zero
-        val_slices.emplace_back(0);
-        total_limb_num++;
-    }
-    FF shift = FF(1 << DEFAULT_PLOOKUP_RANGE_BITNUM);
-    FF second_shift = shift * shift;
-    sums.emplace_back(this->add_variable(val_slices[0] + shift * val_slices[1] + second_shift * val_slices[2]));
-    create_big_add_gate({ val_limbs[0], val_limbs[1], val_limbs[2], sums[0], 1, shift, second_shift, -1, 0 });
-    FF cur_shift = (shift * second_shift);
-    FF cur_second_shift = cur_shift * shift;
-    for (size_t i = 3; i < total_limb_num; i = i + 2) {
-        sums.emplace_back(this->add_variable(this->get_variable(sums[sums.size() - 1]) + cur_shift * val_slices[i] +
-                                             cur_second_shift * val_slices[i + 1]));
-        create_big_add_gate({ sums[sums.size() - 2],
-                              val_limbs[i],
-                              val_limbs[i + 1],
-                              sums[sums.size() - 1],
-                              1,
-                              cur_shift,
-                              cur_second_shift,
-                              -1,
-                              0 });
-        cur_shift *= second_shift;
-        cur_second_shift *= second_shift;
-    }
-    this->assert_equal(sums[sums.size() - 1], variable_index, msg);
-    return sums;
+    create_unconstrained_gate(
+        block, variable_index[variable_index.size() - 1], this->zero_idx(), this->zero_idx(), this->zero_idx());
+    create_add_gate({ variable_index[variable_index.size() - 1], this->zero_idx(), this->zero_idx(), 1, 0, 0, -end });
 }
 
 /**
@@ -1369,15 +992,7 @@ template <typename ExecutionTrace>
 void UltraCircuitBuilder_<ExecutionTrace>::apply_memory_selectors(const MEMORY_SELECTORS type)
 {
     auto& block = blocks.memory;
-    block.q_memory().emplace_back(type == MEMORY_SELECTORS::MEM_NONE ? 0 : 1);
-    // Set to zero the selectors that are not enabled for this gate
-    block.q_arith().emplace_back(0);
-    block.q_delta_range().emplace_back(0);
-    block.q_lookup_type().emplace_back(0);
-    block.q_elliptic().emplace_back(0);
-    block.q_nnf().emplace_back(0);
-    block.q_poseidon2_external().emplace_back(0);
-    block.q_poseidon2_internal().emplace_back(0);
+    block.set_gate_selector(type == MEMORY_SELECTORS::MEM_NONE ? 0 : 1);
     switch (type) {
     case MEMORY_SELECTORS::ROM_CONSISTENCY_CHECK: {
         // Memory read gate used with the sorted list of memory reads.
@@ -1390,9 +1005,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_memory_selectors(const MEMORY_S
         block.q_4().emplace_back(0);
         block.q_m().emplace_back(0);
         block.q_c().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1408,9 +1020,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_memory_selectors(const MEMORY_S
         block.q_4().emplace_back(0);
         block.q_m().emplace_back(0);
         block.q_c().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1423,14 +1032,11 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_memory_selectors(const MEMORY_S
         block.q_4().emplace_back(1);
         block.q_m().emplace_back(0);
         block.q_c().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
     case MEMORY_SELECTORS::ROM_READ: {
-        // Memory read gate for reading memory cells.
+        // Memory read gate for reading memory cells. Also used for the _initialization_ of ROM memory cells.
         // Validates record witness computation (r = read_write_flag + index * \eta + timestamp * \eta^2 + value *
         // \eta^3)
         block.q_1().emplace_back(1);
@@ -1439,9 +1045,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_memory_selectors(const MEMORY_S
         block.q_4().emplace_back(0);
         block.q_m().emplace_back(1); // validate record witness is correctly computed
         block.q_c().emplace_back(0); // read/write flag stored in q_c
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1455,9 +1058,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_memory_selectors(const MEMORY_S
         block.q_4().emplace_back(0);
         block.q_m().emplace_back(1); // validate record witness is correctly computed
         block.q_c().emplace_back(0); // read/write flag stored in q_c
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1471,9 +1071,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_memory_selectors(const MEMORY_S
         block.q_4().emplace_back(0);
         block.q_m().emplace_back(1); // validate record witness is correctly computed
         block.q_c().emplace_back(1); // read/write flag stored in q_c
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1484,9 +1081,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_memory_selectors(const MEMORY_S
         block.q_4().emplace_back(0);
         block.q_m().emplace_back(0);
         block.q_c().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1520,15 +1114,7 @@ template <typename ExecutionTrace>
 void UltraCircuitBuilder_<ExecutionTrace>::apply_nnf_selectors(const NNF_SELECTORS type)
 {
     auto& block = blocks.nnf;
-    block.q_nnf().emplace_back(type == NNF_SELECTORS::NNF_NONE ? 0 : 1);
-    // Set to zero the selectors that are not enabled for this gate
-    block.q_arith().emplace_back(0);
-    block.q_delta_range().emplace_back(0);
-    block.q_lookup_type().emplace_back(0);
-    block.q_elliptic().emplace_back(0);
-    block.q_memory().emplace_back(0);
-    block.q_poseidon2_external().emplace_back(0);
-    block.q_poseidon2_internal().emplace_back(0);
+    block.set_gate_selector(type == NNF_SELECTORS::NNF_NONE ? 0 : 1);
     switch (type) {
     case NNF_SELECTORS::LIMB_ACCUMULATE_1: {
         block.q_1().emplace_back(0);
@@ -1537,9 +1123,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_nnf_selectors(const NNF_SELECTO
         block.q_4().emplace_back(1);
         block.q_m().emplace_back(0);
         block.q_c().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1550,9 +1133,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_nnf_selectors(const NNF_SELECTO
         block.q_4().emplace_back(0);
         block.q_m().emplace_back(1);
         block.q_c().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1563,9 +1143,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_nnf_selectors(const NNF_SELECTO
         block.q_4().emplace_back(0);
         block.q_m().emplace_back(0);
         block.q_c().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1576,9 +1153,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_nnf_selectors(const NNF_SELECTO
         block.q_4().emplace_back(1);
         block.q_m().emplace_back(0);
         block.q_c().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1589,9 +1163,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_nnf_selectors(const NNF_SELECTO
         block.q_4().emplace_back(0);
         block.q_m().emplace_back(1);
         block.q_c().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1602,9 +1173,6 @@ void UltraCircuitBuilder_<ExecutionTrace>::apply_nnf_selectors(const NNF_SELECTO
         block.q_4().emplace_back(0);
         block.q_m().emplace_back(0);
         block.q_c().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
         check_selector_length_consistency();
         break;
     }
@@ -1625,12 +1193,23 @@ template <typename ExecutionTrace>
 void UltraCircuitBuilder_<ExecutionTrace>::range_constrain_two_limbs(const uint32_t lo_idx,
                                                                      const uint32_t hi_idx,
                                                                      const size_t lo_limb_bits,
-                                                                     const size_t hi_limb_bits)
+                                                                     const size_t hi_limb_bits,
+                                                                     std::string const& msg)
 {
     // Validate limbs are <= 70 bits. If limbs are larger we require more witnesses and cannot use our limb accumulation
     // custom gate
     BB_ASSERT_LTE(lo_limb_bits, 14U * 5U);
     BB_ASSERT_LTE(hi_limb_bits, 14U * 5U);
+
+    // If the value is larger than the range, we log the error in builder
+    const bool is_lo_out_of_range = (uint256_t(this->get_variable(lo_idx)) >= (uint256_t(1) << lo_limb_bits));
+    if (is_lo_out_of_range && !this->failed()) {
+        this->failure(msg + ": lo limb.");
+    }
+    const bool is_hi_out_of_range = (uint256_t(this->get_variable(hi_idx)) >= (uint256_t(1) << hi_limb_bits));
+    if (is_hi_out_of_range && !this->failed()) {
+        this->failure(msg + ": hi limb.");
+    }
 
     // Sometimes we try to use limbs that are too large. It's easier to catch this issue here
     const auto get_sublimbs = [&](const uint32_t& limb_idx, const std::array<uint64_t, 5>& sublimb_masks) {
@@ -1640,15 +1219,15 @@ void UltraCircuitBuilder_<ExecutionTrace>::range_constrain_two_limbs(const uint3
         // We also use zero_idx to substitute variables that should be zero
         constexpr uint256_t MAX_SUBLIMB_MASK = (uint256_t(1) << 14) - 1;
         std::array<uint32_t, 5> sublimb_indices;
-        sublimb_indices[0] = sublimb_masks[0] != 0 ? this->add_variable(limb & MAX_SUBLIMB_MASK) : this->zero_idx;
+        sublimb_indices[0] = sublimb_masks[0] != 0 ? this->add_variable(fr(limb & MAX_SUBLIMB_MASK)) : this->zero_idx();
         sublimb_indices[1] =
-            sublimb_masks[1] != 0 ? this->add_variable((limb >> 14) & MAX_SUBLIMB_MASK) : this->zero_idx;
+            sublimb_masks[1] != 0 ? this->add_variable(fr((limb >> 14) & MAX_SUBLIMB_MASK)) : this->zero_idx();
         sublimb_indices[2] =
-            sublimb_masks[2] != 0 ? this->add_variable((limb >> 28) & MAX_SUBLIMB_MASK) : this->zero_idx;
+            sublimb_masks[2] != 0 ? this->add_variable(fr((limb >> 28) & MAX_SUBLIMB_MASK)) : this->zero_idx();
         sublimb_indices[3] =
-            sublimb_masks[3] != 0 ? this->add_variable((limb >> 42) & MAX_SUBLIMB_MASK) : this->zero_idx;
+            sublimb_masks[3] != 0 ? this->add_variable(fr((limb >> 42) & MAX_SUBLIMB_MASK)) : this->zero_idx();
         sublimb_indices[4] =
-            sublimb_masks[4] != 0 ? this->add_variable((limb >> 56) & MAX_SUBLIMB_MASK) : this->zero_idx;
+            sublimb_masks[4] != 0 ? this->add_variable(fr((limb >> 56) & MAX_SUBLIMB_MASK)) : this->zero_idx();
         return sublimb_indices;
     };
 
@@ -1678,63 +1257,30 @@ void UltraCircuitBuilder_<ExecutionTrace>::range_constrain_two_limbs(const uint3
     apply_nnf_selectors(NNF_SELECTORS::LIMB_ACCUMULATE_1);
     apply_nnf_selectors(NNF_SELECTORS::LIMB_ACCUMULATE_2);
     apply_nnf_selectors(NNF_SELECTORS::NNF_NONE);
-    this->num_gates += 3;
+    this->increment_num_gates(3);
 
     for (size_t i = 0; i < 5; i++) {
         if (lo_masks[i] != 0) {
-            create_new_range_constraint(lo_sublimbs[i], lo_masks[i]);
+            create_new_range_constraint(lo_sublimbs[i], lo_masks[i], "ultra_circuit_builder: sublimb of low too large");
         }
         if (hi_masks[i] != 0) {
-            create_new_range_constraint(hi_sublimbs[i], hi_masks[i]);
+            create_new_range_constraint(hi_sublimbs[i], hi_masks[i], "ultra_circuit_builder: sublimb of hi too large");
         }
     }
 };
 
 /**
- * @brief Decompose a single witness into two, where the lowest is DEFAULT_NON_NATIVE_FIELD_LIMB_BITS (68) range
- * constrained and the lowst is num_limb_bits - DEFAULT.. range constrained.
+ * @brief Create gates for a full non-native field multiplication identity a * b = q * p + r
  *
- * @details Doesn't create gates constraining the limbs to each other.
- *
- * @param limb_idx The index of the limb that will be decomposed
- * @param num_limb_bits The range we want to constrain the original limb to
- * @return std::array<uint32_t, 2> The indices of new limbs.
- */
-template <typename ExecutionTrace>
-std::array<uint32_t, 2> UltraCircuitBuilder_<ExecutionTrace>::decompose_non_native_field_double_width_limb(
-    const uint32_t limb_idx, const size_t num_limb_bits)
-{
-    BB_ASSERT_LT(uint256_t(this->get_variable_reference(limb_idx)), (uint256_t(1) << num_limb_bits));
-    constexpr FF LIMB_MASK = (uint256_t(1) << DEFAULT_NON_NATIVE_FIELD_LIMB_BITS) - 1;
-    const uint256_t value = this->get_variable(limb_idx);
-    const uint256_t low = value & LIMB_MASK;
-    const uint256_t hi = value >> DEFAULT_NON_NATIVE_FIELD_LIMB_BITS;
-    BB_ASSERT_EQ(low + (hi << DEFAULT_NON_NATIVE_FIELD_LIMB_BITS), value);
-
-    const uint32_t low_idx = this->add_variable(low);
-    const uint32_t hi_idx = this->add_variable(hi);
-
-    BB_ASSERT_GT(num_limb_bits, DEFAULT_NON_NATIVE_FIELD_LIMB_BITS);
-    const size_t lo_bits = DEFAULT_NON_NATIVE_FIELD_LIMB_BITS;
-    const size_t hi_bits = num_limb_bits - DEFAULT_NON_NATIVE_FIELD_LIMB_BITS;
-    range_constrain_two_limbs(low_idx, hi_idx, lo_bits, hi_bits);
-
-    return std::array<uint32_t, 2>{ low_idx, hi_idx };
-}
-
-/**
- * @brief Queue up non-native field multiplication data.
- *
- * @details The data queued represents a non-native field multiplication identity a * b = q * p + r,
- * where a, b, q, r are all emulated non-native field elements that are each split across 4 distinct witness variables.
- *
- * Without this queue some functions, such as bb::stdlib::element::multiple_montgomery_ladder, would
- * duplicate non-native field operations, which can be quite expensive. We queue up these operations, and remove
- * duplicates in the circuit finishing stage of the proving key computation.
+ * @details Creates gates to constrain the non-native field multiplication identity a * b = q * p + r, where a, b, q, r
+ * are all emulated non-native field elements that are each split across 4 distinct witness variables.
  *
  * The non-native field modulus, p, is a circuit constant
  *
- * The return value are the witness indices of the two remainder limbs `lo_1, hi_2`
+ * This method creates 8 gates total: 4 non-native field gates to check the limb multiplications, plus 4 arithmetic
+ * gates (3 big add gates + 1 unconstrained gate) to validate the quotient and remainder terms.
+ *
+ * The return values are the witness indices of the two remainder limbs `lo_1, hi_3`
  *
  * N.B.: This method does NOT evaluate the prime field component of non-native field multiplications.
  **/
@@ -1742,47 +1288,41 @@ template <typename ExecutionTrace>
 std::array<uint32_t, 2> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_native_field_multiplication(
     const non_native_multiplication_witnesses<FF>& input)
 {
+    const auto [a0, a1, a2, a3] = std::array{ this->get_variable(input.a[0]),
+                                              this->get_variable(input.a[1]),
+                                              this->get_variable(input.a[2]),
+                                              this->get_variable(input.a[3]) };
+    const auto [b0, b1, b2, b3] = std::array{ this->get_variable(input.b[0]),
+                                              this->get_variable(input.b[1]),
+                                              this->get_variable(input.b[2]),
+                                              this->get_variable(input.b[3]) };
+    const auto [q0, q1, q2, q3] = std::array{ this->get_variable(input.q[0]),
+                                              this->get_variable(input.q[1]),
+                                              this->get_variable(input.q[2]),
+                                              this->get_variable(input.q[3]) };
+    const auto [r0, r1, r2, r3] = std::array{ this->get_variable(input.r[0]),
+                                              this->get_variable(input.r[1]),
+                                              this->get_variable(input.r[2]),
+                                              this->get_variable(input.r[3]) };
+    const auto& p_neg = input.neg_modulus;
 
-    std::array<fr, 4> a{
-        this->get_variable(input.a[0]),
-        this->get_variable(input.a[1]),
-        this->get_variable(input.a[2]),
-        this->get_variable(input.a[3]),
-    };
-    std::array<fr, 4> b{
-        this->get_variable(input.b[0]),
-        this->get_variable(input.b[1]),
-        this->get_variable(input.b[2]),
-        this->get_variable(input.b[3]),
-    };
-    std::array<fr, 4> q{
-        this->get_variable(input.q[0]),
-        this->get_variable(input.q[1]),
-        this->get_variable(input.q[2]),
-        this->get_variable(input.q[3]),
-    };
-    std::array<fr, 4> r{
-        this->get_variable(input.r[0]),
-        this->get_variable(input.r[1]),
-        this->get_variable(input.r[2]),
-        this->get_variable(input.r[3]),
-    };
     constexpr FF LIMB_SHIFT = uint256_t(1) << DEFAULT_NON_NATIVE_FIELD_LIMB_BITS;
     constexpr FF LIMB_RSHIFT = FF(1) / FF(uint256_t(1) << DEFAULT_NON_NATIVE_FIELD_LIMB_BITS);
     constexpr FF LIMB_RSHIFT_2 = FF(1) / FF(uint256_t(1) << (2 * DEFAULT_NON_NATIVE_FIELD_LIMB_BITS));
 
-    FF lo_0 = a[0] * b[0] - r[0] + (a[1] * b[0] + a[0] * b[1]) * LIMB_SHIFT;
-    FF lo_1 = (lo_0 + q[0] * input.neg_modulus[0] +
-               (q[1] * input.neg_modulus[0] + q[0] * input.neg_modulus[1] - r[1]) * LIMB_SHIFT) *
-              LIMB_RSHIFT_2;
+    // lo_0 = (a0·b0 - r0) + (a1·b0 + a0·b1)·2^L
+    FF lo_0 = (a0 * b0 - r0) + (a1 * b0 + a0 * b1) * LIMB_SHIFT;
+    // lo_1 = (lo_0 + q0·p0' + (q1·p0' + q0·p1' - r1)·2^L) / 2^2L
+    FF lo_1 = (lo_0 + q0 * p_neg[0] + (q1 * p_neg[0] + q0 * p_neg[1] - r1) * LIMB_SHIFT) * LIMB_RSHIFT_2;
 
-    FF hi_0 = a[2] * b[0] + a[0] * b[2] + (a[0] * b[3] + a[3] * b[0] - r[3]) * LIMB_SHIFT;
-    FF hi_1 = hi_0 + a[1] * b[1] - r[2] + (a[1] * b[2] + a[2] * b[1]) * LIMB_SHIFT;
-    FF hi_2 = (hi_1 + lo_1 + q[2] * input.neg_modulus[0] +
-               (q[3] * input.neg_modulus[0] + q[2] * input.neg_modulus[1]) * LIMB_SHIFT);
-    FF hi_3 = (hi_2 + (q[0] * input.neg_modulus[3] + q[1] * input.neg_modulus[2]) * LIMB_SHIFT +
-               (q[0] * input.neg_modulus[2] + q[1] * input.neg_modulus[1])) *
-              LIMB_RSHIFT_2;
+    // hi_0 = (a2·b0 + a0·b2) + (a0·b3 + a3·b0 - r3)·2^L
+    FF hi_0 = (a2 * b0 + a0 * b2) + (a0 * b3 + a3 * b0 - r3) * LIMB_SHIFT;
+    // hi_1 = hi_0 + (a1·b1 - r2) + (a1·b2 + a2·b1)·2^L
+    FF hi_1 = hi_0 + (a1 * b1 - r2) + (a1 * b2 + a2 * b1) * LIMB_SHIFT;
+    // hi_2 = hi_1 + lo_1 + q2·p0' + (q3·p0' + q2·p1')·2^L
+    FF hi_2 = hi_1 + lo_1 + q2 * p_neg[0] + (q3 * p_neg[0] + q2 * p_neg[1]) * LIMB_SHIFT;
+    // hi_3 = (hi_2 + q0·p2' + q1·p1' + (q0·p3' + q1·p2')·2^L) / 2^2L
+    FF hi_3 = (hi_2 + q0 * p_neg[2] + q1 * p_neg[1] + (q0 * p_neg[3] + q1 * p_neg[2]) * LIMB_SHIFT) * LIMB_RSHIFT_2;
 
     const uint32_t lo_0_idx = this->add_variable(lo_0);
     const uint32_t lo_1_idx = this->add_variable(lo_1);
@@ -1791,11 +1331,11 @@ std::array<uint32_t, 2> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_nativ
     const uint32_t hi_2_idx = this->add_variable(hi_2);
     const uint32_t hi_3_idx = this->add_variable(hi_3);
 
-    // TODO(https://github.com/AztecProtocol/barretenberg/issues/879): Originally this was a single arithmetic gate.
-    // With trace sorting, we must add a dummy gate since the add gate would otherwise try to read into an nnf gate that
-    // has been sorted out of sequence.
-    // product gate 1
+    // Gate 1: big_add_gate to validate lo_1
     // (lo_0 + q_0(p_0 + p_1*2^b) + q_1(p_0*2^b) - (r_1)2^b)2^-2b - lo_1 = 0
+    // This constraint requires two rows in the trace: an arithmetic gate plus an unconstrained arithmetic gate
+    // containing lo_0 in wire 4 so that the previous gate can access it via shifts. (We cannot use the next nnf gate
+    // for this purpose since our trace is sorted by gate type).
     create_big_add_gate({ input.q[0],
                           input.q[1],
                           input.r[1],
@@ -1805,70 +1345,72 @@ std::array<uint32_t, 2> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_nativ
                           -LIMB_SHIFT,
                           -LIMB_SHIFT.sqr(),
                           0 },
-                        true);
-    create_dummy_gate(blocks.arithmetic, this->zero_idx, this->zero_idx, this->zero_idx, lo_0_idx);
+                        /*include_next_gate_w_4*/ true);
+    // Gate 2: unconstrained gate to provide lo_0 via w_4_shift for gate 1
+    create_unconstrained_gate(blocks.arithmetic, this->zero_idx(), this->zero_idx(), this->zero_idx(), lo_0_idx);
+
     //
     // a = (a3 || a2 || a1 || a0) = (a3 * 2^b + a2) * 2^b + (a1 * 2^b + a0)
     // b = (b3 || b2 || b1 || b0) = (b3 * 2^b + b2) * 2^b + (b1 * 2^b + b0)
     //
-    // Check if lo_0 was computed correctly.
+    // Gate 3: NNF gate to check if lo_0 was computed correctly
     // The gate structure for the nnf gates is as follows:
     //
-    // | a1 | b1 | r0 | lo_0 | <-- product gate 1: check lo_0
+    // | a1 | b1 | r0 | lo_0 | <-- Gate 3: check lo_0
     // | a0 | b0 | a3 | b3   |
     // | a2 | b2 | r3 | hi_0 |
     // | a1 | b1 | r2 | hi_1 |
     //
-    // Constaint: lo_0 = (a1 * b0 + a0 * b1) * 2^b  +  (a0 * b0) - r0
+    // Constraint: lo_0 = (a1 * b0 + a0 * b1) * 2^b  +  (a0 * b0) - r0
     //              w4 = (w1 * w'2 + w'1 * w2) * 2^b + (w'1 * w'2) - w3
     //
     blocks.nnf.populate_wires(input.a[1], input.b[1], input.r[0], lo_0_idx);
     apply_nnf_selectors(NNF_SELECTORS::NON_NATIVE_FIELD_1);
-    ++this->num_gates;
+    this->increment_num_gates();
 
     //
-    // Check if hi_0 was computed correctly.
+    // Gate 4: NNF gate to check if hi_0 was computed correctly
     //
     // | a1 | b1 | r0 | lo_0 |
-    // | a0 | b0 | a3 | b3   | <-- product gate 2: check hi_0
+    // | a0 | b0 | a3 | b3   | <-- Gate 4: check hi_0
     // | a2 | b2 | r3 | hi_0 |
     // | a1 | b1 | r2 | hi_1 |
     //
-    // Constaint: hi_0 = (a0 * b3 + a3 * b0 - r3) * 2^b + (a0 * b2 + a2 * b0) - r2
-    //             w'4 = (w1 * w4 + w2 * w3 - w'3) * 2^b + (w1 * w'2 + w'1 * w2) - w'3
+    // Constraint: hi_0 = (a0 * b3 + a3 * b0 - r3) * 2^b + (a0 * b2 + a2 * b0)
+    //             w'4 = (w1 * w4 + w2 * w3 - w'3) * 2^b + (w1 * w'2 + w'1 * w2)
     //
     blocks.nnf.populate_wires(input.a[0], input.b[0], input.a[3], input.b[3]);
     apply_nnf_selectors(NNF_SELECTORS::NON_NATIVE_FIELD_2);
-    ++this->num_gates;
+    this->increment_num_gates();
 
     //
-    // Check if hi_1 was computed correctly.
+    // Gate 5: NNF gate to check if hi_1 was computed correctly
     //
     // | a1 | b1 | r0 | lo_0 |
     // | a0 | b0 | a3 | b3   |
-    // | a2 | b2 | r3 | hi_0 | <-- product gate 3: check hi_1
+    // | a2 | b2 | r3 | hi_0 | <-- Gate 5: check hi_1
     // | a1 | b1 | r2 | hi_1 |
     //
-    // Constaint: hi_1 = hi_0 + (a2 * b1 + a1 * b2) * 2^b + (a1 * b1)
-    //             w'4 = w4 + (w1 * w'2 + w'1 * w2) * 2^b + (w'1 * w'2)
+    // Constraint: hi_1 = hi_0 + (a2 * b1 + a1 * b2) * 2^b + (a1 * b1) - r2
+    //             w'4 = w4 + (w1 * w'2 + w'1 * w2) * 2^b + (w'1 * w'2) - w'3
     //
     blocks.nnf.populate_wires(input.a[2], input.b[2], input.r[3], hi_0_idx);
     apply_nnf_selectors(NNF_SELECTORS::NON_NATIVE_FIELD_3);
-    ++this->num_gates;
+    this->increment_num_gates();
 
     //
-    // Does nothing, but is used by the previous gate to read the hi_1 limb.
+    // Gate 6: NNF gate with no constraints (q_nnf=0, truly unconstrained)
+    // Provides values a[1], b[1], r[2], hi_1 to Gate 5 via shifts (w'1, w'2, w'3, w'4)
     //
     blocks.nnf.populate_wires(input.a[1], input.b[1], input.r[2], hi_1_idx);
     apply_nnf_selectors(NNF_SELECTORS::NNF_NONE);
-    ++this->num_gates;
+    this->increment_num_gates();
 
-    /**
-     * product gate 6
-     *
-     * hi_2 - hi_1 - lo_1 - q[2](p[1].2^b + p[0]) - q[3](p[0].2^b) = 0
-     *
-     **/
+    //
+    // Gate 7: big_add_gate to validate hi_2
+    //
+    // hi_2 - hi_1 - lo_1 - q[2](p[1].2^b + p[0]) - q[3](p[0].2^b) = 0
+    //
     create_big_add_gate(
         {
             input.q[2],
@@ -1881,13 +1423,13 @@ std::array<uint32_t, 2> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_nativ
             -1,
             0,
         },
-        true);
+        /*include_next_gate_w_4*/ true);
 
-    /**
-     * product gate 7
-     *
-     * hi_3 - (hi_2 - q[0](p[3].2^b + p[2]) - q[1](p[2].2^b + p[1])).2^-2b
-     **/
+    //
+    // Gate 8: big_add_gate to validate hi_3 (provides hi_2 in w_4 for gate 7)
+    //
+    // hi_3 - (hi_2 - q[0](p[3].2^b + p[2]) - q[1](p[2].2^b + p[1])).2^-2b = 0
+    //
     create_big_add_gate({
         hi_3_idx,
         input.q[0],
@@ -1904,27 +1446,10 @@ std::array<uint32_t, 2> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_nativ
 }
 
 /**
- * @brief Copy the public input idx data into the public inputs trace block
- * @note
- */
-template <typename ExecutionTrace> void UltraCircuitBuilder_<ExecutionTrace>::populate_public_inputs_block()
-{
-    BB_BENCH_NAME("populate_public_inputs_block");
-
-    // Update the public inputs block
-    for (const auto& idx : this->public_inputs()) {
-        // first two wires get a copy of the public inputs
-        blocks.pub_inputs.populate_wires(idx, idx, this->zero_idx, this->zero_idx);
-        for (auto& selector : this->blocks.pub_inputs.get_selectors()) {
-            selector.emplace_back(0);
-        }
-    }
-}
-
-/**
- * @brief Called in `compute_prover_instance` when finalizing circuit.
- * Iterates over the cached_non_native_field_multiplication objects,
- * removes duplicates, and instantiates the remainder as constraints`
+ * @brief Iterates over the cached_non_native_field_multiplication objects, removes duplicates, and instantiates the
+ * corresponding constraints
+ * @details Intended to be called during circuit finalization.
+ *
  */
 template <typename ExecutionTrace> void UltraCircuitBuilder_<ExecutionTrace>::process_non_native_field_multiplications()
 {
@@ -1940,37 +1465,34 @@ template <typename ExecutionTrace> void UltraCircuitBuilder_<ExecutionTrace>::pr
     // iterate over the cached items and create constraints
     for (const auto& input : cached_partial_non_native_field_multiplications) {
 
-        blocks.nnf.populate_wires(input.a[1], input.b[1], this->zero_idx, input.lo_0);
+        blocks.nnf.populate_wires(input.a[1], input.b[1], this->zero_idx(), input.lo_0);
         apply_nnf_selectors(NNF_SELECTORS::NON_NATIVE_FIELD_1);
-        ++this->num_gates;
+        this->increment_num_gates();
 
         blocks.nnf.populate_wires(input.a[0], input.b[0], input.a[3], input.b[3]);
         apply_nnf_selectors(NNF_SELECTORS::NON_NATIVE_FIELD_2);
-        ++this->num_gates;
+        this->increment_num_gates();
 
-        blocks.nnf.populate_wires(input.a[2], input.b[2], this->zero_idx, input.hi_0);
+        blocks.nnf.populate_wires(input.a[2], input.b[2], this->zero_idx(), input.hi_0);
         apply_nnf_selectors(NNF_SELECTORS::NON_NATIVE_FIELD_3);
-        ++this->num_gates;
+        this->increment_num_gates();
 
-        blocks.nnf.populate_wires(input.a[1], input.b[1], this->zero_idx, input.hi_1);
+        blocks.nnf.populate_wires(input.a[1], input.b[1], this->zero_idx(), input.hi_1);
         apply_nnf_selectors(NNF_SELECTORS::NNF_NONE);
-        ++this->num_gates;
+        this->increment_num_gates();
     }
 }
 
 /**
- * Compute the limb-multiplication part of a non native field mul
- *
- * i.e. compute the low 204 and high 204 bit components of `a * b` where `a, b` are nnf elements composed of 4
+ * @brief Queue the addition of gates constraining the limb-multiplication part of a non native field mul
+ * @details i.e. compute the low 204 and high 204 bit components of `a * b` where `a, b` are nnf elements composed of 4
  * limbs with size DEFAULT_NON_NATIVE_FIELD_LIMB_BITS
  *
  **/
-
 template <typename ExecutionTrace>
 std::array<uint32_t, 2> UltraCircuitBuilder_<ExecutionTrace>::queue_partial_non_native_field_multiplication(
     const non_native_partial_multiplication_witnesses<FF>& input)
 {
-
     std::array<fr, 4> a{
         this->get_variable(input.a[0]),
         this->get_variable(input.a[1]),
@@ -1986,17 +1508,15 @@ std::array<uint32_t, 2> UltraCircuitBuilder_<ExecutionTrace>::queue_partial_non_
 
     constexpr FF LIMB_SHIFT = uint256_t(1) << DEFAULT_NON_NATIVE_FIELD_LIMB_BITS;
 
-    FF lo_0 = a[0] * b[0] + (a[1] * b[0] + a[0] * b[1]) * LIMB_SHIFT;
-
-    FF hi_0 = a[2] * b[0] + a[0] * b[2] + (a[0] * b[3] + a[3] * b[0]) * LIMB_SHIFT;
-    FF hi_1 = hi_0 + a[1] * b[1] + (a[1] * b[2] + a[2] * b[1]) * LIMB_SHIFT;
+    FF lo_0 = a[0] * b[0] + ((a[1] * b[0] + a[0] * b[1]) * LIMB_SHIFT);
+    FF hi_0 = a[2] * b[0] + a[0] * b[2] + ((a[0] * b[3] + a[3] * b[0]) * LIMB_SHIFT);
+    FF hi_1 = hi_0 + a[1] * b[1] + ((a[1] * b[2] + a[2] * b[1]) * LIMB_SHIFT);
 
     const uint32_t lo_0_idx = this->add_variable(lo_0);
     const uint32_t hi_0_idx = this->add_variable(hi_0);
     const uint32_t hi_1_idx = this->add_variable(hi_1);
 
-    // Add witnesses into the multiplication cache
-    // (when finalising the circuit, we will remove duplicates; several dups produced by biggroup.hpp methods)
+    // Add witnesses into the multiplication cache (duplicates removed during circuit finalization)
     cached_partial_non_native_field_multiplication cache_entry{
         .a = input.a,
         .b = input.b,
@@ -2009,92 +1529,94 @@ std::array<uint32_t, 2> UltraCircuitBuilder_<ExecutionTrace>::queue_partial_non_
 }
 
 /**
- * Uses a sneaky extra mini-addition gate in `plookup_arithmetic_widget.hpp` to add two non-native
- * field elements in 4 gates (would normally take 5)
+ * @brief Construct gates for non-native field addition
+ * @details Uses special mode of ArithmeticRelation (q_arith = 2 and q_arith = 3) to add two non-native field elements
+ * in 4 gates instead of 5.
  **/
-
 template <typename ExecutionTrace>
 std::array<uint32_t, 5> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_native_field_addition(
     add_simple limb0, add_simple limb1, add_simple limb2, add_simple limb3, std::tuple<uint32_t, uint32_t, FF> limbp)
 {
-    const auto& x_0 = std::get<0>(limb0).first;
-    const auto& x_1 = std::get<0>(limb1).first;
-    const auto& x_2 = std::get<0>(limb2).first;
-    const auto& x_3 = std::get<0>(limb3).first;
-    const auto& x_p = std::get<0>(limbp);
+    const uint32_t& x_0 = std::get<0>(limb0).first;
+    const uint32_t& x_1 = std::get<0>(limb1).first;
+    const uint32_t& x_2 = std::get<0>(limb2).first;
+    const uint32_t& x_3 = std::get<0>(limb3).first;
+    const uint32_t& x_p = std::get<0>(limbp);
 
-    const auto& x_mulconst0 = std::get<0>(limb0).second;
-    const auto& x_mulconst1 = std::get<0>(limb1).second;
-    const auto& x_mulconst2 = std::get<0>(limb2).second;
-    const auto& x_mulconst3 = std::get<0>(limb3).second;
+    const FF& x_mulconst0 = std::get<0>(limb0).second;
+    const FF& x_mulconst1 = std::get<0>(limb1).second;
+    const FF& x_mulconst2 = std::get<0>(limb2).second;
+    const FF& x_mulconst3 = std::get<0>(limb3).second;
 
-    const auto& y_0 = std::get<1>(limb0).first;
-    const auto& y_1 = std::get<1>(limb1).first;
-    const auto& y_2 = std::get<1>(limb2).first;
-    const auto& y_3 = std::get<1>(limb3).first;
-    const auto& y_p = std::get<1>(limbp);
+    const uint32_t& y_0 = std::get<1>(limb0).first;
+    const uint32_t& y_1 = std::get<1>(limb1).first;
+    const uint32_t& y_2 = std::get<1>(limb2).first;
+    const uint32_t& y_3 = std::get<1>(limb3).first;
+    const uint32_t& y_p = std::get<1>(limbp);
 
-    const auto& y_mulconst0 = std::get<1>(limb0).second;
-    const auto& y_mulconst1 = std::get<1>(limb1).second;
-    const auto& y_mulconst2 = std::get<1>(limb2).second;
-    const auto& y_mulconst3 = std::get<1>(limb3).second;
+    const FF& y_mulconst0 = std::get<1>(limb0).second;
+    const FF& y_mulconst1 = std::get<1>(limb1).second;
+    const FF& y_mulconst2 = std::get<1>(limb2).second;
+    const FF& y_mulconst3 = std::get<1>(limb3).second;
 
     // constant additive terms
-    const auto& addconst0 = std::get<2>(limb0);
-    const auto& addconst1 = std::get<2>(limb1);
-    const auto& addconst2 = std::get<2>(limb2);
-    const auto& addconst3 = std::get<2>(limb3);
-    const auto& addconstp = std::get<2>(limbp);
+    const FF& addconst0 = std::get<2>(limb0);
+    const FF& addconst1 = std::get<2>(limb1);
+    const FF& addconst2 = std::get<2>(limb2);
+    const FF& addconst3 = std::get<2>(limb3);
+    const FF& addconstp = std::get<2>(limbp);
 
     // get value of result limbs
-    const auto z_0value = this->get_variable(x_0) * x_mulconst0 + this->get_variable(y_0) * y_mulconst0 + addconst0;
-    const auto z_1value = this->get_variable(x_1) * x_mulconst1 + this->get_variable(y_1) * y_mulconst1 + addconst1;
-    const auto z_2value = this->get_variable(x_2) * x_mulconst2 + this->get_variable(y_2) * y_mulconst2 + addconst2;
-    const auto z_3value = this->get_variable(x_3) * x_mulconst3 + this->get_variable(y_3) * y_mulconst3 + addconst3;
-    const auto z_pvalue = this->get_variable(x_p) + this->get_variable(y_p) + addconstp;
+    const FF z_0value = (this->get_variable(x_0) * x_mulconst0) + (this->get_variable(y_0) * y_mulconst0) + addconst0;
+    const FF z_1value = (this->get_variable(x_1) * x_mulconst1) + (this->get_variable(y_1) * y_mulconst1) + addconst1;
+    const FF z_2value = (this->get_variable(x_2) * x_mulconst2) + (this->get_variable(y_2) * y_mulconst2) + addconst2;
+    const FF z_3value = (this->get_variable(x_3) * x_mulconst3) + (this->get_variable(y_3) * y_mulconst3) + addconst3;
+    const FF z_pvalue = this->get_variable(x_p) + this->get_variable(y_p) + addconstp;
 
-    const auto z_0 = this->add_variable(z_0value);
-    const auto z_1 = this->add_variable(z_1value);
-    const auto z_2 = this->add_variable(z_2value);
-    const auto z_3 = this->add_variable(z_3value);
-    const auto z_p = this->add_variable(z_pvalue);
+    const uint32_t z_0 = this->add_variable(z_0value);
+    const uint32_t z_1 = this->add_variable(z_1value);
+    const uint32_t z_2 = this->add_variable(z_2value);
+    const uint32_t z_3 = this->add_variable(z_3value);
+    const uint32_t z_p = this->add_variable(z_pvalue);
 
     /**
-     *   we want the following layout in program memory
-     *   (x - y = z)
+     * We want to impose the following five constraints:
+     *   Limb constraints: z.i = x.i * x_mulconst.i + y.i * y_mulconst.i + addconst.i, for i in [0, 3]
+     *   Prime basis limb constraint: z.p = x.p + y.p + addconstp
      *
-     *   |  1  |  2  |  3  |  4  |
-     *   |-----|-----|-----|-----|
-     *   | y.p | x.0 | y.0 | x.p | (b.p + c.p - a.p = 0) AND (a.0 - b.0 - c.0 = 0)
-     *   | z.p | x.1 | y.1 | z.0 | (a.1 - b.1 - c.1 = 0)
-     *   | x.2 | y.2 | z.2 | z.1 | (a.2 - b.2 - c.2 = 0)
-     *   | x.3 | y.3 | z.3 | --- | (a.3 - b.3 - c.3 = 0)
+     *   Wire layout for non-native field addition (z = x + y)
      *
-     * By setting `q_arith` to `3`, we can validate `x_p + y_p + q_m = z_p`
+     *   | w_1 | w_2 | w_3 | w_4 | q_arith |
+     *   |-----|-----|-----|-----|---------|
+     *   | y.p | x.0 | y.0 | x.p |    3    |
+     *   | z.p | x.1 | y.1 | z.0 |    2    |
+     *   | x.2 | y.2 | z.2 | z.1 |    1    |
+     *   | x.3 | y.3 | z.3 | --- |    1    |
+     *
+     *   Row 0:
+     *     - x.0 * x_mulconst.0 + y.0 * y_mulconst.0 - z.0 + addconst.0 = 0 (q_2*w_2 + q_3*w_3 + q_c + w_4_shift = 0)
+     *     - x.p + y.p - z.p + addconstp = 0 (w_1 + w_4 - w_1_shift + q_m = 0)
+     *   Row 1: x.1 * x_mulconst.1 + y.1 * y_mulconst.1 - z.1 + addconst.1 = 0 (q_2*w_2 + q_3*w_3 + q_c + w_4_shift = 0)
+     *   Row 2: x.2 * x_mulconst.2 + y.2 * y_mulconst.2 - z.2 + addconst.2 = 0 (q_1*w_1 + q_2*w_2 + q_3*w_3 + q_c = 0)
+     *   Row 3: x.3 * x_mulconst.3 + y.3 * y_mulconst.3 - z.3 + addconst.3 = 0 (q_1*w_1 + q_2*w_2 + q_3*w_3 + q_c = 0)
      **/
-    // GATE 1
-    // |  1  |  2  |  3  |  4  |
-    // |-----|-----|-----|-----|
-    // | y.p | x.0 | y.0 | z.p | (b.p + b.p - c.p = 0) AND (a.0 + b.0 - c.0 = 0)
-    // | x.p | x.1 | y.1 | z.0 | (a.1  + b.1 - c.1 = 0)
-    // | x.2 | y.2 | z.2 | z.1 | (a.2  + b.2 - c.2 = 0)
-    // | x.3 | y.3 | z.3 | --- | (a.3  + b.3 - c.3 = 0)
-    // TODO(https://github.com/AztecProtocol/barretenberg/issues/896): descrepency between above comment and the actual
-    // implementation below.
     auto& block = blocks.arithmetic;
     block.populate_wires(y_p, x_0, y_0, x_p);
     block.populate_wires(z_p, x_1, y_1, z_0);
     block.populate_wires(x_2, y_2, z_2, z_1);
-    block.populate_wires(x_3, y_3, z_3, this->zero_idx);
+    block.populate_wires(x_3, y_3, z_3, this->zero_idx());
 
+    // When q_arith == 3, w_4_shift is scaled by 2 (see ArithmeticRelation for details). Therefore, for consistency we
+    // also scale each linear term by this factor of 2 so that the constraint is effectively:
+    //      (q_l * w_1) + (q_r * w_2) + (q_o * w_3) + (q_4 * w_4) + q_c + w_4_shift = 0
+    const FF linear_term_scale_factor = 2;
     block.q_m().emplace_back(addconstp);
     block.q_1().emplace_back(0);
-    block.q_2().emplace_back(-x_mulconst0 *
-                             2); // scale constants by 2. If q_arith = 3 then w_4_omega value (z0) gets scaled by 2x
-    block.q_3().emplace_back(-y_mulconst0 * 2); // z_0 - (x_0 * -xmulconst0) - (y_0 * ymulconst0) = 0 => z_0 = x_0 + y_0
+    block.q_2().emplace_back(-x_mulconst0 * linear_term_scale_factor);
+    block.q_3().emplace_back(-y_mulconst0 * linear_term_scale_factor);
     block.q_4().emplace_back(0);
-    block.q_c().emplace_back(-addconst0 * 2);
-    block.q_arith().emplace_back(3);
+    block.q_c().emplace_back(-addconst0 * linear_term_scale_factor);
+    block.set_gate_selector(3);
 
     block.q_m().emplace_back(0);
     block.q_1().emplace_back(0);
@@ -2102,7 +1624,7 @@ std::array<uint32_t, 5> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_nativ
     block.q_3().emplace_back(-y_mulconst1);
     block.q_4().emplace_back(0);
     block.q_c().emplace_back(-addconst1);
-    block.q_arith().emplace_back(2);
+    block.set_gate_selector(2);
 
     block.q_m().emplace_back(0);
     block.q_1().emplace_back(-x_mulconst2);
@@ -2110,7 +1632,7 @@ std::array<uint32_t, 5> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_nativ
     block.q_3().emplace_back(1);
     block.q_4().emplace_back(0);
     block.q_c().emplace_back(-addconst2);
-    block.q_arith().emplace_back(1);
+    block.set_gate_selector(1);
 
     block.q_m().emplace_back(0);
     block.q_1().emplace_back(-x_mulconst3);
@@ -2118,106 +1640,108 @@ std::array<uint32_t, 5> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_nativ
     block.q_3().emplace_back(1);
     block.q_4().emplace_back(0);
     block.q_c().emplace_back(-addconst3);
-    block.q_arith().emplace_back(1);
+    block.set_gate_selector(1);
 
-    for (size_t i = 0; i < 4; ++i) {
-        block.q_delta_range().emplace_back(0);
-        block.q_lookup_type().emplace_back(0);
-        block.q_elliptic().emplace_back(0);
-        block.q_memory().emplace_back(0);
-        block.q_nnf().emplace_back(0);
-        block.q_poseidon2_external().emplace_back(0);
-        block.q_poseidon2_internal().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
-    }
     check_selector_length_consistency();
 
-    this->num_gates += 4;
+    this->increment_num_gates(4);
     return std::array<uint32_t, 5>{
         z_0, z_1, z_2, z_3, z_p,
     };
 }
 
+/**
+ * @brief Construct gates for non-native field subtraction
+ * @details Uses special mode of ArithmeticRelation (q_arith = 2 and q_arith = 3) to subtract two non-native field
+ * elements in 4 gates instead of 5.
+ **/
 template <typename ExecutionTrace>
 std::array<uint32_t, 5> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_native_field_subtraction(
     add_simple limb0, add_simple limb1, add_simple limb2, add_simple limb3, std::tuple<uint32_t, uint32_t, FF> limbp)
 {
-    const auto& x_0 = std::get<0>(limb0).first;
-    const auto& x_1 = std::get<0>(limb1).first;
-    const auto& x_2 = std::get<0>(limb2).first;
-    const auto& x_3 = std::get<0>(limb3).first;
-    const auto& x_p = std::get<0>(limbp);
+    const uint32_t& x_0 = std::get<0>(limb0).first;
+    const uint32_t& x_1 = std::get<0>(limb1).first;
+    const uint32_t& x_2 = std::get<0>(limb2).first;
+    const uint32_t& x_3 = std::get<0>(limb3).first;
+    const uint32_t& x_p = std::get<0>(limbp);
 
-    const auto& x_mulconst0 = std::get<0>(limb0).second;
-    const auto& x_mulconst1 = std::get<0>(limb1).second;
-    const auto& x_mulconst2 = std::get<0>(limb2).second;
-    const auto& x_mulconst3 = std::get<0>(limb3).second;
+    const FF& x_mulconst0 = std::get<0>(limb0).second;
+    const FF& x_mulconst1 = std::get<0>(limb1).second;
+    const FF& x_mulconst2 = std::get<0>(limb2).second;
+    const FF& x_mulconst3 = std::get<0>(limb3).second;
 
-    const auto& y_0 = std::get<1>(limb0).first;
-    const auto& y_1 = std::get<1>(limb1).first;
-    const auto& y_2 = std::get<1>(limb2).first;
-    const auto& y_3 = std::get<1>(limb3).first;
-    const auto& y_p = std::get<1>(limbp);
+    const uint32_t& y_0 = std::get<1>(limb0).first;
+    const uint32_t& y_1 = std::get<1>(limb1).first;
+    const uint32_t& y_2 = std::get<1>(limb2).first;
+    const uint32_t& y_3 = std::get<1>(limb3).first;
+    const uint32_t& y_p = std::get<1>(limbp);
 
-    const auto& y_mulconst0 = std::get<1>(limb0).second;
-    const auto& y_mulconst1 = std::get<1>(limb1).second;
-    const auto& y_mulconst2 = std::get<1>(limb2).second;
-    const auto& y_mulconst3 = std::get<1>(limb3).second;
+    const FF& y_mulconst0 = std::get<1>(limb0).second;
+    const FF& y_mulconst1 = std::get<1>(limb1).second;
+    const FF& y_mulconst2 = std::get<1>(limb2).second;
+    const FF& y_mulconst3 = std::get<1>(limb3).second;
 
     // constant additive terms
-    const auto& addconst0 = std::get<2>(limb0);
-    const auto& addconst1 = std::get<2>(limb1);
-    const auto& addconst2 = std::get<2>(limb2);
-    const auto& addconst3 = std::get<2>(limb3);
-    const auto& addconstp = std::get<2>(limbp);
+    const FF& addconst0 = std::get<2>(limb0);
+    const FF& addconst1 = std::get<2>(limb1);
+    const FF& addconst2 = std::get<2>(limb2);
+    const FF& addconst3 = std::get<2>(limb3);
+    const FF& addconstp = std::get<2>(limbp);
 
     // get value of result limbs
-    const auto z_0value = this->get_variable(x_0) * x_mulconst0 - this->get_variable(y_0) * y_mulconst0 + addconst0;
-    const auto z_1value = this->get_variable(x_1) * x_mulconst1 - this->get_variable(y_1) * y_mulconst1 + addconst1;
-    const auto z_2value = this->get_variable(x_2) * x_mulconst2 - this->get_variable(y_2) * y_mulconst2 + addconst2;
-    const auto z_3value = this->get_variable(x_3) * x_mulconst3 - this->get_variable(y_3) * y_mulconst3 + addconst3;
-    const auto z_pvalue = this->get_variable(x_p) - this->get_variable(y_p) + addconstp;
+    const FF z_0value = (this->get_variable(x_0) * x_mulconst0) - (this->get_variable(y_0) * y_mulconst0) + addconst0;
+    const FF z_1value = (this->get_variable(x_1) * x_mulconst1) - (this->get_variable(y_1) * y_mulconst1) + addconst1;
+    const FF z_2value = (this->get_variable(x_2) * x_mulconst2) - (this->get_variable(y_2) * y_mulconst2) + addconst2;
+    const FF z_3value = (this->get_variable(x_3) * x_mulconst3) - (this->get_variable(y_3) * y_mulconst3) + addconst3;
+    const FF z_pvalue = this->get_variable(x_p) - this->get_variable(y_p) + addconstp;
 
-    const auto z_0 = this->add_variable(z_0value);
-    const auto z_1 = this->add_variable(z_1value);
-    const auto z_2 = this->add_variable(z_2value);
-    const auto z_3 = this->add_variable(z_3value);
-    const auto z_p = this->add_variable(z_pvalue);
+    const uint32_t z_0 = this->add_variable(z_0value);
+    const uint32_t z_1 = this->add_variable(z_1value);
+    const uint32_t z_2 = this->add_variable(z_2value);
+    const uint32_t z_3 = this->add_variable(z_3value);
+    const uint32_t z_p = this->add_variable(z_pvalue);
 
     /**
-     *   we want the following layout in program memory
-     *   (x - y = z)
+     * We want to impose the following five constraints:
+     *   Limb constraints: z.i = x.i * x_mulconst.i - y.i * y_mulconst.i + addconst.i, for i in [0, 3]
+     *   Prime basis limb constraint: z.p = x.p - y.p + addconstp
      *
-     *   |  1  |  2  |  3  |  4  |
-     *   |-----|-----|-----|-----|
-     *   | y.p | x.0 | y.0 | z.p | (b.p + c.p - a.p = 0) AND (a.0 - b.0 - c.0 = 0)
-     *   | x.p | x.1 | y.1 | z.0 | (a.1 - b.1 - c.1 = 0)
-     *   | x.2 | y.2 | z.2 | z.1 | (a.2 - b.2 - c.2 = 0)
-     *   | x.3 | y.3 | z.3 | --- | (a.3 - b.3 - c.3 = 0)
+     *   Wire layout for non-native field subtraction (z = x - y)
      *
+     *   | w_1 | w_2 | w_3 | w_4 | q_arith |
+     *   |-----|-----|-----|-----|---------|
+     *   | y.p | x.0 | y.0 | z.p |    3    |
+     *   | x.p | x.1 | y.1 | z.0 |    2    |
+     *   | x.2 | y.2 | z.2 | z.1 |    1    |
+     *   | x.3 | y.3 | z.3 | --- |    1    |
+     *
+     * Note: The positions of z.p and x.p are swapped compared to the corresponding addition method. This is necessary
+     * to achieve the desired constraint since the scaler on w_1_shift is fixed to -1 in the relation implementation.
+     *
+     *   Row 0:
+     *     - x.0 * x_mulconst.0 - y.0 * y_mulconst.0 - z.0 + addconst.0 = 0 (q_2*w_2 + q_3*w_3 + q_c + w_4_shift = 0)
+     *     - x.p - y.p - z.p + addconstp = 0 (w_1 + w_4 - w_1_shift + q_m = 0)
+     *   Row 1: x.1 * x_mulconst.1 - y.1 * y_mulconst.1 - z.1 + addconst.1 = 0 (q_2*w_2 + q_3*w_3 + q_c + w_4_shift = 0)
+     *   Row 2: x.2 * x_mulconst.2 - y.2 * y_mulconst.2 - z.2 + addconst.2 = 0 (q_1*w_1 + q_2*w_2 + q_3*w_3 + q_c = 0)
+     *   Row 3: x.3 * x_mulconst.3 - y.3 * y_mulconst.3 - z.3 + addconst.3 = 0 (q_1*w_1 + q_2*w_2 + q_3*w_3 + q_c = 0)
      **/
-    // GATE 1
-    // |  1  |  2  |  3  |  4  |
-    // |-----|-----|-----|-----|
-    // | y.p | x.0 | y.0 | z.p | (b.p + c.p - a.p = 0) AND (a.0 - b.0 - c.0 = 0)
-    // | x.p | x.1 | y.1 | z.0 | (a.1 - b.1 - c.1 = 0)
-    // | x.2 | y.2 | z.2 | z.1 | (a.2 - b.2 - c.2 = 0)
-    // | x.3 | y.3 | z.3 | --- | (a.3 - b.3 - c.3 = 0)
     auto& block = blocks.arithmetic;
     block.populate_wires(y_p, x_0, y_0, z_p);
     block.populate_wires(x_p, x_1, y_1, z_0);
     block.populate_wires(x_2, y_2, z_2, z_1);
-    block.populate_wires(x_3, y_3, z_3, this->zero_idx);
+    block.populate_wires(x_3, y_3, z_3, this->zero_idx());
 
+    // When q_arith == 3, w_4_shift is scaled by 2 (see ArithmeticRelation for details). Therefore, for consistency we
+    // also scale each linear term by this factor of 2 so that the constraint is effectively:
+    //      (q_l * w_1) + (q_r * w_2) + (q_o * w_3) + (q_4 * w_4) + q_c + w_4_shift = 0
+    const FF linear_term_scale_factor = 2;
     block.q_m().emplace_back(-addconstp);
     block.q_1().emplace_back(0);
-    block.q_2().emplace_back(-x_mulconst0 * 2);
-    block.q_3().emplace_back(y_mulconst0 * 2); // z_0 + (x_0 * -xmulconst0) + (y_0 * ymulconst0) = 0 => z_0 = x_0 - y_0
+    block.q_2().emplace_back(-x_mulconst0 * linear_term_scale_factor);
+    block.q_3().emplace_back(y_mulconst0 * linear_term_scale_factor);
     block.q_4().emplace_back(0);
-    block.q_c().emplace_back(-addconst0 * 2);
-    block.q_arith().emplace_back(3);
+    block.q_c().emplace_back(-addconst0 * linear_term_scale_factor);
+    block.set_gate_selector(3);
 
     block.q_m().emplace_back(0);
     block.q_1().emplace_back(0);
@@ -2225,7 +1749,7 @@ std::array<uint32_t, 5> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_nativ
     block.q_3().emplace_back(y_mulconst1);
     block.q_4().emplace_back(0);
     block.q_c().emplace_back(-addconst1);
-    block.q_arith().emplace_back(2);
+    block.set_gate_selector(2);
 
     block.q_m().emplace_back(0);
     block.q_1().emplace_back(-x_mulconst2);
@@ -2233,7 +1757,7 @@ std::array<uint32_t, 5> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_nativ
     block.q_3().emplace_back(1);
     block.q_4().emplace_back(0);
     block.q_c().emplace_back(-addconst2);
-    block.q_arith().emplace_back(1);
+    block.set_gate_selector(1);
 
     block.q_m().emplace_back(0);
     block.q_1().emplace_back(-x_mulconst3);
@@ -2241,33 +1765,20 @@ std::array<uint32_t, 5> UltraCircuitBuilder_<ExecutionTrace>::evaluate_non_nativ
     block.q_3().emplace_back(1);
     block.q_4().emplace_back(0);
     block.q_c().emplace_back(-addconst3);
-    block.q_arith().emplace_back(1);
+    block.set_gate_selector(1);
 
-    for (size_t i = 0; i < 4; ++i) {
-        block.q_delta_range().emplace_back(0);
-        block.q_lookup_type().emplace_back(0);
-        block.q_elliptic().emplace_back(0);
-        block.q_memory().emplace_back(0);
-        block.q_nnf().emplace_back(0);
-        block.q_poseidon2_external().emplace_back(0);
-        block.q_poseidon2_internal().emplace_back(0);
-        if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-            block.pad_additional();
-        }
-    }
     check_selector_length_consistency();
 
-    this->num_gates += 4;
+    this->increment_num_gates(4);
     return std::array<uint32_t, 5>{
         z_0, z_1, z_2, z_3, z_p,
     };
 }
 
 /**
- * @brief Create a new read-only memory region
+ * @brief Create a new read-only memory region (a.k.a. ROM table)
  *
- * @details Creates a transcript object, where the inside memory state array is filled with "uninitialized memory"
- and
+ * @details Creates a transcript object, where the inside memory state array is filled with "uninitialized memory" and
  * empty memory record array. Puts this object into the vector of ROM arrays.
  *
  * @param array_size The size of region in elements
@@ -2282,9 +1793,8 @@ size_t UltraCircuitBuilder_<ExecutionTrace>::create_ROM_array(const size_t array
 /**
  * @brief Create a new updatable memory region
  *
- * @details Creates a transcript object, where the inside memory state array is filled with "uninitialized memory"
- and
- * and empty memory record array. Puts this object into the vector of ROM arrays.
+ * @details Creates a transcript object, where the inside memory state array is filled with "uninitialized memory" and
+ * empty memory record array. Puts this object into the vector of ROM arrays.
  *
  * @param array_size The size of region in elements
  * @return size_t The index of the element
@@ -2334,9 +1844,10 @@ void UltraCircuitBuilder_<ExecutionTrace>::write_RAM_array(const size_t ram_id,
 /**
  * @brief Initialize a rom cell to equal `value_witness`
  *
- * @param rom_id The index of the ROM array, which cell we are initializing
- * @param index_value The index of the cell within the array (an actual index, not a witness index)
- * @param value_witness The index of the witness with the value that should be in the
+ * @param rom_id The index of the ROM array in which we are initializing a cell
+ * @param index_value The index of the cell within the array/ROM table (an actual index, not a witness index)
+ * @param value_witness The index of the witness with the value that should be in the `index_value` place in the ROM
+ * table.
  */
 template <typename ExecutionTrace>
 void UltraCircuitBuilder_<ExecutionTrace>::set_ROM_element(const size_t rom_id,
@@ -2401,20 +1912,10 @@ void UltraCircuitBuilder_<FF>::create_poseidon2_external_gate(const poseidon2_ex
     block.q_2().emplace_back(crypto::Poseidon2Bn254ScalarFieldParams::round_constants[in.round_idx][1]);
     block.q_3().emplace_back(crypto::Poseidon2Bn254ScalarFieldParams::round_constants[in.round_idx][2]);
     block.q_c().emplace_back(0);
-    block.q_arith().emplace_back(0);
     block.q_4().emplace_back(crypto::Poseidon2Bn254ScalarFieldParams::round_constants[in.round_idx][3]);
-    block.q_delta_range().emplace_back(0);
-    block.q_lookup_type().emplace_back(0);
-    block.q_elliptic().emplace_back(0);
-    block.q_memory().emplace_back(0);
-    block.q_nnf().emplace_back(0);
-    block.q_poseidon2_external().emplace_back(1);
-    block.q_poseidon2_internal().emplace_back(0);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        block.pad_additional();
-    }
+    block.set_gate_selector(1);
     this->check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 }
 
 /**
@@ -2430,20 +1931,10 @@ void UltraCircuitBuilder_<FF>::create_poseidon2_internal_gate(const poseidon2_in
     block.q_2().emplace_back(0);
     block.q_3().emplace_back(0);
     block.q_c().emplace_back(0);
-    block.q_arith().emplace_back(0);
     block.q_4().emplace_back(0);
-    block.q_delta_range().emplace_back(0);
-    block.q_lookup_type().emplace_back(0);
-    block.q_elliptic().emplace_back(0);
-    block.q_memory().emplace_back(0);
-    block.q_nnf().emplace_back(0);
-    block.q_poseidon2_external().emplace_back(0);
-    block.q_poseidon2_internal().emplace_back(1);
-    if constexpr (HasAdditionalSelectors<ExecutionTrace>) {
-        block.pad_additional();
-    }
+    block.set_gate_selector(1);
     this->check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 }
 
 /**
@@ -2456,9 +1947,9 @@ template <typename ExecutionTrace> msgpack::sbuffer UltraCircuitBuilder_<Executi
 {
     // You should not name `zero` by yourself
     // but it will be rewritten anyway
-    auto first_zero_idx = this->get_first_variable_in_class(this->zero_idx);
+    auto first_zero_idx = this->get_first_variable_in_class(this->zero_idx());
     if (!this->variable_names.contains(first_zero_idx)) {
-        this->set_variable_name(this->zero_idx, "zero");
+        this->set_variable_name(this->zero_idx(), "zero");
     } else {
         this->variable_names[first_zero_idx] = "zero";
     }
@@ -2510,7 +2001,7 @@ template <typename ExecutionTrace> msgpack::sbuffer UltraCircuitBuilder_<Executi
                                         block.q_elliptic()[idx],
                                         block.q_memory()[idx],
                                         block.q_nnf()[idx],
-                                        block.q_lookup_type()[idx],
+                                        block.q_lookup()[idx],
                                         curve_b };
 
             std::vector<uint32_t> tmp_w = {
@@ -2597,7 +2088,5 @@ template <typename ExecutionTrace> msgpack::sbuffer UltraCircuitBuilder_<Executi
 
 template class UltraCircuitBuilder_<UltraExecutionTraceBlocks>;
 template class UltraCircuitBuilder_<MegaExecutionTraceBlocks>;
-// To enable this we need to template plookup
-// template class UltraCircuitBuilder_<grumpkin::fr>;
 
 } // namespace bb

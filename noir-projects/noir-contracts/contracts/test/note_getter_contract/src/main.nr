@@ -8,36 +8,38 @@ pub contract NoteGetter {
         messages::message_delivery::MessageDelivery,
         note::note_interface::NoteProperties,
         // Macros
-        macros::{functions::{private, utility}, storage::storage},
+        macros::{functions::external, storage::storage},
         note::note_viewer_options::NoteViewerOptions,
-        state_vars::PrivateSet,
+        protocol_types::address::AztecAddress,
+        state_vars::{Owned, PrivateSet},
     };
 
-    use value_note::value_note::ValueNote;
+    use field_note::field_note::FieldNote;
 
     #[storage]
     struct Storage<Context> {
-        set: PrivateSet<ValueNote, Context>,
+        set: Owned<PrivateSet<FieldNote, Context>, Context>,
     }
 
-    #[private]
+    #[external("private")]
     fn insert_note(value: Field) {
-        let note = ValueNote::new(value, context.msg_sender());
+        let owner = self.msg_sender().unwrap();
+        let note = FieldNote { value };
 
-        storage.set.insert(note).emit(
-            &mut context,
-            context.msg_sender(),
-            MessageDelivery.CONSTRAINED_ONCHAIN,
-        );
+        self.storage.set.at(owner).insert(note).deliver(MessageDelivery.CONSTRAINED_ONCHAIN);
     }
 
-    #[utility]
-    unconstrained fn read_note_values(comparator: u8, value: Field) -> BoundedVec<Field, 10> {
-        let notes = storage.set.view_notes(NoteViewerOptions::new().select(
-            ValueNote::properties().value,
+    #[external("utility")]
+    unconstrained fn read_note_values(
+        owner: AztecAddress,
+        comparator: u8,
+        value: Field,
+    ) -> BoundedVec<Field, 10> {
+        let notes = self.storage.set.at(owner).view_notes(NoteViewerOptions::new().select(
+            FieldNote::properties().value,
             comparator,
             value,
         ));
-        notes.map(|note| note.value())
+        notes.map(|note| note.value)
     }
 }

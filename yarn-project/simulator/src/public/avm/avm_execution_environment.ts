@@ -1,4 +1,5 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
+import type { PublicSimulatorConfig } from '@aztec/stdlib/avm';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
 import type { GlobalVariables } from '@aztec/stdlib/tx';
 
@@ -15,7 +16,7 @@ export class AvmExecutionEnvironment {
     public readonly globals: GlobalVariables,
     public readonly isStaticCall: boolean,
     public readonly calldata: Fr[],
-    public readonly clientInitiatedSimulation: boolean = false,
+    public readonly config: PublicSimulatorConfig,
   ) {}
 
   private deriveEnvironmentForNestedCallInternal(
@@ -31,7 +32,7 @@ export class AvmExecutionEnvironment {
       this.globals,
       isStaticCall,
       calldata,
-      /*clientInitiatedSimulation=*/ this.clientInitiatedSimulation,
+      this.config,
     );
   }
 

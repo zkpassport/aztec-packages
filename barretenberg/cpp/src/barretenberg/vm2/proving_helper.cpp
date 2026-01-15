@@ -48,11 +48,26 @@ std::shared_ptr<AvmVerifier::VerificationKey> AvmProvingHelper::create_verificat
     std::array<VerificationKey::Commitment, VerificationKey::NUM_PRECOMPUTED_COMMITMENTS> precomputed_cmts;
     for (size_t i = 0; i < VerificationKey::NUM_PRECOMPUTED_COMMITMENTS; i++) {
         // Adds 4 (NUM_FRS_COM) fr elements per commitment. Therefore, index = 4 * i.
-        precomputed_cmts[i] = field_conversion::convert_from_bn254_frs<VerificationKey::Commitment>(
+        precomputed_cmts[i] = FrCodec::deserialize_from_fields<VerificationKey::Commitment>(
             vk_span.subspan(AvmFlavor::NUM_FRS_COM * i, AvmFlavor::NUM_FRS_COM));
     }
 
     return std::make_shared<VerificationKey>(precomputed_cmts);
+}
+
+AvmProvingHelper::VkData AvmProvingHelper::compute_verification_key(tracegen::TraceContainer& trace)
+{
+    auto polynomials = AVM_TRACK_TIME_V("proving/prove:compute_polynomials", constraining::compute_polynomials(trace));
+    auto proving_key = AVM_TRACK_TIME_V("proving/prove:proving_key", create_proving_key(polynomials));
+
+    auto verification_key =
+        AVM_TRACK_TIME_V("proving/prove:verification_key", std::make_shared<AvmVerifier::VerificationKey>(proving_key));
+
+    info("Computed AVM vk hash: ", verification_key->hash());
+
+    auto serialized_vk = to_buffer(verification_key->to_field_elements());
+
+    return serialized_vk;
 }
 
 std::pair<AvmProvingHelper::Proof, AvmProvingHelper::VkData> AvmProvingHelper::prove(tracegen::TraceContainer&& trace)

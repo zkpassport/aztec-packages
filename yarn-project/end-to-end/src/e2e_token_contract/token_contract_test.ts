@@ -1,6 +1,9 @@
-import { AztecAddress, type AztecNode, type Logger, type Wallet, createLogger } from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { type Logger, createLogger } from '@aztec/aztec.js/log';
+import type { AztecNode } from '@aztec/aztec.js/node';
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
 import { InvalidAccountContract } from '@aztec/noir-test-contracts.js/InvalidAccount';
+import type { TestWallet } from '@aztec/test-wallet/server';
 
 import { jest } from '@jest/globals';
 
@@ -27,7 +30,7 @@ export class TokenContractTest {
   node!: AztecNode;
 
   badAccount!: InvalidAccountContract;
-  wallet!: Wallet;
+  wallet!: TestWallet;
   adminAddress!: AztecAddress;
   account1Address!: AztecAddress;
   account2Address!: AztecAddress;
@@ -87,7 +90,7 @@ export class TokenContractTest {
       },
       async ({ tokenContractAddress, badAccountAddress }) => {
         // Restore the token contract state.
-        this.asset = await TokenContract.at(tokenContractAddress, this.wallet);
+        this.asset = TokenContract.at(tokenContractAddress, this.wallet);
         this.logger.verbose(`Token contract address: ${this.asset.address}`);
 
         this.tokenSim = new TokenSimulator(this.asset, this.wallet, this.adminAddress, this.logger, [
@@ -95,7 +98,7 @@ export class TokenContractTest {
           this.account1Address,
         ]);
 
-        this.badAccount = await InvalidAccountContract.at(badAccountAddress, this.wallet);
+        this.badAccount = InvalidAccountContract.at(badAccountAddress, this.wallet);
         this.logger.verbose(`Bad account address: ${this.badAccount.address}`);
 
         expect(await this.asset.methods.get_admin().simulate({ from: this.adminAddress })).toBe(

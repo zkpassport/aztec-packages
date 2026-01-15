@@ -7,8 +7,8 @@ import {
 } from '@aztec/constants';
 import { makeTuple } from '@aztec/foundation/array';
 import { parseBooleanEnv } from '@aztec/foundation/config';
-import { randomBytes } from '@aztec/foundation/crypto';
-import { Fr } from '@aztec/foundation/fields';
+import { randomBytes } from '@aztec/foundation/crypto/random';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { createLogger } from '@aztec/foundation/log';
 import { ServerCircuitVks } from '@aztec/noir-protocol-circuits-types/server/vks';
 import { getVKTreeRoot } from '@aztec/noir-protocol-circuits-types/vk-tree';
@@ -46,10 +46,7 @@ describe('prover/bb_prover/parity', () => {
   it(
     'proves the parity circuits',
     async () => {
-      const l1ToL2Messages = makeTuple<Fr, typeof NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP>(
-        NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP,
-        Fr.random,
-      );
+      const l1ToL2Messages = new Array(NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP).fill(null).map(() => Fr.random());
       const baseParityInputs = makeTuple(NUM_BASE_PARITY_PER_ROOT_PARITY, i =>
         ParityBasePrivateInputs.fromSlice(l1ToL2Messages, i, getVKTreeRoot()),
       );

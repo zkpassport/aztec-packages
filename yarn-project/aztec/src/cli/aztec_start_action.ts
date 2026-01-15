@@ -5,11 +5,11 @@ import {
 } from '@aztec/foundation/json-rpc/server';
 import type { LogFn, Logger } from '@aztec/foundation/log';
 import type { ChainConfig } from '@aztec/stdlib/config';
-import { AztecNodeApiSchema, PXESchema } from '@aztec/stdlib/interfaces/client';
+import { AztecNodeApiSchema } from '@aztec/stdlib/interfaces/client';
 import { getVersioningMiddleware } from '@aztec/stdlib/versioning';
 import { getOtelJsonRpcPropagationMiddleware } from '@aztec/telemetry-client';
 
-import { createSandbox } from '../sandbox/index.js';
+import { createLocalNetwork } from '../local-network/index.js';
 import { github, splash } from '../splash.js';
 import { getCliVersion } from './release_version.js';
 import { extractNamespacedOptions, installSignalHandlers } from './util.js';
@@ -22,20 +22,19 @@ export async function aztecStart(options: any, userLog: LogFn, debugLogger: Logg
   const adminServices: NamespacedApiHandlers = {};
   let config: ChainConfig | undefined = undefined;
 
-  if (options.sandbox) {
+  if (options.localNetwork) {
     const cliVersion = getCliVersion();
-    const sandboxOptions = extractNamespacedOptions(options, 'sandbox');
-    sandboxOptions.testAccounts = true;
+    const localNetwork = extractNamespacedOptions(options, 'local-network');
+    localNetwork.testAccounts = true;
     userLog(`${splash}\n${github}\n\n`);
-    userLog(`Setting up Aztec Sandbox ${cliVersion}, please stand by...`);
+    userLog(`Setting up Aztec local network ${cliVersion}, please stand by...`);
 
-    const { node, pxe, stop } = await createSandbox(
+    const { node, stop } = await createLocalNetwork(
       {
-        l1Mnemonic: sandboxOptions.l1Mnemonic,
+        l1Mnemonic: localNetwork.l1Mnemonic,
         l1RpcUrls: options.l1RpcUrls,
-        deployAztecContractsSalt: sandboxOptions.deployAztecContractsSalt,
-        noPXE: sandboxOptions.noPXE,
-        testAccounts: sandboxOptions.testAccounts,
+        deployAztecContractsSalt: localNetwork.deployAztecContractsSalt,
+        testAccounts: localNetwork.testAccounts,
         realProofs: false,
       },
       userLog,
@@ -44,11 +43,6 @@ export async function aztecStart(options: any, userLog: LogFn, debugLogger: Logg
     // Start Node and PXE JSON-RPC server
     signalHandlers.push(stop);
     services.node = [node, AztecNodeApiSchema];
-    if (!sandboxOptions.noPXE) {
-      services.pxe = [pxe, PXESchema];
-    } else {
-      userLog(`Not exposing PXE API through JSON-RPC server`);
-    }
   } else {
     if (options.node) {
       const { startNode } = await import('./cmds/start_node.js');
@@ -62,9 +56,6 @@ export async function aztecStart(options: any, userLog: LogFn, debugLogger: Logg
     } else if (options.blobSink) {
       const { startBlobSink } = await import('./cmds/start_blob_sink.js');
       await startBlobSink(options, signalHandlers, userLog);
-    } else if (options.pxe) {
-      const { startPXE } = await import('./cmds/start_pxe.js');
-      ({ config } = await startPXE(options, signalHandlers, services, userLog));
     } else if (options.archiver) {
       const { startArchiver } = await import('./cmds/start_archiver.js');
       ({ config } = await startArchiver(options, signalHandlers, services));

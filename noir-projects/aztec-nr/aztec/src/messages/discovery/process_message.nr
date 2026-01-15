@@ -4,7 +4,7 @@ use crate::messages::{
         private_events::process_private_event_msg, private_notes::process_private_note_msg,
     },
     encoding::{decode_message, MESSAGE_CIPHERTEXT_LEN, MESSAGE_PLAINTEXT_LEN},
-    encryption::{aes128::AES128, log_encryption::LogEncryption},
+    encryption::{aes128::AES128, message_encryption::MessageEncryption},
     msg_type::{
         PARTIAL_NOTE_PRIVATE_MSG_TYPE_ID, PRIVATE_EVENT_MSG_TYPE_ID, PRIVATE_NOTE_MSG_TYPE_ID,
     },
@@ -31,12 +31,21 @@ pub unconstrained fn process_message_ciphertext<Env>(
     message_ciphertext: BoundedVec<Field, MESSAGE_CIPHERTEXT_LEN>,
     message_context: MessageContext,
 ) {
-    process_message_plaintext(
-        contract_address,
-        compute_note_hash_and_nullifier,
-        AES128::decrypt_log(message_ciphertext, message_context.recipient),
-        message_context,
-    );
+    let message_plaintext_option = AES128::decrypt(message_ciphertext, message_context.recipient);
+
+    if message_plaintext_option.is_some() {
+        process_message_plaintext(
+            contract_address,
+            compute_note_hash_and_nullifier,
+            message_plaintext_option.unwrap(),
+            message_context,
+        );
+    } else {
+        debug_log_format(
+            "Found invalid message from tx {0}, ignoring",
+            [message_context.tx_hash],
+        );
+    }
 }
 
 pub unconstrained fn process_message_plaintext<Env>(

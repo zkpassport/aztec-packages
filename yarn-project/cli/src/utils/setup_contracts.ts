@@ -1,6 +1,7 @@
-import { Fr, type PXE, getContractInstanceFromInstantiationParams } from '@aztec/aztec.js';
+import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
+import { Fr } from '@aztec/aztec.js/fields';
 import { SPONSORED_FPC_SALT } from '@aztec/constants';
-import type { LogFn } from '@aztec/foundation/log';
 
 async function getSponsoredFPCContract() {
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -9,20 +10,10 @@ async function getSponsoredFPCContract() {
   return SponsoredFPCContract;
 }
 
-export async function getSponsoredFPCAddress() {
+export async function getSponsoredFPCAddress(): Promise<AztecAddress> {
   const SponsoredFPCContract = await getSponsoredFPCContract();
   const sponsoredFPCInstance = await getContractInstanceFromInstantiationParams(SponsoredFPCContract.artifact, {
     salt: new Fr(SPONSORED_FPC_SALT),
   });
   return sponsoredFPCInstance.address;
-}
-
-export async function setupSponsoredFPC(pxe: PXE, log: LogFn) {
-  const SponsoredFPCContract = await getSponsoredFPCContract();
-  const sponsoredFPCInstance = await getContractInstanceFromInstantiationParams(SponsoredFPCContract.artifact, {
-    salt: new Fr(SPONSORED_FPC_SALT),
-  });
-  await pxe.registerContract({ instance: sponsoredFPCInstance, artifact: SponsoredFPCContract.artifact });
-
-  log(`SponsoredFPC: ${sponsoredFPCInstance.address}`);
 }

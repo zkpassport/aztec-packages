@@ -11,6 +11,7 @@ terraform.tfstate*
 .bootstrapped
 .tsbuildinfo
 bench-out
+dumped-avm-circuit-inputs
 
 # Local Netlify folder
 .netlify
@@ -24,9 +25,10 @@ tmux-client-*.log
 
 # parallel
 joblog.txt
+.logged_test_flakes
 
 docs/.yarn/install-state.gz
 docs/docs/protocol-specs/public-vm/gen/
 
 # for those who use Claude Code
-.claude
+/.claude

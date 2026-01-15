@@ -4,6 +4,7 @@
 # If DUP=1 then we duplicate input also to stdout.
 NO_CD=1 source $(git rev-parse --show-toplevel)/ci3/source
 source $ci3/source_redis
+source $ci3/source_cache
 
 name=$1
 
@@ -11,10 +12,24 @@ key=${2:-$(uuid)}
 outfile=/tmp/$key
 dup=${DUP:-0}
 trap 'rm -f $outfile' EXIT
-echo -e "Parent Log: ${PARENT_LOG_URL:-none}\n" >$outfile
+echo -e "Parent Log: ${PARENT_LOG_URL:-none}" >$outfile
+echo -e "Started: $(date)" >>$outfile
+echo -e "Completed: in-progress" >>$outfile
+echo -e "Took: in-progress\n" >>$outfile
+
+function finalize_log {
+  # Use sed to update the header.
+  sed -i "3c Completed: $(date)" "$outfile"
+  sed -i "4c Took: ${SECONDS}s" "$outfile"
+}
 
 function publish_log {
   cat $outfile | redis_setexz $key $CI_REDIS_EXPIRE
+}
+
+function publish_log_final {
+  finalize_log
+  cat $outfile | cache_persistent $key $CI_REDIS_EXPIRE
 }
 
 function live_publish_log {
@@ -43,7 +58,7 @@ if [ "$CI_REDIS_AVAILABLE" -eq 1 ]; then
   else
     redact | cat >>$outfile
   fi
-  publish_log
+  publish_log_final
 else
   if [ "$dup" -eq 1 ]; then
     redact | cat

@@ -33,8 +33,7 @@ using C = Column;
 using instr_fetching = instr_fetching<FF>;
 
 using simulation::BytecodeDecompositionEvent;
-using simulation::BytecodeId;
-using simulation::InstrDeserializationError;
+using simulation::InstrDeserializationEventError;
 using simulation::Instruction;
 using simulation::InstructionFetchingEvent;
 using simulation::Operand;
@@ -224,9 +223,10 @@ std::vector<RangeCheckEvent> gen_range_check_events(const std::vector<Instructio
 
     for (const auto& instr_event : instr_events) {
         range_check_events.emplace_back(RangeCheckEvent{
-            .value = instr_event.error == InstrDeserializationError::PC_OUT_OF_RANGE
-                         ? instr_event.pc - instr_event.bytecode->size()
-                         : instr_event.bytecode->size() - instr_event.pc - 1,
+            .value =
+                (instr_event.error.has_value() && instr_event.error == InstrDeserializationEventError::PC_OUT_OF_RANGE)
+                    ? instr_event.pc - instr_event.bytecode->size()
+                    : instr_event.bytecode->size() - instr_event.pc - 1,
             .num_bits = AVM_PC_SIZE_IN_BITS,
         });
     }
@@ -377,7 +377,7 @@ TEST(InstrFetchingConstrainingTest, SingleInstructionOutOfRange)
             .bytecode_id = 1,
             .pc = 0,
             .bytecode = bytecode_ptr,
-            .error = InstrDeserializationError::INSTRUCTION_OUT_OF_RANGE,
+            .error = InstrDeserializationEventError::INSTRUCTION_OUT_OF_RANGE,
         },
     };
 
@@ -414,7 +414,7 @@ TEST(InstrFetchingConstrainingTest, SingleInstructionOutOfRangeSplitOperand)
             .bytecode_id = 1,
             .pc = 0,
             .bytecode = bytecode_ptr,
-            .error = InstrDeserializationError::INSTRUCTION_OUT_OF_RANGE,
+            .error = InstrDeserializationEventError::INSTRUCTION_OUT_OF_RANGE,
         },
     };
 
@@ -452,7 +452,7 @@ TEST(InstrFetchingConstrainingTest, SingleInstructionPcOutOfRange)
             .bytecode_id = 1,
             .pc = static_cast<uint32_t>(bytecode_ptr->size() + 1),
             .bytecode = bytecode_ptr,
-            .error = InstrDeserializationError::PC_OUT_OF_RANGE,
+            .error = InstrDeserializationEventError::PC_OUT_OF_RANGE,
         },
     };
 
@@ -493,7 +493,7 @@ TEST(InstrFetchingConstrainingTest, SingleInstructionOpcodeOutOfRange)
             .bytecode_id = 1,
             .pc = 5, // We move pc to the beginning of the 128-bit immediate value.
             .bytecode = bytecode_ptr,
-            .error = InstrDeserializationError::OPCODE_OUT_OF_RANGE,
+            .error = InstrDeserializationEventError::OPCODE_OUT_OF_RANGE,
         },
     };
 
@@ -527,7 +527,7 @@ TEST(InstrFetchingConstrainingTest, SingleInstructionTagOutOfRange)
             .pc = 0,
             .instruction = set_16_instruction,
             .bytecode = bytecode_ptr,
-            .error = InstrDeserializationError::TAG_OUT_OF_RANGE,
+            .error = InstrDeserializationEventError::TAG_OUT_OF_RANGE,
         },
     };
 
@@ -744,14 +744,14 @@ TEST(InstrFetchingConstrainingTest, NegativeWrongTagValidationInteractions)
 // Negative test on not toggling instr_out_of_range when instr_size > bytes_to_read
 TEST(InstrFetchingConstrainingTest, NegativeNotTogglingInstrOutOfRange)
 {
-    TestTraceContainer trace = TestTraceContainer::from_rows({
-        { .precomputed_first_row = 1 },
+    TestTraceContainer trace({
+        { { C::precomputed_first_row, 1 } },
         {
-            .instr_fetching_bytes_to_read = 11,
-            .instr_fetching_instr_abs_diff = 0,
-            .instr_fetching_instr_out_of_range = 1, // Will be mutated to zero
-            .instr_fetching_instr_size = 12,
-            .instr_fetching_sel = 1,
+            { C::instr_fetching_bytes_to_read, 11 },
+            { C::instr_fetching_instr_abs_diff, 0 },
+            { C::instr_fetching_instr_out_of_range, 1 }, // Will be mutated to zero
+            { C::instr_fetching_instr_size, 12 },
+            { C::instr_fetching_sel, 1 },
         },
     });
 
@@ -766,14 +766,14 @@ TEST(InstrFetchingConstrainingTest, NegativeNotTogglingInstrOutOfRange)
 // Negative test on wrongly toggling instr_out_of_range when instr_size <= bytes_to_read
 TEST(InstrFetchingConstrainingTest, NegativeTogglingInstrInRange)
 {
-    TestTraceContainer trace = TestTraceContainer::from_rows({
-        { .precomputed_first_row = 1 },
+    TestTraceContainer trace({
+        { { C::precomputed_first_row, 1 } },
         {
-            .instr_fetching_bytes_to_read = 12,
-            .instr_fetching_instr_abs_diff = 0,
-            .instr_fetching_instr_out_of_range = 0, // Will be mutated to 1
-            .instr_fetching_instr_size = 12,
-            .instr_fetching_sel = 1,
+            { C::instr_fetching_bytes_to_read, 12 },
+            { C::instr_fetching_instr_abs_diff, 0 },
+            { C::instr_fetching_instr_out_of_range, 0 }, // Will be mutated to 1
+            { C::instr_fetching_instr_size, 12 },
+            { C::instr_fetching_sel, 1 },
         },
     });
 
@@ -788,14 +788,14 @@ TEST(InstrFetchingConstrainingTest, NegativeTogglingInstrInRange)
 // Negative test on not toggling pc_out_of_range when pc >= bytecode_size
 TEST(InstrFetchingConstrainingTest, NegativeNotTogglingPcOutOfRange)
 {
-    TestTraceContainer trace = TestTraceContainer::from_rows({
-        { .precomputed_first_row = 1 },
+    TestTraceContainer trace({
+        { { C::precomputed_first_row, 1 } },
         {
-            .instr_fetching_bytecode_size = 12,
-            .instr_fetching_pc = 12,
-            .instr_fetching_pc_abs_diff = 0,
-            .instr_fetching_pc_out_of_range = 1, // Will be mutated to 0
-            .instr_fetching_sel = 1,
+            { C::instr_fetching_bytecode_size, 12 },
+            { C::instr_fetching_pc, 12 },
+            { C::instr_fetching_pc_abs_diff, 0 },
+            { C::instr_fetching_pc_out_of_range, 1 }, // Will be mutated to 0
+            { C::instr_fetching_sel, 1 },
         },
     });
 
@@ -810,14 +810,14 @@ TEST(InstrFetchingConstrainingTest, NegativeNotTogglingPcOutOfRange)
 // Negative test on wrongly toggling pc_out_of_range when pc < bytecode_size
 TEST(InstrFetchingConstrainingTest, NegativeTogglingPcInRange)
 {
-    TestTraceContainer trace = TestTraceContainer::from_rows({
-        { .precomputed_first_row = 1 },
+    TestTraceContainer trace({
+        { { C::precomputed_first_row, 1 } },
         {
-            .instr_fetching_bytecode_size = 12,
-            .instr_fetching_pc = 11,
-            .instr_fetching_pc_abs_diff = 0,
-            .instr_fetching_pc_out_of_range = 0, // Will be mutated to 1
-            .instr_fetching_sel = 1,
+            { C::instr_fetching_bytecode_size, 12 },
+            { C::instr_fetching_pc, 11 },
+            { C::instr_fetching_pc_abs_diff, 0 },
+            { C::instr_fetching_pc_out_of_range, 0 }, // Will be mutated to 1
+            { C::instr_fetching_sel, 1 },
         },
     });
 

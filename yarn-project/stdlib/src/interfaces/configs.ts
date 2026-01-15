@@ -52,6 +52,14 @@ export interface SequencerConfig {
   skipCollectingAttestations?: boolean;
   /** Do not invalidate the previous block if invalid when we are the proposer (for testing only) */
   skipInvalidateBlockAsProposer?: boolean;
+  /** Broadcast invalid block proposals with corrupted state (for testing only) */
+  broadcastInvalidBlockProposal?: boolean;
+  /** Inject a fake attestation (for testing only) */
+  injectFakeAttestation?: boolean;
+  /** Whether to run in fisherman mode: builds blocks on every slot for validation without publishing */
+  fishermanMode?: boolean;
+  /** Shuffle attestation ordering to create invalid ordering (for testing only) */
+  shuffleAttestationOrdering?: boolean;
 }
 
 export const SequencerConfigSchema = z.object({
@@ -75,4 +83,8 @@ export const SequencerConfigSchema = z.object({
   skipCollectingAttestations: z.boolean().optional(),
   secondsBeforeInvalidatingBlockAsCommitteeMember: z.number(),
   secondsBeforeInvalidatingBlockAsNonCommitteeMember: z.number(),
+  broadcastInvalidBlockProposal: z.boolean().optional(),
+  injectFakeAttestation: z.boolean().optional(),
+  fishermanMode: z.boolean().optional(),
+  shuffleAttestationOrdering: z.boolean().optional(),
 }) satisfies ZodFor<SequencerConfig>;

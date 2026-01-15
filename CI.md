@@ -287,6 +287,7 @@ PRs targeting `next` must be squashed to a single commit unless labeled with `ci
 CI3 has granular caching, but as well it includes an additional layer of caching based on git content. When CI completes successfully, it stores a success marker keyed by the hash of the repository's file tree. On subsequent runs, if the exact same content is detected (same tree hash), CI will skip execution entirely.
 
 This is particularly useful when:
+
 - You squash commits using `ci-squash-and-merge` - the resulting single commit has the same content, so CI won't re-run
 - You rebase without changes - if the final content is identical, CI is skipped
 - Multiple PRs have identical changes - only the first needs to run CI
@@ -378,30 +379,6 @@ The images can be built and pushed to dockerhub using the `build-images/bootstra
 
 It also provides the ability to update our AWS AMI's which have the above build/devbox images embedded within them so we don't have to keep pulling them.
 
-## Release Image
-
-Aztec is released as a _single_ mono-container. That is, everything we need to ship should end up in `aztecprotocol/aztec` and published to Dockerhub with version tags.
-
-The release image is created from a bootstrap, by the `release-image/Dockerfile`. The `Dockerfile.dockerignore` file ensures that only what's needed is copied into the container. We perform a multi-stage build to first strip back to production dependencies, and copy them into a final slim image.
-
-**It is _extremely_ important we keep this image as lightweight as possible. Do NOT significantly expand the size of this image without very good reason.**
-
-## Releases
-
-Release please is used and will automatically tag the commit e.g. `v1.2.3`. The project will subsequently be released under that version.
-
-You can also trigger pre and post releases using extended semver notation such as `v1.2.3-nightly.20250101` or `v1.2.3-devnet.0`. This are made simply by tagging the appropriate master commit.
-
-Releases can be performed directly from the terminal if necessary. However at present this will require `NPM_TOKEN` which is a secret restricted to a few people. In future we may provide a "staging organization" for less secure unofficial releases.
-
-One can also side-step Release Please automation by updating the version number in the root `.release-please-manifest.json`, committing, tagging the repository with e.g. `v1.2.3`, checking out the tag, and running:
-
-```
-./bootstrap.sh release
-```
-
-This is all that CI does when it wants to perform an official release.
-
 ## Q&A
 
 ### I can't run `yarn clean` in a yarn-project sub project any more. How to do?
@@ -431,8 +408,8 @@ This will create a new instance, bootstrap, and run all tests that would run on 
 ### How does swc compare to tsc (typescript compiler?)
 
 1. swc is stricter than tsc when it comes to hoisting ESM imports. This means that circular dependencies that were not causing issues previously may now do. madge seems like a good tool for spotting them (npx madge --circular path-to-file), since eslint no-circular-imports not always spots them. When dealing with circular deps, keep in mind type imports are removed, so you don't need to worry about those.
-2. swc is a lot faster than tsc, but it does not type check. When running bootstrap eg after a rebase, a successful run does not mean the project types are correct. You need to run bootstrap with TYPECHECK=1 for that. If you want to keep a running process that alerts you of type errors, do yarn tsc -b -w --emitDeclarationOnly at the root of yarn project.
-3. There is some combination of swc+tsc+jest that breaks things. If you happen to build your project with `tsc -b`, some test suites (such as prover-client or e2e) will fail to run with a parse error. Workaround is to re-build with swc before running tests by running `./bootstrap.sh compile` on yarn-project, and make sure you are not running `tsc -b -w` (or if you do, you set `--emitDeclarationOnly` as described above).
+2. swc is a lot faster than tsc, but it does not type check. When running bootstrap eg after a rebase, a successful run does not mean the project types are correct. You need to run bootstrap with TYPECHECK=1 for that. If you want to keep a running process that alerts you of type errors, do yarn tsgo -b -w --emitDeclarationOnly at the root of yarn project.
+3. There is some combination of swc+tsc+jest that breaks things. If you happen to build your project with `tsgo -b`, some test suites (such as prover-client or e2e) will fail to run with a parse error. Workaround is to re-build with swc before running tests by running `./bootstrap.sh compile` on yarn-project, and make sure you are not running `tsgo -b -w` (or if you do, you set `--emitDeclarationOnly` as described above).
 
 ## Contributing
 

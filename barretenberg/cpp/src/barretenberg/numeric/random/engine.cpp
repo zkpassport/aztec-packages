@@ -10,7 +10,13 @@
 #include <cstring>
 #include <functional>
 #include <random>
+#if defined(__APPLE__) || defined(__wasm__)
+#include <unistd.h>
+// Declare getentropy for iOS/macOS (it's in libc but not always in headers)
+extern "C" int getentropy(void* buffer, size_t length);
+#else
 #include <sys/random.h>
+#endif
 
 namespace bb::numeric {
 

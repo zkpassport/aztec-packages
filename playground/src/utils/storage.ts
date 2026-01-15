@@ -1,23 +1,18 @@
-import {
-  type ContractArtifact,
-  AztecAddress,
-  TxReceipt,
-  type AuthWitness,
-  type TxHash,
-  TxStatus,
-  type Aliased,
-} from '@aztec/aztec.js';
+import type { ContractArtifact } from '@aztec/aztec.js/abi';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import type { Aliased } from '@aztec/aztec.js/wallet';
+import type { AuthWitness } from '@aztec/aztec.js/authorization';
+import { type TxHash, TxReceipt, TxStatus } from '@aztec/aztec.js/tx';
 import type { LogFn } from '@aztec/foundation/log';
 import { type AztecAsyncMap, type AztecAsyncKVStore, type AztecAsyncMultiMap } from '@aztec/kv-store';
 import { stringify } from 'buffer-json';
+import { convertFromUTF8BufferAsString } from './conversion';
 
 export const Aliases = ['accounts', 'artifacts', 'secrets', 'transactions', 'authwits', 'contracts'] as const;
 export type AliasType = (typeof Aliases)[number];
 
 export class PlaygroundDB {
   private aliases: AztecAsyncMap<string, Buffer>;
-  private contracts: AztecAsyncMap<string, Buffer>;
-  private artifacts!: AztecAsyncMap<string, Buffer>;
   private networks!: AztecAsyncMap<string, Buffer>;
   private transactions: AztecAsyncMap<string, Buffer>;
   private transactionsPerContract: AztecAsyncMultiMap<string, Buffer>;
@@ -38,13 +33,17 @@ export class PlaygroundDB {
     this.networks = store.openMap('networks');
     this.transactions = store.openMap<string, Buffer>('transactions');
     this.transactionsPerContract = store.openMultiMap<string, Buffer>('transactionsPerContract');
-    this.contracts = store.openMap<string, Buffer>('contracts');
-    this.artifacts = store.openMap<string, Buffer>('artifacts');
     this.userLog = userLog;
   }
 
-  async storeNetwork(network: string, alias: string) {
-    await this.networks.set(network, Buffer.from(alias));
+  async storeNetwork(network: string, alias: string, chainId?: number, version?: string, nodeVersion?: string) {
+    const networkData = {
+      networkUrl: network,
+      chainId,
+      version,
+      nodeVersion,
+    };
+    await this.networks.set(alias, Buffer.from(JSON.stringify(networkData)));
   }
 
   async retrieveNetwork(network: string) {
@@ -52,18 +51,39 @@ export class PlaygroundDB {
     if (!result) {
       throw new Error(`Could not find network with alias ${network}`);
     }
-    return result.toString();
+    return JSON.parse(result.toString());
   }
 
   async listNetworks() {
     const result = [];
+    const toDelete = [];
     if (!this.networks) {
       return result;
     }
 
-    for await (const [alias, item] of this.networks.entriesAsync()) {
-      result.push({ alias, item: item.toString() });
+    for await (const [alias, data] of this.networks.entriesAsync()) {
+      try {
+        // Convert buffer to string: data.toString() returns comma-separated bytes
+        const jsonString = convertFromUTF8BufferAsString(data.toString());
+        const networkData = JSON.parse(jsonString);
+        result.push({
+          networkUrl: networkData.networkUrl,
+          alias,
+          chainId: parseInt(networkData.chainId, 10),
+          version: parseInt(networkData.version, 10),
+          nodeVersion: networkData.nodeVersion,
+        });
+      } catch {
+        // Mark legacy format entries for deletion
+        toDelete.push(alias);
+      }
     }
+
+    // Delete legacy entries after iteration completes
+    for (const alias of toDelete) {
+      await this.networks.delete(alias);
+    }
+
     return result;
   }
 

@@ -1,6 +1,8 @@
 import type { InitialAccountData } from '@aztec/accounts/testing';
 import { type Archiver, createArchiver } from '@aztec/archiver';
-import { AztecAddress, type AztecNode, EthAddress, type Logger, type PXE, createLogger } from '@aztec/aztec.js';
+import { AztecAddress, EthAddress } from '@aztec/aztec.js/addresses';
+import { type Logger, createLogger } from '@aztec/aztec.js/log';
+import type { AztecNode } from '@aztec/aztec.js/node';
 import { CheatCodes } from '@aztec/aztec/testing';
 import {
   BBCircuitVerifier,
@@ -8,17 +10,18 @@ import {
   QueuedIVCVerifier,
   TestCircuitVerifier,
 } from '@aztec/bb-prover';
+import { BackendType, Barretenberg } from '@aztec/bb.js';
 import { createBlobSinkClient } from '@aztec/blob-sink/client';
 import type { BlobSinkServer } from '@aztec/blob-sink/server';
-import type { DeployL1ContractsReturnType } from '@aztec/ethereum';
+import type { DeployL1ContractsReturnType } from '@aztec/ethereum/deploy-l1-contracts';
 import { Buffer32 } from '@aztec/foundation/buffer';
 import { SecretValue } from '@aztec/foundation/config';
 import { FeeAssetHandlerAbi } from '@aztec/l1-artifacts';
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
 import { type ProverNode, type ProverNodeConfig, createProverNode } from '@aztec/prover-node';
-import type { PXEService } from '@aztec/pxe/server';
+import type { ContractInstanceWithAddress } from '@aztec/stdlib/contract';
 import type { AztecNodeAdmin } from '@aztec/stdlib/interfaces/client';
-import { TestWallet } from '@aztec/test-wallet';
+import { TestWallet } from '@aztec/test-wallet/server';
 import { getGenesisValues } from '@aztec/world-state/testing';
 
 import { type Hex, getContract } from 'viem';
@@ -34,12 +37,12 @@ import {
   deployAccounts,
   publicDeployAccounts,
 } from './snapshot_manager.js';
-import { getPrivateKeyFromIndex, getSponsoredFPCAddress, setupPXEService } from './utils.js';
+import { getPrivateKeyFromIndex, getSponsoredFPCAddress, setupPXEAndGetWallet } from './utils.js';
 
 const { E2E_DATA_PATH: dataPath } = process.env;
 
 type ProvenSetup = {
-  pxe: PXE;
+  wallet: TestWallet;
   teardown: () => Promise<void>;
 };
 
@@ -57,20 +60,21 @@ export class FullProverTest {
   private snapshotManager: ISnapshotManager;
   logger: Logger;
   wallet!: TestWallet;
+  provenWallet!: TestWallet;
   accounts: AztecAddress[] = [];
   deployedAccounts!: InitialAccountData[];
   fakeProofsAsset!: TokenContract;
+  fakeProofsAssetInstance!: ContractInstanceWithAddress;
   tokenSim!: TokenSimulator;
   aztecNode!: AztecNode;
   aztecNodeAdmin!: AztecNodeAdmin;
-  pxe!: PXEService;
   cheatCodes!: CheatCodes;
   blobSink!: BlobSinkServer;
   private provenComponents: ProvenSetup[] = [];
   private bbConfigCleanup?: () => Promise<void>;
   private acvmConfigCleanup?: () => Promise<void>;
   circuitProofVerifier?: ClientProtocolCircuitVerifier;
-  provenAssets: TokenContract[] = [];
+  provenAsset!: TokenContract;
   private context!: SubsystemsContext;
   private proverNode!: ProverNode;
   private simulatedProverNode!: ProverNode;
@@ -120,7 +124,7 @@ export class FullProverTest {
         await publicDeployAccounts(this.wallet, this.accounts.slice(0, 2));
 
         this.logger.verbose(`Deploying TokenContract...`);
-        const asset = await TokenContract.deploy(
+        const { contract: asset, instance } = await TokenContract.deploy(
           this.wallet,
           this.accounts[0],
           FullProverTest.TOKEN_NAME,
@@ -128,14 +132,15 @@ export class FullProverTest {
           FullProverTest.TOKEN_DECIMALS,
         )
           .send({ from: this.accounts[0] })
-          .deployed();
+          .wait();
         this.logger.verbose(`Token deployed to ${asset.address}`);
 
-        return { tokenContractAddress: asset.address };
+        return { tokenContractAddress: asset.address, tokenContractInstance: instance };
       },
-      async ({ tokenContractAddress }) => {
+      async ({ tokenContractAddress, tokenContractInstance }) => {
         // Restore the token contract state.
-        this.fakeProofsAsset = await TokenContract.at(tokenContractAddress, this.wallet);
+        this.fakeProofsAsset = TokenContract.at(tokenContractAddress, this.wallet);
+        this.fakeProofsAssetInstance = tokenContractInstance;
         this.logger.verbose(`Token contract address: ${this.fakeProofsAsset.address}`);
 
         this.tokenSim = new TokenSimulator(
@@ -161,7 +166,6 @@ export class FullProverTest {
 
     this.simulatedProverNode = this.context.proverNode!;
     ({
-      pxe: this.pxe,
       aztecNode: this.aztecNode,
       deployL1ContractsValues: this.l1Contracts,
       cheatCodes: this.cheatCodes,
@@ -183,9 +187,7 @@ export class FullProverTest {
       this.acvmConfigCleanup = acvmConfig.cleanup;
       this.bbConfigCleanup = bbConfig.cleanup;
 
-      if (!bbConfig?.bbWorkingDirectory || !bbConfig?.bbBinaryPath) {
-        throw new Error(`Test must be run with BB native configuration`);
-      }
+      await Barretenberg.initSingleton({ backend: BackendType.NativeUnixSocket });
 
       const verifier = await BBCircuitVerifier.new(bbConfig);
       this.circuitProofVerifier = new QueuedIVCVerifier(bbConfig, verifier);
@@ -210,34 +212,27 @@ export class FullProverTest {
     await this.context.cheatCodes.rollup.markAsProven();
 
     this.logger.verbose(`Main setup completed, initializing full prover PXE, Node, and Prover Node`);
+    const { wallet: provenWallet, teardown: provenTeardown } = await setupPXEAndGetWallet(
+      this.aztecNode,
+      { proverEnabled: this.realProofs },
+      undefined,
+      true,
+    );
+    this.logger.debug(`Contract address ${this.fakeProofsAsset.address}`);
+    await provenWallet.registerContract(this.fakeProofsAssetInstance, TokenContract.artifact);
+
     for (let i = 0; i < 2; i++) {
-      const result = await setupPXEService(
-        this.aztecNode,
-        {
-          proverEnabled: this.realProofs,
-          bbBinaryPath: bbConfig?.bbBinaryPath,
-          bbWorkingDirectory: bbConfig?.bbWorkingDirectory,
-        },
-        undefined,
-        true,
-      );
-      this.logger.debug(`Contract address ${this.fakeProofsAsset.address}`);
-      await result.pxe.registerContract(this.fakeProofsAsset);
-
-      const provenWallet = new TestWallet(result.pxe);
-
-      for (let i = 0; i < 2; i++) {
-        await provenWallet.createSchnorrAccount(this.deployedAccounts[i].secret, this.deployedAccounts[i].salt);
-        await this.wallet.createSchnorrAccount(this.deployedAccounts[i].secret, this.deployedAccounts[i].salt);
-      }
-
-      const asset = await TokenContract.at(this.fakeProofsAsset.address, provenWallet);
-      this.provenComponents.push({
-        pxe: result.pxe,
-        teardown: result.teardown,
-      });
-      this.provenAssets.push(asset);
+      await provenWallet.createSchnorrAccount(this.deployedAccounts[i].secret, this.deployedAccounts[i].salt);
+      await this.wallet.createSchnorrAccount(this.deployedAccounts[i].secret, this.deployedAccounts[i].salt);
     }
+
+    const asset = TokenContract.at(this.fakeProofsAsset.address, provenWallet);
+    this.provenComponents.push({
+      wallet: provenWallet,
+      teardown: provenTeardown,
+    });
+    this.provenAsset = asset;
+    this.provenWallet = provenWallet;
     this.logger.info(`Full prover PXE started`);
 
     // Shutdown the current, simulated prover node
@@ -248,7 +243,7 @@ export class FullProverTest {
     this.logger.verbose('Starting archiver for new prover node');
     const archiver = await createArchiver(
       { ...this.context.aztecNodeConfig, dataDirectory: undefined },
-      { blobSinkClient },
+      { blobSinkClient, dateProvider: this.context.dateProvider },
       { blockUntilSync: true },
     );
 
@@ -324,6 +319,7 @@ export class FullProverTest {
     // clean up the full prover node
     await this.proverNode.stop();
 
+    await Barretenberg.destroySingleton();
     await this.bbConfigCleanup?.();
     await this.acvmConfigCleanup?.();
   }

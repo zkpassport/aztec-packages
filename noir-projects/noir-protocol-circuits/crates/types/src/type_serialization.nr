@@ -1,5 +1,6 @@
 use crate::traits::{Deserialize, Serialize};
 
+global U1_SERIALIZED_LEN: u32 = 1;
 global BOOL_SERIALIZED_LEN: u32 = 1;
 global U8_SERIALIZED_LEN: u32 = 1;
 global U16_SERIALIZED_LEN: u32 = 1;
@@ -27,6 +28,24 @@ impl Deserialize for bool {
     #[inline_always]
     fn deserialize(fields: [Field; Self::N]) -> bool {
         fields[0] != 0
+    }
+}
+
+impl Serialize for u1 {
+    let N: u32 = U1_SERIALIZED_LEN;
+
+    #[inline_always]
+    fn serialize(self) -> [Field; Self::N] {
+        [self as Field]
+    }
+}
+
+impl Deserialize for u1 {
+    let N: u32 = U1_SERIALIZED_LEN;
+
+    #[inline_always]
+    fn deserialize(fields: [Field; Self::N]) -> Self {
+        fields[0] as u1
     }
 }
 
@@ -215,7 +234,6 @@ where
     T: Serialize,
 {
     let N: u32 = <T as Serialize>::N * M;
-
     #[inline_always]
     fn serialize(self) -> [Field; Self::N] {
         let mut result: [Field; _] = std::mem::zeroed();
@@ -325,6 +343,25 @@ mod test {
 
         let opt_none = Option::none();
         assert_eq(Option::<Field>::deserialize(opt_none.serialize()), opt_none);
+    }
+
+    #[test]
+    fn array_serialization() {
+        let array = [1, 2, 3, 4];
+
+        let serialized: [Field; 4] = array.serialize();
+        let deserialized: [Field; 4] = Deserialize::deserialize(serialized);
+        assert_eq(deserialized, array);
+    }
+
+    #[test]
+    fn nested_array_serialization() {
+        let nested_array = [[1, 2, 3, 4], [5, 6, 7, 8]];
+
+        let serialized: [Field; 8] = nested_array.serialize();
+        let deserialized: [[Field; 4]; 2] = Deserialize::deserialize(serialized);
+
+        assert_eq(deserialized, nested_array);
     }
 
     #[test]

@@ -1,26 +1,11 @@
 import { AVM_MAX_PROCESSABLE_L2_GAS } from '@aztec/constants';
-import type { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { type Logger, createLogger } from '@aztec/foundation/log';
-import {
-  ProtocolContractAddress,
-  ProtocolContractLeaves,
-  protocolContractNames,
-  protocolContractTreeRoot,
-} from '@aztec/protocol-contracts';
+import { ProtocolContractAddress, ProtocolContractsList } from '@aztec/protocol-contracts';
 import { computeFeePayerBalanceStorageSlot } from '@aztec/protocol-contracts/fee-juice';
-import {
-  AvmCircuitInputs,
-  AvmCircuitPublicInputs,
-  AvmExecutionHints,
-  AvmProtocolContractAddressHint,
-  type AvmProvingRequest,
-  AvmTxHint,
-  type RevertCode,
-} from '@aztec/stdlib/avm';
-import { AztecAddress } from '@aztec/stdlib/aztec-address';
+import { AvmExecutionHints, AvmTxHint, PublicSimulatorConfig, PublicTxEffect, PublicTxResult } from '@aztec/stdlib/avm';
 import { SimulationError } from '@aztec/stdlib/errors';
-import type { Gas, GasUsed } from '@aztec/stdlib/gas';
-import { ProvingRequestType } from '@aztec/stdlib/proofs';
+import { Gas } from '@aztec/stdlib/gas';
 import type { MerkleTreeWriteOperations } from '@aztec/stdlib/trees';
 import {
   type GlobalVariables,
@@ -30,15 +15,60 @@ import {
   TxExecutionPhase,
 } from '@aztec/stdlib/tx';
 
+import { strict as assert } from 'assert';
+
 import type { AvmFinalizedCallResult } from '../avm/avm_contract_call_result.js';
 import { AvmSimulator } from '../avm/index.js';
 import { getPublicFunctionDebugName } from '../debug_fn_name.js';
 import { HintingMerkleWriteOperations, HintingPublicContractsDB } from '../hinting_db_sources.js';
 import { type PublicContractsDB, PublicTreesDB } from '../public_db_sources.js';
+import {
+  L2ToL1MessageLimitReachedError,
+  NoteHashLimitReachedError,
+  NullifierCollisionError,
+  NullifierLimitReachedError,
+} from '../side_effect_errors.js';
 import type { PublicPersistableStateManager } from '../state_manager/state_manager.js';
 import { PublicTxContext } from './public_tx_context.js';
+import type { PublicTxSimulatorInterface } from './public_tx_simulator_interface.js';
 
-export type ProcessedPhase = {
+// The errors below are only thrown here in the public tx simulator,
+// and only during revertible phases (revertible insertions, app logic and teardown).
+// These are strictly "checked" errors (not exported and never propagated).
+// They are used internally for control flow to trigger rollbacks to the post-setup state.
+
+/**
+ * Error thrown when public tx simulation reverts in a known/checked way during revertible insertions.
+ */
+class TxSimRevertibleInsertionsRevert extends Error {
+  constructor() {
+    super('Public Tx Simulation reverted during Revertible Insertions');
+    this.name = 'TxSimRevertibleInsertionsRevert';
+  }
+}
+
+/**
+ * Error thrown when public tx simulation reverts during app logic.
+ */
+class TxSimAppLogicRevert extends Error {
+  constructor() {
+    super('Public Tx Simulation reverted during App Logic');
+    this.name = 'TxSimAppLogicRevert';
+  }
+}
+
+/**
+ * Error thrown when public tx simulation reverts during teardown.
+ */
+class TxSimTeardownRevert extends Error {
+  constructor() {
+    super('Public Tx Simulation reverted during Teardown');
+    this.name = 'TxSimTeardownRevert';
+  }
+}
+
+/** Only used internally. */
+type ProcessedPhase = {
   phase: TxExecutionPhase;
   durationMs?: number;
   returnValues: NestedProcessReturnValues[];
@@ -46,27 +76,17 @@ export type ProcessedPhase = {
   revertReason?: SimulationError;
 };
 
-export type PublicTxResult = {
-  avmProvingRequest: AvmProvingRequest;
-  /** Gas used during the execution of this tx */
-  gasUsed: GasUsed;
-  revertCode: RevertCode;
-  /** Revert reason, if any */
-  revertReason?: SimulationError;
-  processedPhases: ProcessedPhase[];
-};
-
-export class PublicTxSimulator {
+export class PublicTxSimulator implements PublicTxSimulatorInterface {
   protected log: Logger;
+  protected readonly config: PublicSimulatorConfig;
 
   constructor(
-    private merkleTree: MerkleTreeWriteOperations,
-    private contractsDB: PublicContractsDB,
-    private globalVariables: GlobalVariables,
-    private doMerkleOperations: boolean = false,
-    private skipFeeEnforcement: boolean = false,
-    private clientInitiatedSimulation: boolean = false,
+    protected merkleTree: MerkleTreeWriteOperations,
+    protected contractsDB: PublicContractsDB,
+    protected globalVariables: GlobalVariables,
+    config?: Partial<PublicSimulatorConfig>,
   ) {
+    this.config = PublicSimulatorConfig.from(config ?? {});
     this.log = createLogger(`simulator:public_tx_simulator`);
   }
 
@@ -76,136 +96,143 @@ export class PublicTxSimulator {
    * @returns The result of the transaction's public execution.
    */
   public async simulate(tx: Tx): Promise<PublicTxResult> {
-    try {
-      const txHash = this.computeTxHash(tx);
-      this.log.debug(`Simulating ${tx.publicFunctionCalldata.length} public calls for tx ${txHash}`, { txHash });
+    const txHash = this.computeTxHash(tx);
+    this.log.debug(`Simulating ${tx.publicFunctionCalldata.length} public calls for tx ${txHash}`, { txHash });
 
-      // These values are technically derivable from the contractsDB. However, since the trees are not persisted
-      // computing them for every tx would be time consuming for this TS simulator. So instead we just import them
-      const protocolContractHints = protocolContractNames.map(
-        name =>
-          new AvmProtocolContractAddressHint(
-            /*Canonical Address=*/ ProtocolContractAddress[name],
-            /*Derived Address=*/ AztecAddress.fromField(ProtocolContractLeaves[name]),
-          ),
-      );
+    // Create hinting DBs.
+    const hints = new AvmExecutionHints(
+      this.globalVariables,
+      AvmTxHint.fromTx(tx, this.globalVariables.gasFees),
+      ProtocolContractsList, // imported from file
+    );
+    const hintingMerkleTree = await HintingMerkleWriteOperations.create(this.merkleTree, hints);
+    const hintingTreesDB = new PublicTreesDB(hintingMerkleTree);
+    const hintingContractsDB = new HintingPublicContractsDB(this.contractsDB, hints);
 
-      // Create hinting DBs.
-      const hints = new AvmExecutionHints(
-        this.globalVariables,
-        AvmTxHint.fromTx(tx, this.globalVariables.gasFees),
-        protocolContractHints,
-      );
-      const hintingMerkleTree = await HintingMerkleWriteOperations.create(this.merkleTree, hints);
-      const hintingTreesDB = new PublicTreesDB(hintingMerkleTree);
-      const hintingContractsDB = new HintingPublicContractsDB(this.contractsDB, hints);
+    const context = await PublicTxContext.create(
+      hintingTreesDB,
+      hintingContractsDB,
+      tx,
+      this.globalVariables,
+      ProtocolContractsList, // imported from file
+      this.config.proverId,
+    );
 
-      const context = await PublicTxContext.create(
-        hintingTreesDB,
-        hintingContractsDB,
-        tx,
-        this.globalVariables,
-        protocolContractTreeRoot, // imported from file
-        this.doMerkleOperations,
-      );
+    // This will throw if there is a nullifier collision.
+    // In that case the transaction will be thrown out.
+    await this.insertNonRevertiblesFromPrivate(context);
 
-      // This will throw if there is a nullifier collision.
+    const processedPhases: ProcessedPhase[] = [];
+    if (context.hasPhase(TxExecutionPhase.SETUP)) {
+      // This will throw if the setup phase reverts.
       // In that case the transaction will be thrown out.
-      await this.insertNonRevertiblesFromPrivate(context, tx);
-
-      const processedPhases: ProcessedPhase[] = [];
-      if (context.hasPhase(TxExecutionPhase.SETUP)) {
-        // This will throw if the setup phase reverts.
-        // In that case the transaction will be thrown out.
-        const setupResult = await this.simulatePhase(TxExecutionPhase.SETUP, context);
-        if (setupResult.reverted) {
-          throw new Error(
-            `Setup phase reverted! The transaction will be thrown out. ${setupResult.revertReason?.message}`,
-          );
-        }
-        processedPhases.push(setupResult);
+      const setupResult = await this.simulatePhase(TxExecutionPhase.SETUP, context);
+      if (setupResult.reverted) {
+        throw new Error(
+          `[SETUP] UNRECOVERABLE ERROR! The transaction will be thrown out. ${setupResult.revertReason?.message}`,
+        );
       }
+      processedPhases.push(setupResult);
+    }
 
-      // The checkpoint we should go back to if anything from now on reverts.
-      await context.state.fork();
+    // The checkpoint we should go back to if anything from now on reverts.
+    await context.state.fork();
+    hintingContractsDB.createCheckpoint();
 
-      try {
-        // This will throw if there is a nullifier collision.
-        await this.insertRevertiblesFromPrivate(context, tx);
-        // Only proceed with app logic if there was no revert during revertible insertion.
-        if (context.hasPhase(TxExecutionPhase.APP_LOGIC)) {
-          const appLogicResult = await this.simulatePhase(TxExecutionPhase.APP_LOGIC, context);
-          processedPhases.push(appLogicResult);
-          if (appLogicResult.reverted) {
-            throw new Error(`App logic phase reverted! ${appLogicResult.revertReason?.message}`);
-          }
+    try {
+      // This will throw if there is a nullifier collision or other insertion error (limit reached).
+      await this.insertRevertiblesFromPrivate(context);
+
+      // Only proceed with app logic if there was no revert during revertible insertion.
+      if (context.hasPhase(TxExecutionPhase.APP_LOGIC)) {
+        const appLogicResult = await this.simulatePhase(TxExecutionPhase.APP_LOGIC, context);
+        processedPhases.push(appLogicResult);
+        if (appLogicResult.reverted) {
+          throw new TxSimAppLogicRevert();
         }
-      } catch (e) {
-        this.log.debug(String(e));
+      }
+    } catch (e: any) {
+      if (e instanceof TxSimRevertibleInsertionsRevert || e instanceof TxSimAppLogicRevert) {
         // We revert to the post-setup state.
         await context.state.discardForkedState();
+        hintingContractsDB.revertCheckpoint();
         // But we also create a new fork so that the teardown phase can transparently
         // commit or rollback at the end of teardown.
         await context.state.fork();
+        hintingContractsDB.createCheckpoint();
+      } else {
+        // Unchecked/unknown error - re-throw as-is
+        throw e;
       }
-
-      try {
-        if (context.hasPhase(TxExecutionPhase.TEARDOWN)) {
-          const teardownResult = await this.simulatePhase(TxExecutionPhase.TEARDOWN, context);
-          processedPhases.push(teardownResult);
-          if (teardownResult.reverted) {
-            throw new Error(`Teardown phase reverted! ${teardownResult.revertReason?.message}`);
-          }
-        }
-
-        // We commit the forked state and we are done.
-        await context.state.mergeForkedState();
-      } catch (e) {
-        this.log.debug(String(e));
-        // We rollback to the post-setup state.
-        await context.state.discardForkedState();
-      }
-
-      context.halt();
-
-      if (context.getActualGasUsed().l2Gas > AVM_MAX_PROCESSABLE_L2_GAS) {
-        throw new Error(
-          `Transaction consumes ${context.getActualGasUsed().l2Gas} L2 gas, which exceeds the AVM maximum processable gas of ${AVM_MAX_PROCESSABLE_L2_GAS}`,
-        );
-      }
-      await this.payFee(context);
-
-      const publicInputs = await context.generateAvmCircuitPublicInputs();
-      const avmProvingRequest = PublicTxSimulator.generateProvingRequest(publicInputs, hints);
-
-      const revertCode = context.getFinalRevertCode();
-
-      // Commit contracts from this TX to the block-level cache and clear tx cache
-      // If the tx reverted, only commit non-revertible contracts
-      // NOTE: You can't create contracts in public, so this is only relevant for private-created contracts
-      // FIXME(fcarreiro): this should conceptually use the hinted contracts db.
-      // However things should work as they are now because the hinted db would still pick up the new contracts.
-      this.contractsDB.commitContractsForTx(/*onlyNonRevertibles=*/ !revertCode.isOK());
-
-      return {
-        avmProvingRequest,
-        gasUsed: {
-          totalGas: context.getActualGasUsed(),
-          teardownGas: context.teardownGasUsed,
-          publicGas: context.getActualPublicGasUsed(),
-          billedGas: context.getTotalGasUsed(),
-        },
-        revertCode,
-        revertReason: context.revertReason,
-        processedPhases: processedPhases,
-      };
-    } finally {
-      // Make sure there are no new contracts in the tx-level cache.
-      // They should either be committed to block-level cache or cleared.
-      // FIXME(fcarreiro): this should conceptually use the hinted contracts db.
-      // However things should work as they are now because the hinted db would still pick up the new contracts.
-      this.contractsDB.clearContractsForTx();
     }
+
+    try {
+      if (context.hasPhase(TxExecutionPhase.TEARDOWN)) {
+        const teardownResult = await this.simulatePhase(TxExecutionPhase.TEARDOWN, context);
+        processedPhases.push(teardownResult);
+        if (teardownResult.reverted) {
+          throw new TxSimTeardownRevert();
+        }
+      }
+      // We commit the forked state and we are done.
+      await context.state.mergeForkedState();
+      hintingContractsDB.commitCheckpoint();
+    } catch (e: any) {
+      if (e instanceof TxSimTeardownRevert) {
+        // We revert to the post-setup state and we are done.
+        await context.state.discardForkedState();
+        hintingContractsDB.revertCheckpoint();
+      } else {
+        // Unchecked/unknown error - re-throw as-is
+        throw e;
+      }
+    }
+
+    context.halt();
+
+    // Such transactions should be filtered by GasTxValidator.
+    assert(
+      context.getActualGasUsed().l2Gas <= AVM_MAX_PROCESSABLE_L2_GAS,
+      `Transaction consumes ${context.getActualGasUsed().l2Gas} L2 gas, which exceeds the AVM maximum processable gas of ${AVM_MAX_PROCESSABLE_L2_GAS}`,
+    );
+    await this.payFee(context);
+
+    const publicInputs = await context.generateAvmCircuitPublicInputs();
+    const revertCode = context.getFinalRevertCode();
+
+    // We only return the app logic phase information, and only 1 per phase.
+    const appLogicReturnValues: NestedProcessReturnValues[] =
+      processedPhases.find(({ phase }) => phase === TxExecutionPhase.APP_LOGIC)?.returnValues ?? [];
+
+    // TODO(fcarreiro): This is a temporary backwards compatibility layer until we migrate to the C++ simulator.
+    if (context.revertReason !== undefined) {
+      (appLogicReturnValues as any).revertReason = context.revertReason;
+    }
+
+    // Create PublicTxEffect from PublicInputs.
+    const publicTxEffect = new PublicTxEffect(
+      publicInputs.transactionFee,
+      publicInputs.accumulatedData.noteHashes.filter(h => !h.isEmpty()),
+      publicInputs.accumulatedData.nullifiers.filter(n => !n.isEmpty()),
+      publicInputs.accumulatedData.l2ToL1Msgs.filter(m => !m.isEmpty()),
+      publicInputs.accumulatedData.publicLogs.toLogs(),
+      publicInputs.accumulatedData.publicDataWrites.filter(w => !w.isEmpty()),
+    );
+
+    return new PublicTxResult(
+      /*gasUsed=*/ {
+        totalGas: context.getActualGasUsed(),
+        teardownGas: context.teardownGasUsed,
+        publicGas: context.getActualPublicGasUsed(),
+        billedGas: context.getTotalGasUsed(),
+      },
+      /*revertCode=*/ revertCode,
+      /*publicTxEffect=*/ publicTxEffect,
+      /*callStackMetadata=*/ appLogicReturnValues,
+      /*logs=*/ context.state.getActiveStateManager().getLogs(),
+      /*hints=*/ hints,
+      /*publicInputs=*/ publicInputs,
+    );
   }
 
   protected computeTxHash(tx: Tx) {
@@ -287,7 +314,7 @@ export class PublicTxSimulator {
     );
 
     if (result.reverted) {
-      const culprit = `${contractAddress}:${callRequest.functionSelector}`;
+      const culprit = `${contractAddress}:${fnName}`;
       context.revert(phase, result.revertReason, culprit);
     }
 
@@ -330,7 +357,7 @@ export class PublicTxSimulator {
       request.isStaticCall,
       calldata,
       allocatedGas,
-      this.clientInitiatedSimulation,
+      this.config,
     );
     const avmCallResult = await simulator.execute();
     return avmCallResult.finalize();
@@ -339,7 +366,7 @@ export class PublicTxSimulator {
   /**
    * Insert the non-revertible accumulated data from private into the public state.
    */
-  protected async insertNonRevertiblesFromPrivate(context: PublicTxContext, tx: Tx) {
+  protected async insertNonRevertiblesFromPrivate(context: PublicTxContext) {
     const stateManager = context.state.getActiveStateManager();
 
     for (const siloedNullifier of context.nonRevertibleAccumulatedDataFromPrivate.nullifiers.filter(
@@ -358,58 +385,107 @@ export class PublicTxSimulator {
       }
     }
 
-    // add new contracts to the contracts db so that their functions may be found and called
-    // TODO(#6464): Should we allow emitting contracts in the private setup phase?
-    // FIXME(fcarreiro): this should conceptually use the hinted contracts db.
-    // However things should work as they are now because the hinted db would still pick up the new contracts.
-    await this.contractsDB.addNewNonRevertibleContracts(tx);
+    // add new contracts to the contracts db so that their code may be found and called
+    // FIXME(fcarreiro): this should conceptually use the hinting contracts db.
+    // However, things work as expected because later calls to getters on the hintingContractsDB
+    // will pick up the new contracts and will generate the necessary hints.
+    // So, a consumer of the hints will always see the new contracts.
+    await this.contractsDB.addContracts(context.nonRevertibleContractDeploymentData);
   }
 
   /**
    * Insert the revertible accumulated data from private into the public state.
-   * Start by forking state so we can rollback to the end of setup if app logic or teardown reverts.
+   * Throws TxSimRevertibleInsertionsRevert if there is some checked error during revertible insertions.
+   * This function checks for the following errors:
+   * - NullifierLimitReachedError
+   * - NullifierCollisionError
+   * - NoteHashLimitReachedError
+   * - L2ToL1MessageLimitReachedError
    */
-  protected async insertRevertiblesFromPrivate(context: PublicTxContext, tx: Tx): /*success=*/ Promise<boolean> {
+  protected async insertRevertiblesFromPrivate(context: PublicTxContext) {
     const stateManager = context.state.getActiveStateManager();
 
     try {
       for (const siloedNullifier of context.revertibleAccumulatedDataFromPrivate.nullifiers.filter(n => !n.isEmpty())) {
         await stateManager.writeSiloedNullifier(siloedNullifier);
       }
-    } catch (e) {
-      context.revert(
-        TxExecutionPhase.APP_LOGIC,
-        new SimulationError(
-          `Nullifier collision encountered when inserting revertible nullifiers from private.\nDetails: ${String(e)}`,
-          [],
-        ),
-      );
-      throw e;
-    }
-    for (const noteHash of context.revertibleAccumulatedDataFromPrivate.noteHashes) {
-      if (!noteHash.isEmpty()) {
-        // Revertible note hashes from private are not hashed with nonce, since private can't know their final position, only we can.
-        await stateManager.writeSiloedNoteHash(noteHash);
+    } catch (e: any) {
+      if (e instanceof NullifierLimitReachedError || e instanceof NullifierCollisionError) {
+        context.revert(
+          TxExecutionPhase.APP_LOGIC,
+          new SimulationError(
+            `Error encountered when inserting revertible nullifiers from private.\nDetails: ${e.message}`,
+            [],
+          ),
+        );
+        throw new TxSimRevertibleInsertionsRevert();
+      } else {
+        // Unchecked/unknown error - re-throw as-is
+        throw e;
       }
     }
-    for (const l2ToL1Message of context.revertibleAccumulatedDataFromPrivate.l2ToL1Msgs) {
-      if (!l2ToL1Message.isEmpty()) {
-        stateManager.writeScopedL2ToL1Message(l2ToL1Message);
-      }
-    }
-    // add new contracts to the contracts db so that their functions may be found and called
-    // FIXME(fcarreiro): this should conceptually use the hinted contracts db.
-    // However things should work as they are now because the hinted db would still pick up the new contracts.
-    await this.contractsDB.addNewRevertibleContracts(tx);
 
-    return /*success=*/ true;
+    try {
+      for (const noteHash of context.revertibleAccumulatedDataFromPrivate.noteHashes) {
+        if (!noteHash.isEmpty()) {
+          // Revertible note hashes from private are not hashed with nonce, since private can't know their final position, only we can.
+          await stateManager.writeSiloedNoteHash(noteHash);
+        }
+      }
+    } catch (e: any) {
+      if (e instanceof NoteHashLimitReachedError) {
+        context.revert(
+          TxExecutionPhase.APP_LOGIC,
+          new SimulationError(
+            `Error encountered when inserting revertible note hashes from private.\nDetails: ${e.message}`,
+            [],
+          ),
+        );
+        throw new TxSimRevertibleInsertionsRevert();
+      } else {
+        // Unchecked/unknown error - re-throw as-is
+        throw e;
+      }
+    }
+
+    try {
+      for (const l2ToL1Message of context.revertibleAccumulatedDataFromPrivate.l2ToL1Msgs) {
+        if (!l2ToL1Message.isEmpty()) {
+          stateManager.writeScopedL2ToL1Message(l2ToL1Message);
+        }
+      }
+    } catch (e: any) {
+      if (e instanceof L2ToL1MessageLimitReachedError) {
+        context.revert(
+          TxExecutionPhase.APP_LOGIC,
+          new SimulationError(
+            `Error encountered when inserting revertible L2-to-L1 messages from private.\nDetails: ${e.message}`,
+            [],
+          ),
+        );
+        throw new TxSimRevertibleInsertionsRevert();
+      } else {
+        // Unchecked/unknown error - re-throw as-is
+        throw e;
+      }
+    }
+
+    // add new contracts to the contracts db so that their functions may be found and called
+    // FIXME(fcarreiro): this should conceptually use the hinting contracts db.
+    // However, things work as expected because later calls to getters on the hintingContractsDB
+    // will pick up the new contracts and will generate the necessary hints.
+    // So, a consumer of the hints will always see the new contracts.
+    await this.contractsDB.addContracts(context.revertibleContractDeploymentData);
   }
 
   private async payFee(context: PublicTxContext) {
     const txFee = context.getTransactionFee(TxExecutionPhase.TEARDOWN);
 
     if (context.feePayer.isZero()) {
-      this.log.debug(`No one is paying the fee of ${txFee.toBigInt()}`);
+      // Real transactions are enforced by private kernel to have nonzero fee payer.
+      // Real transactions cannot skip fee enforcement (skipping fee enforcement makes them unprovable).
+      assert(this.config.skipFeeEnforcement, 'Fee payer cannot be 0 unless skipping fee enforcement for simulation');
+      this.log.debug(`Fee payer is 0. Skipping fee enforcement. No one is paying the fee of ${txFee.toBigInt()}`);
       return;
     }
 
@@ -424,29 +500,17 @@ export class PublicTxSimulator {
     // When mocking the balance of the fee payer, the circuit should not be able to prove the simulation
 
     if (currentBalance.lt(txFee)) {
-      if (!this.skipFeeEnforcement) {
-        throw new Error(
-          `Not enough balance for fee payer to pay for transaction (got ${currentBalance.toBigInt()} needs ${txFee.toBigInt()})`,
-        );
-      } else {
-        currentBalance = txFee;
-      }
+      // Without "skipFeeEnforcement", such transactions should be filtered by GasTxValidator.
+      assert(
+        this.config.skipFeeEnforcement,
+        `Not enough balance for fee payer to pay for transaction (got ${currentBalance.toBigInt()} needs ${txFee.toBigInt()})`,
+      );
+      this.log.debug(`Fee payer balance insufficient, but we're skipping fee enforcement`);
+      // We still proceed and perform the storage write to minimize deviation from normal execution.
+      currentBalance = txFee;
     }
 
     const updatedBalance = currentBalance.sub(txFee);
     await stateManager.writeStorage(feeJuiceAddress, balanceSlot, updatedBalance, true);
-  }
-
-  /**
-   * Generate the proving request for the AVM circuit.
-   */
-  private static generateProvingRequest(
-    publicInputs: AvmCircuitPublicInputs,
-    hints: AvmExecutionHints,
-  ): AvmProvingRequest {
-    return {
-      type: ProvingRequestType.PUBLIC_VM,
-      inputs: new AvmCircuitInputs(hints, publicInputs),
-    };
   }
 }

@@ -1,3 +1,4 @@
+import { EpochNumber } from '@aztec/foundation/branded-types';
 import { jsonParseWithSchema, jsonStringify } from '@aztec/foundation/json-rpc';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import { BatchQueue } from '@aztec/foundation/queue';
@@ -104,14 +105,14 @@ export class KVBrokerDatabase implements ProvingBrokerDatabase {
     const jobsToAdd = items.filter((item): item is ProvingJob => 'id' in item);
     const resultsToAdd = items.filter((item): item is [ProvingJobId, ProvingJobSettledResult] => Array.isArray(item));
 
-    const db = await this.getEpochDatabase(epochNumber);
+    const db = await this.getEpochDatabase(EpochNumber(epochNumber));
     await db.batchWrite(jobsToAdd, resultsToAdd);
   }
 
   private async estimateSize() {
     const sizes = await Promise.all(Array.from(this.epochs.values()).map(x => x.estimateSize()));
     return {
-      mappingSize: this.config.dataStoreMapSizeKB,
+      mappingSize: this.config.dataStoreMapSizeKb,
       physicalFileSize: sizes.reduce((prev, curr) => prev + curr.physicalFileSize, 0),
       numItems: sizes.reduce((prev, curr) => prev + curr.numItems, 0),
       actualSize: sizes.reduce((prev, curr) => prev + curr.actualSize, 0),
@@ -137,13 +138,13 @@ export class KVBrokerDatabase implements ProvingBrokerDatabase {
         continue;
       }
       logger.info(
-        `Loading broker database for epoch ${epochNumber} from ${fullDirectory} with map size ${config.dataStoreMapSizeKB}KB`,
+        `Loading broker database for epoch ${epochNumber} from ${fullDirectory} with map size ${config.dataStoreMapSizeKb}KB`,
       );
       const db = await openVersionedStoreAt(
         fullDirectory,
         SingleEpochDatabase.SCHEMA_VERSION,
         config.l1Contracts.rollupAddress,
-        config.dataStoreMapSizeKB,
+        config.dataStoreMapSizeKb,
       );
       const epochDb = new SingleEpochDatabase(db);
       epochs.set(epochNumber, epochDb);
@@ -164,8 +165,8 @@ export class KVBrokerDatabase implements ProvingBrokerDatabase {
     }
   }
 
-  async deleteAllProvingJobsOlderThanEpoch(epochNumber: number): Promise<void> {
-    const oldEpochs = Array.from(this.epochs.keys()).filter(e => e < epochNumber);
+  async deleteAllProvingJobsOlderThanEpoch(epochNumber: EpochNumber): Promise<void> {
+    const oldEpochs = Array.from(this.epochs.keys()).filter(e => e < Number(epochNumber));
     for (const old of oldEpochs) {
       const db = this.epochs.get(old);
       if (!db) {
@@ -196,19 +197,19 @@ export class KVBrokerDatabase implements ProvingBrokerDatabase {
     return this.batchQueue.put([id, { status: 'fulfilled', value }], getEpochFromProvingJobId(id));
   }
 
-  private async getEpochDatabase(epochNumber: number): Promise<SingleEpochDatabase> {
+  private async getEpochDatabase(epochNumber: EpochNumber): Promise<SingleEpochDatabase> {
     let epochDb = this.epochs.get(epochNumber);
     if (!epochDb) {
       const newEpochDirectory = join(this.config.dataDirectory!, epochNumber.toString());
       await mkdir(newEpochDirectory, { recursive: true });
       this.logger.info(
-        `Creating broker database for epoch ${epochNumber} at ${newEpochDirectory} with map size ${this.config.dataStoreMapSizeKB}`,
+        `Creating broker database for epoch ${epochNumber} at ${newEpochDirectory} with map size ${this.config.dataStoreMapSizeKb}`,
       );
       const db = await openVersionedStoreAt(
         newEpochDirectory,
         SingleEpochDatabase.SCHEMA_VERSION,
         this.config.l1Contracts.rollupAddress,
-        this.config.dataStoreMapSizeKB,
+        this.config.dataStoreMapSizeKb,
       );
       epochDb = new SingleEpochDatabase(db);
       this.epochs.set(epochNumber, epochDb);

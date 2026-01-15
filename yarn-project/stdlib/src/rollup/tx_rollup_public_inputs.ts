@@ -1,5 +1,5 @@
 import { SpongeBlob } from '@aztec/blob-lib/types';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { bufferSchemaFor } from '@aztec/foundation/schemas';
 import { BufferReader, serializeToBuffer } from '@aztec/foundation/serialize';
 import { bufferToHex, hexToBuffer } from '@aztec/foundation/string';
@@ -23,11 +23,11 @@ export class TxRollupPublicInputs {
     /**
      * Partial state reference at the start of the rollup circuit.
      */
-    public startPartialState: PartialStateReference,
+    public startTreeSnapshots: PartialStateReference,
     /**
      * Partial state reference at the end of the rollup circuit.
      */
-    public endPartialState: PartialStateReference,
+    public endTreeSnapshots: PartialStateReference,
     /**
      * Sponge state to absorb blob inputs at the start of the rollup circuit.
      */
@@ -96,8 +96,8 @@ export class TxRollupPublicInputs {
       this.numTxs,
       this.constants,
 
-      this.startPartialState,
-      this.endPartialState,
+      this.startTreeSnapshots,
+      this.endTreeSnapshots,
 
       this.startSpongeBlob,
       this.endSpongeBlob,

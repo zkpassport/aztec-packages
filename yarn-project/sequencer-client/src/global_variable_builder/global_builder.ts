@@ -1,12 +1,11 @@
-import {
-  type L1ContractsConfig,
-  type L1ReaderConfig,
-  RollupContract,
-  type ViemPublicClient,
-  createEthereumChain,
-} from '@aztec/ethereum';
+import { createEthereumChain } from '@aztec/ethereum/chain';
+import type { L1ContractsConfig } from '@aztec/ethereum/config';
+import { RollupContract } from '@aztec/ethereum/contracts';
+import type { L1ReaderConfig } from '@aztec/ethereum/l1-reader';
+import type { ViemPublicClient } from '@aztec/ethereum/types';
+import { BlockNumber, SlotNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import type { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import { createLogger } from '@aztec/foundation/log';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { GasFees } from '@aztec/stdlib/gas';
@@ -55,8 +54,10 @@ export class GlobalVariableBuilder implements GlobalVariableBuilderInterface {
     // we need to fetch the last block written, and estimate the earliest timestamp for the next block.
     // The timestamp of that last block will act as a lower bound for the next block.
 
-    const lastBlock = await this.rollupContract.getBlock(await this.rollupContract.getBlockNumber());
-    const earliestTimestamp = await this.rollupContract.getTimestampForSlot(lastBlock.slotNumber + 1n);
+    const lastBlock = await this.rollupContract.getCheckpoint(await this.rollupContract.getCheckpointNumber());
+    const earliestTimestamp = await this.rollupContract.getTimestampForSlot(
+      SlotNumber.fromBigInt(lastBlock.slotNumber + 1n),
+    );
     const nextEthTimestamp = BigInt((await this.publicClient.getBlock()).timestamp + BigInt(this.ethereumSlotDuration));
     const timestamp = earliestTimestamp > nextEthTimestamp ? earliestTimestamp : nextEthTimestamp;
 
@@ -94,21 +95,22 @@ export class GlobalVariableBuilder implements GlobalVariableBuilderInterface {
    * @returns The global variables for the given block number.
    */
   public async buildGlobalVariables(
-    blockNumber: number,
+    blockNumber: BlockNumber,
     coinbase: EthAddress,
     feeRecipient: AztecAddress,
-    slotNumber?: bigint,
+    slotNumber?: SlotNumber,
   ): Promise<GlobalVariables> {
     const { chainId, version } = await this.getGlobalConstantVariables();
 
+    let slot: SlotNumber;
     if (slotNumber === undefined) {
       const ts = BigInt((await this.publicClient.getBlock()).timestamp + BigInt(this.ethereumSlotDuration));
-      slotNumber = await this.rollupContract.getSlotAt(ts);
+      slot = await this.rollupContract.getSlotAt(ts);
+    } else {
+      slot = slotNumber;
     }
 
-    const timestamp = await this.rollupContract.getTimestampForSlot(slotNumber);
-
-    const slotFr = new Fr(slotNumber);
+    const timestamp = await this.rollupContract.getTimestampForSlot(slot);
 
     // We can skip much of the logic in getCurrentBaseFees since it we already check that we are not within a slot elsewhere.
     const gasFees = new GasFees(0, await this.rollupContract.getManaBaseFeeAt(timestamp, true));
@@ -117,7 +119,7 @@ export class GlobalVariableBuilder implements GlobalVariableBuilderInterface {
       chainId,
       version,
       blockNumber,
-      slotFr,
+      slot,
       timestamp,
       coinbase,
       feeRecipient,

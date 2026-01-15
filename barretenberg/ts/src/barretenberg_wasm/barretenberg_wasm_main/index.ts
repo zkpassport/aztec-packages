@@ -5,7 +5,6 @@ import { createThreadWorker } from '../barretenberg_wasm_thread/factory/node/ind
 import { type BarretenbergWasmThreadWorker } from '../barretenberg_wasm_thread/index.js';
 import { BarretenbergWasmBase } from '../barretenberg_wasm_base/index.js';
 import { HeapAllocator } from './heap_allocator.js';
-import { createDebugLogger } from '../../log/index.js';
 
 /**
  * This is the "main thread" implementation of BarretenbergWasm.
@@ -18,6 +17,12 @@ export class BarretenbergWasmMain extends BarretenbergWasmBase {
   private remoteWasms: BarretenbergWasmThreadWorker[] = [];
   private nextWorker = 0;
   private nextThreadId = 1;
+  private useCustomLogger = false;
+
+  // Pre-allocated scratch buffers for msgpack I/O to avoid malloc/free overhead
+  private msgpackInputScratch: number = 0; // 8MB input buffer
+  private msgpackOutputScratch: number = 0; // 8MB output buffer
+  private readonly MSGPACK_SCRATCH_SIZE = 1024 * 1024 * 8; // 8MB
 
   public getNumThreads() {
     return this.workers.length + 1;
@@ -29,11 +34,13 @@ export class BarretenbergWasmMain extends BarretenbergWasmBase {
   public async init(
     module: WebAssembly.Module,
     threads = Math.min(getNumCpu(), BarretenbergWasmMain.MAX_THREADS),
-    logger: (msg: string) => void = createDebugLogger('bb_wasm'),
-    initial = 32,
+    logger?: (msg: string) => void,
+    initial = 33,
     maximum = this.getDefaultMaximumMemoryPages(),
   ) {
-    this.logger = logger;
+    // Track whether a custom logger was provided so workers know whether to postMessage logs
+    this.useCustomLogger = logger !== undefined;
+    this.logger = logger ?? (() => {});
 
     const initialMb = (initial * 2 ** 16) / (1024 * 1024);
     const maxMb = (maximum * 2 ** 16) / (1024 * 1024);
@@ -54,12 +61,26 @@ export class BarretenbergWasmMain extends BarretenbergWasmBase {
     // Init all global/static data.
     this.call('_initialize');
 
+    // Allocate dedicated msgpack scratch buffers (never freed, reused for all msgpack calls)
+    this.msgpackInputScratch = this.call('bbmalloc', this.MSGPACK_SCRATCH_SIZE);
+    this.msgpackOutputScratch = this.call('bbmalloc', this.MSGPACK_SCRATCH_SIZE);
+    this.logger(
+      `Allocated msgpack scratch buffers: ` +
+        `input @ ${this.msgpackInputScratch}, output @ ${this.msgpackOutputScratch} (${this.MSGPACK_SCRATCH_SIZE} bytes each)`,
+    );
+
     // Create worker threads. Create 1 less than requested, as main thread counts as a thread.
     if (threads > 1) {
       this.logger(`Creating ${threads} worker threads`);
       this.workers = await Promise.all(Array.from({ length: threads - 1 }).map(createThreadWorker));
+
+      // Set up log message forwarding from workers to our logger (only if custom logger provided)
+      if (this.useCustomLogger) {
+        this.workers.forEach(worker => this.setupWorkerLogForwarding(worker));
+      }
+
       this.remoteWasms = await Promise.all(this.workers.map(getRemoteBarretenbergWasm<BarretenbergWasmThreadWorker>));
-      await Promise.all(this.remoteWasms.map(w => w.initThread(module, this.memory)));
+      await Promise.all(this.remoteWasms.map(w => w.initThread(module, this.memory, this.useCustomLogger)));
     }
   }
 
@@ -70,6 +91,31 @@ export class BarretenbergWasmMain extends BarretenbergWasmBase {
       return 2 ** 14;
     }
     return 2 ** 16;
+  }
+
+  /**
+   * Set up forwarding of log messages from worker threads to our logger.
+   * Workers post messages with { type: 'log', msg: string } which we intercept here.
+   */
+  private setupWorkerLogForwarding(worker: Worker) {
+    const handler = (data: unknown) => {
+      if (data && typeof data === 'object' && 'type' in data && data.type === 'log' && 'msg' in data) {
+        this.logger(data.msg as string);
+      }
+    };
+
+    // Node Workers use 'on' method, browser Workers use 'addEventListener'
+    // The 'worker' variable is typed as Node's Worker, but at runtime in browser
+    // it will be a browser Worker (due to browser_postprocess.sh import rewriting)
+    if ('on' in worker && typeof worker.on === 'function') {
+      // Node.js worker_threads Worker
+      worker.on('message', handler);
+    } else if ('addEventListener' in worker) {
+      // Browser Web Worker
+      (worker as unknown as globalThis.Worker).addEventListener('message', (event: MessageEvent) => {
+        handler(event.data);
+      });
+    }
   }
 
   /**
@@ -138,25 +184,63 @@ export class BarretenbergWasmMain extends BarretenbergWasmBase {
   }
 
   cbindCall(cbind: string, inputBuffer: Uint8Array): any {
-    const outputSizePtr = this.call('bbmalloc', 4);
-    const outputMsgpackPtr = this.call('bbmalloc', 4);
+    const needsCustomInputBuffer = inputBuffer.length > this.MSGPACK_SCRATCH_SIZE;
+    let inputPtr: number;
 
-    const inputPtr = this.call('bbmalloc', inputBuffer.length);
+    if (needsCustomInputBuffer) {
+      // Allocate temporary buffer for oversized input
+      inputPtr = this.call('bbmalloc', inputBuffer.length);
+    } else {
+      // Use pre-allocated scratch buffer
+      inputPtr = this.msgpackInputScratch;
+    }
+
+    // Write input to buffer
     this.writeMemory(inputPtr, inputBuffer);
-    this.call(cbind, inputPtr, inputBuffer.length, outputMsgpackPtr, outputSizePtr);
 
-    const readPtr32 = (ptr32: number) => {
-      const dataView = new DataView(this.getMemorySlice(ptr32, ptr32 + 4).buffer);
-      return dataView.getUint32(0, true);
-    };
+    // Setup output scratch buffer with IN-OUT parameter pattern:
+    // Reserve 8 bytes for metadata (pointer + size), rest is scratch data space
+    const METADATA_SIZE = 8;
+    const outputPtrLocation = this.msgpackOutputScratch;
+    const outputSizeLocation = this.msgpackOutputScratch + 4;
+    const scratchDataPtr = this.msgpackOutputScratch + METADATA_SIZE;
+    const scratchDataSize = this.MSGPACK_SCRATCH_SIZE - METADATA_SIZE;
 
-    const encodedResult = this.getMemorySlice(
-      readPtr32(outputMsgpackPtr),
-      readPtr32(outputMsgpackPtr) + readPtr32(outputSizePtr),
-    );
-    this.call('bbfree', inputPtr);
-    this.call('bbfree', outputSizePtr);
-    this.call('bbfree', outputMsgpackPtr);
+    // Get memory and create DataView for writing IN values
+    let mem = this.getMemory();
+    let view = new DataView(mem.buffer);
+
+    // Write IN values: provide scratch buffer pointer and size to C++
+    view.setUint32(outputPtrLocation, scratchDataPtr, true);
+    view.setUint32(outputSizeLocation, scratchDataSize, true);
+
+    // Call WASM
+    this.call(cbind, inputPtr, inputBuffer.length, outputPtrLocation, outputSizeLocation);
+
+    // Free custom input buffer if allocated
+    if (needsCustomInputBuffer) {
+      this.call('bbfree', inputPtr);
+    }
+
+    // Re-fetch memory after WASM call, as the buffer may have been detached if memory grew
+    mem = this.getMemory();
+    view = new DataView(mem.buffer);
+
+    // Read OUT values: C++ returns actual buffer pointer and size
+    const outputDataPtr = view.getUint32(outputPtrLocation, true);
+    const outputSize = view.getUint32(outputSizeLocation, true);
+
+    // Check if C++ used scratch (pointer unchanged) or allocated (pointer changed)
+    const usedScratch = outputDataPtr === scratchDataPtr;
+
+    // Copy output data from WASM memory
+    const encodedResult = this.getMemorySlice(outputDataPtr, outputDataPtr + outputSize);
+
+    // Only free if C++ allocated beyond scratch
+    if (!usedScratch) {
+      this.call('bbfree', outputDataPtr);
+    }
+
     return encodedResult;
   }
 }

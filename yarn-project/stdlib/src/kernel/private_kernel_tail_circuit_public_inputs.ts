@@ -1,4 +1,4 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { bufferSchemaFor } from '@aztec/foundation/schemas';
 import { BufferReader, bigintToUInt64BE, serializeToBuffer } from '@aztec/foundation/serialize';
 
@@ -173,7 +173,7 @@ export class PrivateKernelTailCircuitPublicInputs {
       this.constants.anchorBlockHeader,
       this.constants.txContext,
       this.constants.vkTreeRoot,
-      this.constants.protocolContractTreeRoot,
+      this.constants.protocolContractsHash,
     );
     return new PrivateToRollupKernelCircuitPublicInputs(
       constants,
@@ -182,6 +182,12 @@ export class PrivateKernelTailCircuitPublicInputs {
       this.feePayer,
       this.includeByTimestamp,
     );
+  }
+
+  publicInputs(): PrivateToPublicKernelCircuitPublicInputs | PrivateToRollupKernelCircuitPublicInputs {
+    return this.forPublic
+      ? this.toPrivateToPublicKernelCircuitPublicInputs()
+      : this.toPrivateToRollupKernelCircuitPublicInputs();
   }
 
   numberOfPublicCallRequests() {

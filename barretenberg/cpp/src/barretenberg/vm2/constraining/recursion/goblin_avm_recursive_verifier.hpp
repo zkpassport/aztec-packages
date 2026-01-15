@@ -46,8 +46,8 @@ class AvmGoblinRecursiveVerifier {
     using UltraBuilder = UltraCircuitBuilder;
     using MegaBuilder = MegaCircuitBuilder;
 
-    using PairingPoints = bb::stdlib::recursion::PairingPoints<UltraBuilder>;
-    using MegaPairingPoints = bb::stdlib::recursion::PairingPoints<MegaBuilder>;
+    using PairingPoints = bb::stdlib::recursion::PairingPoints<stdlib::bn254<UltraBuilder>>;
+    using MegaPairingPoints = bb::stdlib::recursion::PairingPoints<stdlib::bn254<MegaBuilder>>;
 
     using UltraFF = stdlib::bn254<UltraBuilder>::ScalarField;
 
@@ -72,7 +72,7 @@ class AvmGoblinRecursiveVerifier {
         , outer_key_fields(outer_key_fields)
     {
         // TODO(#15892): Set this to be the actual vk hash when vk is fixed.
-        vk_hash = UltraFF::from_witness(&builder, /* should be native hash of vk fields*/ 0);
+        vk_hash = UltraFF::from_witness(&builder, /* should be native hash of vk fields*/ typename UltraFF::native(0));
         vk_hash.fix_witness();
     }
 
@@ -153,8 +153,9 @@ class AvmGoblinRecursiveVerifier {
                 ultra_builder) // Empty ecc op tables because there is only one layer of Goblin
         };
         GoblinRecursiveVerifier goblin_verifier{ &ultra_builder, inner_output.goblin_vk, transcript };
+        GoblinStdlibProof stdlib_goblin_proof(ultra_builder, inner_output.goblin_proof);
         GoblinRecursiveVerifierOutput goblin_verifier_output =
-            goblin_verifier.verify(inner_output.goblin_proof, merge_commitments);
+            goblin_verifier.verify(stdlib_goblin_proof, merge_commitments);
         goblin_verifier_output.points_accumulator.aggregate(mega_verifier_output.points_accumulator);
 
         // Validate the consistency of the AVM2 verifier inputs {\pi, pub_inputs, VK}_{AVM2} between the inner (Mega)
@@ -223,7 +224,7 @@ class AvmGoblinRecursiveVerifier {
         const FF mega_hash = stdlib::poseidon2<MegaBuilder>::hash(mega_hash_buffer);
 
         // Construct a Mega-arithmetized AVM2 recursive verifier circuit
-        auto stdlib_key = std::make_shared<AvmRecursiveVerificationKey>(mega_builder, std::span<FF>(key_fields));
+        auto stdlib_key = std::make_shared<AvmRecursiveVerificationKey>(std::span<FF>(key_fields));
         AvmRecursiveVerifier recursive_verifier{ mega_builder, stdlib_key };
         MegaPairingPoints points_accumulator = recursive_verifier.verify_proof(mega_stdlib_proof, mega_public_inputs);
 

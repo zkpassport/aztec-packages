@@ -1,4 +1,4 @@
-import type { L2Block } from '@aztec/stdlib/block';
+import type { L2BlockNew } from '@aztec/stdlib/block';
 import type { BlockProposal } from '@aztec/stdlib/p2p';
 import { type Tx, TxHash } from '@aztec/stdlib/tx';
 
@@ -9,8 +9,9 @@ export interface ITxProvider {
 
   getTxsForBlockProposal(
     blockProposal: BlockProposal,
+    blockNumber: number,
     opts: { pinnedPeer: PeerId | undefined; deadline: Date },
   ): Promise<{ txs: Tx[]; missingTxs: TxHash[] }>;
 
-  getTxsForBlock(block: L2Block, opts: { deadline: Date }): Promise<{ txs: Tx[]; missingTxs: TxHash[] }>;
+  getTxsForBlock(block: L2BlockNew, opts: { deadline: Date }): Promise<{ txs: Tx[]; missingTxs: TxHash[] }>;
 }

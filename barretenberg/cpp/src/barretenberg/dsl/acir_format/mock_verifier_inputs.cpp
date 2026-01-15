@@ -6,6 +6,7 @@
 
 #include "mock_verifier_inputs.hpp"
 #include "barretenberg/flavor/flavor.hpp"
+#include "barretenberg/flavor/multilinear_batching_flavor.hpp"
 #include "barretenberg/flavor/ultra_recursive_flavor.hpp"
 #include "barretenberg/flavor/ultra_rollup_recursive_flavor.hpp"
 #include "barretenberg/stdlib/honk_verifier/ultra_recursive_verifier.hpp"
@@ -13,7 +14,6 @@
 #include "barretenberg/stdlib/primitives/curves/bn254.hpp"
 #include "barretenberg/stdlib/primitives/pairing_points.hpp"
 #include "barretenberg/stdlib/special_public_inputs/special_public_inputs.hpp"
-#include "barretenberg/ultra_honk/instances.hpp"
 #include "proof_surgeon.hpp"
 #include "recursion_constraint.hpp"
 
@@ -31,7 +31,7 @@ template <class Curve = curve::BN254>
 void populate_field_elements_for_mock_commitments(std::vector<fr>& fields, const size_t& num_commitments)
 {
     auto mock_commitment = Curve::AffineElement::one();
-    std::vector<fr> mock_commitment_frs = field_conversion::convert_to_bn254_frs(mock_commitment);
+    std::vector<fr> mock_commitment_frs = FrCodec::serialize_to_fields(mock_commitment);
     for (size_t i = 0; i < num_commitments; ++i) {
         for (const fr& val : mock_commitment_frs) {
             fields.emplace_back(val);
@@ -52,9 +52,8 @@ void populate_field_elements(std::vector<fr>& fields,
                              std::optional<FF> value = std::nullopt)
 {
     for (size_t i = 0; i < num_elements; ++i) {
-        std::vector<fr> field_elements = value.has_value()
-                                             ? field_conversion::convert_to_bn254_frs(value.value())
-                                             : field_conversion::convert_to_bn254_frs(FF::random_element());
+        std::vector<fr> field_elements = value.has_value() ? FrCodec::serialize_to_fields(value.value())
+                                                           : FrCodec::serialize_to_fields(FF::random_element());
         fields.insert(fields.end(), field_elements.begin(), field_elements.end());
     }
 }
@@ -82,6 +81,97 @@ template <typename Flavor, class PublicInputs> HonkProof create_mock_oink_proof(
 
     // Populate mock witness polynomial commitments
     populate_field_elements_for_mock_commitments(proof, Flavor::NUM_WITNESS_ENTITIES);
+
+    return proof;
+}
+
+template <typename Flavor> HonkProof create_mock_sumcheck_proof()
+{
+    using FF = typename Flavor::FF;
+    HonkProof proof;
+
+    // Sumcheck univariates
+    const size_t TOTAL_SIZE_SUMCHECK_UNIVARIATES = Flavor::VIRTUAL_LOG_N * Flavor::BATCHED_RELATION_PARTIAL_LENGTH;
+    populate_field_elements<FF>(proof, TOTAL_SIZE_SUMCHECK_UNIVARIATES);
+
+    // Sumcheck multilinear evaluations
+    populate_field_elements<FF>(proof, Flavor::NUM_ALL_ENTITIES);
+
+    return proof;
+}
+
+HonkProof create_mock_multilinear_batch_proof()
+{
+    using Flavor = MultilinearBatchingFlavor;
+    using FF = typename Flavor::FF;
+    HonkProof proof;
+
+    // Populate mock witness accumulator commitments
+    populate_field_elements_for_mock_commitments(proof, Flavor::NUM_WITNESS_ENTITIES / 2);
+
+    // Accumulator multivariate challenges
+    populate_field_elements<FF>(proof, Flavor::VIRTUAL_LOG_N);
+
+    // Witness accumulator polynomial evaluations
+    populate_field_elements<FF>(proof, Flavor::NUM_WITNESS_ENTITIES / 2);
+
+    // Sumcheck proof
+    HonkProof sumcheck_proof = create_mock_sumcheck_proof<Flavor>();
+
+    proof.insert(proof.end(), sumcheck_proof.begin(), sumcheck_proof.end());
+
+    return proof;
+}
+
+template <typename Flavor, class PublicInputs> HonkProof create_mock_hyper_nova_proof(bool include_fold)
+{
+    HonkProof oink_proof = create_mock_oink_proof<Flavor, PublicInputs>(/*inner_public_inputs_size=*/0);
+    HonkProof sumcheck_proof = create_mock_sumcheck_proof<Flavor>();
+    HonkProof multilinear_batch_proof;
+    if (include_fold) {
+        multilinear_batch_proof = create_mock_multilinear_batch_proof();
+    }
+    HonkProof proof;
+    proof.reserve(oink_proof.size() + sumcheck_proof.size() + multilinear_batch_proof.size());
+    proof.insert(proof.end(), oink_proof.begin(), oink_proof.end());
+    proof.insert(proof.end(), sumcheck_proof.begin(), sumcheck_proof.end());
+    proof.insert(proof.end(), multilinear_batch_proof.begin(), multilinear_batch_proof.end());
+
+    return proof;
+}
+
+// WORKTODO: use these methods in places where this logic is duplicated
+template <typename Flavor> HonkProof create_mock_pcs_proof()
+{
+    using FF = Flavor::FF;
+    using Curve = Flavor::Curve;
+    HonkProof proof;
+
+    // Gemini fold commitments
+    const size_t NUM_GEMINI_FOLD_COMMITMENTS = Flavor::VIRTUAL_LOG_N - 1;
+    populate_field_elements_for_mock_commitments<Curve>(proof, NUM_GEMINI_FOLD_COMMITMENTS);
+
+    // Gemini fold evaluations
+    const size_t NUM_GEMINI_FOLD_EVALUATIONS = Flavor::VIRTUAL_LOG_N;
+    populate_field_elements<FF>(proof, NUM_GEMINI_FOLD_EVALUATIONS);
+
+    if constexpr (std::is_same_v<Flavor, TranslatorFlavor>) {
+        // Gemini P pos evaluation
+        populate_field_elements<FF>(proof, 1);
+
+        // Gemini P neg evaluation
+        populate_field_elements<FF>(proof, 1);
+    }
+
+    if constexpr (Flavor::HasZK) {
+        // NUM_SMALL_IPA_EVALUATIONS libra evals
+        populate_field_elements<FF>(proof, NUM_SMALL_IPA_EVALUATIONS);
+    }
+
+    // Shplonk batched quotient commitment
+    populate_field_elements_for_mock_commitments<Curve>(proof, /*num_commitments=*/1);
+    // KZG quotient commitment
+    populate_field_elements_for_mock_commitments<Curve>(proof, /*num_commitments=*/1);
 
     return proof;
 }
@@ -122,12 +212,6 @@ template <typename Flavor> HonkProof create_mock_decider_proof()
 
         // Libra quotient commitment
         populate_field_elements_for_mock_commitments<Curve>(proof, 1);
-
-        // Gemini masking commitment
-        populate_field_elements_for_mock_commitments<Curve>(proof, 1);
-
-        // Gemini masking evaluation
-        populate_field_elements<FF>(proof, 1);
     }
 
     // Gemini fold commitments
@@ -182,23 +266,57 @@ template <typename Flavor, class PublicInputs> HonkProof create_mock_honk_proof(
 }
 
 /**
- * @brief Create a mock PG proof that has the correct structure but is not in general valid
+ * @brief Create a verifiable honk proof for a circuit with a single big add gate. Adds random public inputs to match
+ * num_public_inputs provided
  *
+ * @param inner_public_inputs_size Number of public inputs coming from the ACIR constraints
  */
-template <typename Flavor, class PublicInputs> HonkProof create_mock_pg_proof()
+template <typename Flavor>
+std::pair<HonkProof, std::shared_ptr<typename Flavor::VerificationKey>> construct_honk_proof_for_simple_circuit(
+    size_t num_inner_public_inputs)
 {
-    // The first part of a PG proof is an Oink proof
-    HonkProof proof = create_mock_oink_proof<Flavor, PublicInputs>();
+    using ProverInstance = ProverInstance_<Flavor>;
+    using InnerProver = bb::UltraProver_<Flavor>;
+    using VerificationKey = Flavor::VerificationKey;
+    using Builder = typename Flavor::CircuitBuilder;
 
-    // Populate mock perturbator coefficients
-    populate_field_elements<fr>(proof, CONST_PG_LOG_N, /*value=*/fr::zero());
+    // constuct a circuit with a single gate
+    Builder builder;
 
-    // Populate mock combiner quotient coefficients
-    size_t NUM_COEFF_COMBINER_QUOTIENT =
-        ProverInstances_<Flavor>::BATCHED_EXTENDED_LENGTH - ProverInstances_<Flavor>::NUM;
-    populate_field_elements<fr>(proof, NUM_COEFF_COMBINER_QUOTIENT, /*value=*/fr::zero());
+    fr a = fr::random_element();
+    uint32_t a_idx = builder.add_variable(a);
 
-    return proof;
+    // have a big add gate added
+    fr b = fr::random_element();
+    fr c = fr::random_element();
+    fr d = a + b + c;
+    uint32_t b_idx = builder.add_variable(b);
+    uint32_t c_idx = builder.add_variable(c);
+    uint32_t d_idx = builder.add_variable(d);
+
+    builder.create_big_add_gate({ a_idx, b_idx, c_idx, d_idx, fr(1), fr(1), fr(1), fr(-1), fr(0) });
+
+    // Add the public inputs
+    for (size_t i = 0; i < num_inner_public_inputs; ++i) {
+        builder.add_public_variable(fr::random_element());
+    }
+
+    // Add the default pairing points and IPA claim
+    if constexpr (HasIPAAccumulator<Flavor>) {
+        stdlib::recursion::honk::RollupIO::add_default(builder);
+    } else {
+        stdlib::recursion::honk::DefaultIO<Builder>::add_default(builder);
+    }
+
+    // prove the circuit constructed above
+    // Create the decider proving key
+    auto decider_pk = std::make_shared<ProverInstance>(builder);
+
+    // Construct the Ultra VK
+    auto vk = std::make_shared<VerificationKey>(decider_pk->get_precomputed());
+    InnerProver prover(decider_pk, vk);
+    auto honk_proof = prover.construct_proof();
+    return std::pair(honk_proof, vk);
 }
 
 /**
@@ -216,16 +334,11 @@ Goblin::MergeProof create_mock_merge_proof()
     // Populate mock shift size
     populate_field_elements<fr>(proof, 1, /*value=*/fr{ mock_shift_size });
 
-    // There are 8 entities in the merge protocol (4 columns x 2 components: T_j, g_j(X) = X^{l-1} t_j(X))
-    // and 8 evaluations (4 columns x 2 components: g_j(kappa), t_j(1/kappa))
-    const size_t NUM_TRANSCRIPT_ENTITIES = 8;
-    const size_t NUM_TRANSCRIPT_EVALUATIONS = 8;
+    // Populate mock merged table commitments and batched degree check polynomial commitment
+    populate_field_elements_for_mock_commitments(proof, 5);
 
-    // Transcript poly commitments
-    populate_field_elements_for_mock_commitments(proof, NUM_TRANSCRIPT_ENTITIES);
-
-    // Transcript poly evaluations
-    populate_field_elements(proof, NUM_TRANSCRIPT_EVALUATIONS);
+    // Populate evaluations (3 * NUM_WIRES + 1: left, right, and merged tables, plus batched degree check polynomial)
+    populate_field_elements(proof, 13);
 
     // Shplonk proof: commitment to the quotient
     populate_field_elements_for_mock_commitments(proof, 1);
@@ -238,18 +351,19 @@ Goblin::MergeProof create_mock_merge_proof()
     return proof;
 }
 
-template <typename Builder> HonkProof create_mock_civc_proof(const size_t inner_public_inputs_size)
+template <typename Builder> HonkProof create_mock_chonk_proof(const size_t inner_public_inputs_size)
 {
     HonkProof proof;
 
     HonkProof mega_proof = create_mock_honk_proof<MegaZKFlavor, stdlib::recursion::honk::HidingKernelIO<Builder>>(
         inner_public_inputs_size);
     Goblin::MergeProof merge_proof = create_mock_merge_proof();
-    ECCVMProof eccvm_proof{ create_mock_pre_ipa_proof(), create_mock_ipa_proof() };
+    HonkProof eccvm_proof{ create_mock_eccvm_proof() };
+    HonkProof ipa_proof = create_mock_ipa_proof();
     HonkProof translator_proof = create_mock_translator_proof();
 
-    ClientIVC::Proof civc_proof{ mega_proof, { merge_proof, eccvm_proof, translator_proof } };
-    proof = civc_proof.to_field_elements();
+    Chonk::Proof chonk_proof{ mega_proof, { merge_proof, eccvm_proof, ipa_proof, translator_proof } };
+    proof = chonk_proof.to_field_elements();
 
     return proof;
 }
@@ -261,13 +375,13 @@ template <typename Builder> HonkProof create_mock_civc_proof(const size_t inner_
  *
  * @return HonkProof
  */
-HonkProof create_mock_pre_ipa_proof()
+HonkProof create_mock_eccvm_proof()
 {
     using FF = ECCVMFlavor::FF;
     HonkProof proof;
 
-    // 1. NUM_WITNESS_ENTITIES commitments
-    populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof, ECCVMFlavor::NUM_WITNESS_ENTITIES);
+    // 1. NUM_WITNESS_ENTITIES + 1 commitments (includes gemini_masking_poly)
+    populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof, ECCVMFlavor::NUM_WITNESS_ENTITIES + 1);
 
     // 2. Libra concatenation commitment
     populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof, /*num_commitments*/ 1);
@@ -293,68 +407,62 @@ HonkProof create_mock_pre_ipa_proof()
     // 9. Libra quotient commitment
     populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof, /*num_commitments=*/1);
 
-    // 10. Gemini masking commitment
-    populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof, /*num_commitments=*/1);
-
-    // 11. Gemini masking evaluations
-    populate_field_elements<FF>(proof, 1);
-
-    // 12. Gemini fold commitments
+    // 10. Gemini fold commitments
     populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof,
                                                                   /*num_commitments=*/CONST_ECCVM_LOG_N - 1);
 
-    // 13. Gemini evaluations
+    // 11. Gemini evaluations
     populate_field_elements<FF>(proof, CONST_ECCVM_LOG_N);
 
-    // 14. NUM_SMALL_IPA_EVALUATIONS libra evals
+    // 12. NUM_SMALL_IPA_EVALUATIONS libra evals
     populate_field_elements<FF>(proof, NUM_SMALL_IPA_EVALUATIONS);
 
-    // 15. Shplonk
+    // 13. Shplonk
     populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof, /*num_commitments=*/1);
 
-    // 16. Translator concatenated masking term commitment
+    // 14. Translator concatenated masking term commitment
     populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof, /*num_commitments=*/1);
 
-    // 17. Translator op evaluation
+    // 15. Translator op evaluation
     populate_field_elements<FF>(proof, 1);
 
-    // 18. Translator Px evaluation
+    // 16. Translator Px evaluation
     populate_field_elements<FF>(proof, 1);
 
-    // 19. Translator Py evaluation
+    // 17. Translator Py evaluation
     populate_field_elements<FF>(proof, 1);
 
-    // 20. Translator z1 evaluation
+    // 18. Translator z1 evaluation
     populate_field_elements<FF>(proof, 1);
 
-    // 21. Translator z2 evaluation
+    // 19. Translator z2 evaluation
     populate_field_elements<FF>(proof, 1);
 
-    // 22. Translator concatenated masking term evaluation
+    // 20. Translator concatenated masking term evaluation
     populate_field_elements<FF>(proof, 1);
 
-    // 23. Translator grand sum commitment
+    // 21. Translator grand sum commitment
     populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof, /*num_commitments=*/1);
 
-    // 24. Translator quotient commitment
+    // 22. Translator quotient commitment
     populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof, /*num_commitments=*/1);
 
-    // 25. Translator concatenation evaluation
+    // 23. Translator concatenation evaluation
     populate_field_elements<FF>(proof, 1);
 
-    // 26. Translator grand sum shift evaluation
+    // 24. Translator grand sum shift evaluation
     populate_field_elements<FF>(proof, 1);
 
-    // 27. Translator grand sum evaluation
+    // 25. Translator grand sum evaluation
     populate_field_elements<FF>(proof, 1);
 
-    // 28. Translator quotient evaluation
+    // 26. Translator quotient evaluation
     populate_field_elements<FF>(proof, 1);
 
-    // 29. Shplonk
+    // 27. Shplonk
     populate_field_elements_for_mock_commitments<curve::Grumpkin>(proof, /*num_commitments=*/1);
 
-    BB_ASSERT_EQ(proof.size(), ECCVMFlavor::PROOF_LENGTH_WITHOUT_PUB_INPUTS - IPA_PROOF_LENGTH);
+    BB_ASSERT_EQ(proof.size(), ECCVMFlavor::PROOF_LENGTH_WITHOUT_PUB_INPUTS);
 
     return proof;
 }
@@ -392,20 +500,18 @@ HonkProof create_mock_ipa_proof()
  */
 HonkProof create_mock_translator_proof()
 {
-    using BF = TranslatorFlavor::BF;
     using Curve = TranslatorFlavor::Curve;
 
     HonkProof proof;
-    HonkProof decider_proof = create_mock_decider_proof<TranslatorFlavor>();
 
-    // 1. Accumulated result
-    populate_field_elements<BF>(proof, 1);
-
-    // 2. NUM_WITNESS_ENTITIES commitments
+    // 1. NUM_WITNESS_ENTITIES commitments (includes gemini masking, wires, ordered range constraints, z_perm; excludes
+    // 2 interleaved)
     populate_field_elements_for_mock_commitments<Curve>(proof,
-                                                        /*num_commitments=*/TranslatorFlavor::NUM_WITNESS_ENTITIES - 4);
+                                                        /*num_commitments=*/TranslatorFlavor::NUM_WITNESS_ENTITIES - 3 -
+                                                            TranslatorFlavor::NUM_OP_QUEUE_WIRES);
 
-    // Insert decider proof
+    // 3. Decider proof (Libra + sumcheck + Gemini + PCS)
+    HonkProof decider_proof = create_mock_decider_proof<TranslatorFlavor>();
     proof.insert(proof.end(), decider_proof.begin(), decider_proof.end());
 
     BB_ASSERT_EQ(proof.size(), TranslatorFlavor::PROOF_LENGTH_WITHOUT_PUB_INPUTS);
@@ -453,7 +559,8 @@ template <typename Flavor> std::shared_ptr<VerifierInstance_<Flavor>> create_moc
             0, 0); // metadata does not need to be accurate
     verifier_instance->vk = vk;
     verifier_instance->is_complete = true;
-    verifier_instance->gate_challenges = std::vector<FF>(static_cast<size_t>(CONST_PG_LOG_N), FF::random_element());
+    verifier_instance->gate_challenges =
+        std::vector<FF>(static_cast<size_t>(CONST_FOLDING_LOG_N), FF::random_element());
 
     for (auto& commitment : verifier_instance->witness_commitments.get_all()) {
         commitment = curve::BN254::AffineElement::one(); // arbitrary mock commitment
@@ -478,6 +585,8 @@ template HonkProof create_mock_oink_proof<UltraZKFlavor, stdlib::recursion::honk
     const size_t);
 template HonkProof create_mock_oink_proof<UltraRollupFlavor, stdlib::recursion::honk::RollupIO>(const size_t);
 
+template HonkProof create_mock_pcs_proof<MegaFlavor>();
+
 template HonkProof create_mock_decider_proof<MegaFlavor>();
 template HonkProof create_mock_decider_proof<UltraFlavor>();
 template HonkProof create_mock_decider_proof<UltraZKFlavor>();
@@ -499,12 +608,23 @@ template HonkProof create_mock_honk_proof<UltraZKFlavor, stdlib::recursion::honk
     const size_t);
 template HonkProof create_mock_honk_proof<UltraRollupFlavor, stdlib::recursion::honk::RollupIO>(const size_t);
 
-template HonkProof create_mock_pg_proof<MegaFlavor, stdlib::recursion::honk::AppIO>();
-template HonkProof create_mock_pg_proof<MegaFlavor, stdlib::recursion::honk::KernelIO>();
-template HonkProof create_mock_pg_proof<MegaFlavor, stdlib::recursion::honk::HidingKernelIO<MegaCircuitBuilder>>();
+template std::pair<HonkProof, std::shared_ptr<UltraFlavor::VerificationKey>> construct_honk_proof_for_simple_circuit<
+    UltraFlavor>(size_t num_public_inputs);
+template std::pair<HonkProof, std::shared_ptr<UltraZKFlavor::VerificationKey>> construct_honk_proof_for_simple_circuit<
+    UltraZKFlavor>(size_t num_public_inputs);
+template std::pair<HonkProof, std::shared_ptr<UltraRollupFlavor::VerificationKey>>
+construct_honk_proof_for_simple_circuit<UltraRollupFlavor>(size_t num_public_inputs);
 
-template HonkProof create_mock_civc_proof<UltraCircuitBuilder>(const size_t);
-template HonkProof create_mock_civc_proof<MegaCircuitBuilder>(const size_t);
+// template HonkProof create_mock_pg_proof<MegaFlavor, stdlib::recursion::honk::AppIO>();
+// template HonkProof create_mock_pg_proof<MegaFlavor, stdlib::recursion::honk::KernelIO>();
+// template HonkProof create_mock_pg_proof<MegaFlavor, stdlib::recursion::honk::HidingKernelIO<MegaCircuitBuilder>>();
+
+template HonkProof create_mock_hyper_nova_proof<MegaFlavor, stdlib::recursion::honk::DefaultIO<MegaCircuitBuilder>>(
+    bool);
+template HonkProof create_mock_hyper_nova_proof<MegaFlavor, stdlib::recursion::honk::KernelIO>(bool);
+
+template HonkProof create_mock_chonk_proof<UltraCircuitBuilder>(const size_t);
+template HonkProof create_mock_chonk_proof<MegaCircuitBuilder>(const size_t);
 
 template std::shared_ptr<MegaFlavor::VerificationKey> create_mock_honk_vk<MegaFlavor, stdlib::recursion::honk::AppIO>(
     const size_t, const size_t, const size_t);

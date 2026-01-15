@@ -1,7 +1,7 @@
-import { FinalBlobAccumulatorPublicInputs } from '@aztec/blob-lib';
+import { FinalBlobAccumulator } from '@aztec/blob-lib/types';
 import { AZTEC_MAX_EPOCH_DURATION } from '@aztec/constants';
 import { makeTuple } from '@aztec/foundation/array';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { bufferSchemaFor } from '@aztec/foundation/schemas';
 import { BufferReader, type Tuple, serializeToBuffer, serializeToFields } from '@aztec/foundation/serialize';
 import { bufferToHex, hexToBuffer } from '@aztec/foundation/string';
@@ -24,7 +24,7 @@ export class RootRollupPublicInputs {
     public checkpointHeaderHashes: Tuple<Fr, typeof AZTEC_MAX_EPOCH_DURATION>,
     public fees: Tuple<FeeRecipient, typeof AZTEC_MAX_EPOCH_DURATION>,
     public constants: EpochConstantData,
-    public blobPublicInputs: FinalBlobAccumulatorPublicInputs,
+    public blobPublicInputs: FinalBlobAccumulator,
   ) {}
 
   static getFields(fields: FieldsOf<RootRollupPublicInputs>) {
@@ -63,7 +63,7 @@ export class RootRollupPublicInputs {
       reader.readArray(AZTEC_MAX_EPOCH_DURATION, Fr),
       reader.readArray(AZTEC_MAX_EPOCH_DURATION, FeeRecipient),
       EpochConstantData.fromBuffer(reader),
-      reader.readObject(FinalBlobAccumulatorPublicInputs),
+      reader.readObject(FinalBlobAccumulator),
     );
   }
 
@@ -93,7 +93,7 @@ export class RootRollupPublicInputs {
       makeTuple(AZTEC_MAX_EPOCH_DURATION, Fr.random),
       makeTuple(AZTEC_MAX_EPOCH_DURATION, FeeRecipient.random),
       new EpochConstantData(Fr.random(), Fr.random(), Fr.random(), Fr.random(), Fr.random()),
-      FinalBlobAccumulatorPublicInputs.random(),
+      FinalBlobAccumulator.random(),
     );
   }
 }

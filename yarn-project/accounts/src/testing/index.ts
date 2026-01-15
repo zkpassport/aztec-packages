@@ -1,11 +1,9 @@
 /**
- * The `@aztec/accounts/testing` export provides utility methods for testing, in particular in a Sandbox environment.
- *
- * Use {@link getInitialTestAccountsWallets} to obtain a list of wallets for the Sandbox pre-seeded accounts.
+ * The `@aztec/accounts/testing` export provides utility methods for testing, in particular in a local network environment.
  *
  * @packageDocumentation
  */
-import { Fr, type PXE } from '@aztec/aztec.js';
+import { Fr } from '@aztec/aztec.js/fields';
 import { deriveSigningKey } from '@aztec/stdlib/keys';
 
 import { getSchnorrAccountContractAddress } from '../schnorr/index.js';
@@ -18,11 +16,11 @@ import {
 } from './configuration.js';
 
 export {
-  type InitialAccountData,
   INITIAL_TEST_ACCOUNT_SALTS,
   INITIAL_TEST_ENCRYPTION_KEYS,
   INITIAL_TEST_SECRET_KEYS,
   INITIAL_TEST_SIGNING_KEYS,
+  type InitialAccountData,
 } from './configuration.js';
 
 /**
@@ -44,20 +42,9 @@ export function getInitialTestAccountsData(): Promise<InitialAccountData[]> {
 }
 
 /**
- * Queries a PXE for it's registered accounts.
- * @param pxe - PXE instance.
- * @returns A set of key data for each of the initial accounts.
- */
-export async function getDeployedTestAccounts(pxe: PXE): Promise<InitialAccountData[]> {
-  const registeredAccounts = await pxe.getRegisteredAccounts();
-  const testAccounts = await getInitialTestAccountsData();
-  return testAccounts.filter(t => registeredAccounts.some(r => r.address.equals(t.address)));
-}
-
-/**
  * Generate a fixed amount of random schnorr account contract instance.
  */
-export async function generateSchnorrAccounts(numberOfAccounts: number) {
+export async function generateSchnorrAccounts(numberOfAccounts: number): Promise<Promise<InitialAccountData[]>> {
   const secrets = Array.from({ length: numberOfAccounts }, () => Fr.random());
   return await Promise.all(
     secrets.map(async secret => {

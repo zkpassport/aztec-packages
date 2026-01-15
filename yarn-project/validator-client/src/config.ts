@@ -58,6 +58,18 @@ export const validatorClientConfigMappings: ConfigMappingsType<ValidatorClientCo
     description: 'Will re-execute until this many milliseconds are left in the slot',
     ...numberConfigHelper(6000),
   },
+  alwaysReexecuteBlockProposals: {
+    env: 'ALWAYS_REEXECUTE_BLOCK_PROPOSALS',
+    description:
+      'Whether to always reexecute block proposals, even for non-validator nodes (useful for monitoring network status).',
+    ...booleanConfigHelper(false),
+  },
+  fishermanMode: {
+    env: 'FISHERMAN_MODE',
+    description:
+      'Whether to run in fisherman mode: validates all proposals and attestations but does not broadcast attestations or participate in consensus.',
+    ...booleanConfigHelper(false),
+  },
 };
 
 /**

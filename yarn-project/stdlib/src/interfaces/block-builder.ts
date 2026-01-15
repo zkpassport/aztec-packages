@@ -1,4 +1,5 @@
-import type { Fr } from '@aztec/foundation/fields';
+import type { BlockNumber } from '@aztec/foundation/branded-types';
+import type { Fr } from '@aztec/foundation/curves/bn254';
 import type { Timer } from '@aztec/foundation/timer';
 
 import type { L2Block } from '../block/l2_block.js';
@@ -38,6 +39,7 @@ export interface PublicProcessorLimits {
   maxTransactions?: number;
   maxBlockSize?: number;
   maxBlockGas?: Gas;
+  maxBlobFields?: number;
   deadline?: Date;
 }
 
@@ -73,5 +75,5 @@ export interface IFullNodeBlockBuilder {
     fork?: MerkleTreeWriteOperations,
   ): Promise<BuildBlockResult>;
 
-  getFork(blockNumber: number): Promise<MerkleTreeWriteOperations>;
+  getFork(blockNumber: BlockNumber): Promise<MerkleTreeWriteOperations>;
 }

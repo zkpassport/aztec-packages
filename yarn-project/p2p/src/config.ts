@@ -9,7 +9,7 @@ import {
   pickConfigMappings,
   secretStringConfigHelper,
 } from '@aztec/foundation/config';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { type DataStoreConfig, dataConfigMappings } from '@aztec/kv-store/config';
 import { FunctionSelector } from '@aztec/stdlib/abi';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
@@ -127,7 +127,7 @@ export interface P2PConfig extends P2PReqRespConfig, ChainConfig, TxCollectionCo
   /** A list of preferred peers. */
   preferredPeers: string[];
 
-  /** The maximum possible size of the P2P DB in KB. Overwrites the general dataStoreMapSizeKB. */
+  /** The maximum possible size of the P2P DB in KB. Overwrites the general dataStoreMapSizeKb. */
   p2pStoreMapSizeKb?: number;
 
   /** Which calls are allowed in the public setup phase of a tx. */
@@ -164,6 +164,12 @@ export interface P2PConfig extends P2PReqRespConfig, ChainConfig, TxCollectionCo
 
   /** Whether to delete transactions from the pool after a reorg instead of moving them back to pending. */
   txPoolDeleteTxsAfterReorg: boolean;
+
+  /** Alters the format of p2p messages to include things like broadcast timestamp FOR TESTING ONLY */
+  debugP2PInstrumentMessages: boolean;
+
+  /** Whether to run in fisherman mode: validates all proposals and attestations but does not broadcast attestations or participate in consensus */
+  fishermanMode: boolean;
 }
 
 export const DEFAULT_P2P_PORT = 40400;
@@ -360,7 +366,7 @@ export const p2pConfigMappings: ConfigMappingsType<P2PConfig> = {
   p2pStoreMapSizeKb: {
     env: 'P2P_STORE_MAP_SIZE_KB',
     parseEnv: (val: string | undefined) => (val ? +val : undefined),
-    description: 'The maximum possible size of the P2P DB in KB. Overwrites the general dataStoreMapSizeKB.',
+    description: 'The maximum possible size of the P2P DB in KB. Overwrites the general dataStoreMapSizeKb.',
   },
   txPublicSetupAllowList: {
     env: 'TX_PUBLIC_SETUP_ALLOWLIST',
@@ -406,7 +412,7 @@ export const p2pConfigMappings: ConfigMappingsType<P2PConfig> = {
   },
   dropTransactionsProbability: {
     env: 'P2P_DROP_TX_CHANCE',
-    description: 'The probability that a transaction is discarded. - For testing purposes only',
+    description: 'The probability that a transaction is discarded (0 - 1). - For testing purposes only',
     ...floatConfigHelper(0),
   },
   disableTransactions: {
@@ -418,6 +424,17 @@ export const p2pConfigMappings: ConfigMappingsType<P2PConfig> = {
   txPoolDeleteTxsAfterReorg: {
     env: 'P2P_TX_POOL_DELETE_TXS_AFTER_REORG',
     description: 'Whether to delete transactions from the pool after a reorg instead of moving them back to pending.',
+    ...booleanConfigHelper(false),
+  },
+  debugP2PInstrumentMessages: {
+    env: 'DEBUG_P2P_INSTRUMENT_MESSAGES',
+    description: 'Alters the format of p2p messages to include things like broadcast timestamp FOR TESTING ONLY',
+    ...booleanConfigHelper(false),
+  },
+  fishermanMode: {
+    env: 'FISHERMAN_MODE',
+    description:
+      'Whether to run in fisherman mode: validates all proposals and attestations but does not broadcast attestations or participate in consensus.',
     ...booleanConfigHelper(false),
   },
   ...p2pReqRespConfigMappings,
@@ -449,9 +466,10 @@ export type BootnodeConfig = Pick<
   | 'peerIdPrivateKeyPath'
   | 'bootstrapNodes'
   | 'listenAddress'
+  | 'queryForIp'
 > &
   Required<Pick<P2PConfig, 'p2pIp' | 'p2pPort'>> &
-  Pick<DataStoreConfig, 'dataDirectory' | 'dataStoreMapSizeKB'> &
+  Pick<DataStoreConfig, 'dataDirectory' | 'dataStoreMapSizeKb'> &
   Pick<ChainConfig, 'l1ChainId'>;
 
 const bootnodeConfigKeys: (keyof BootnodeConfig)[] = [
@@ -462,9 +480,10 @@ const bootnodeConfigKeys: (keyof BootnodeConfig)[] = [
   'peerIdPrivateKey',
   'peerIdPrivateKeyPath',
   'dataDirectory',
-  'dataStoreMapSizeKB',
+  'dataStoreMapSizeKb',
   'bootstrapNodes',
   'l1ChainId',
+  'queryForIp',
 ];
 
 export const bootnodeConfigMappings = pickConfigMappings(

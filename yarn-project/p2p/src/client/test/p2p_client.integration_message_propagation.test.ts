@@ -1,6 +1,7 @@
 import type { EpochCache } from '@aztec/epoch-cache';
-import { Secp256k1Signer } from '@aztec/foundation/crypto';
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Secp256k1Signer } from '@aztec/foundation/crypto/secp256k1-signer';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import { type PromiseWithResolvers, promiseWithResolvers } from '@aztec/foundation/promise';
 import { retryUntil } from '@aztec/foundation/retry';
@@ -8,7 +9,7 @@ import { sleep } from '@aztec/foundation/sleep';
 import { emptyChainConfig } from '@aztec/stdlib/config';
 import type { WorldStateSynchronizer } from '@aztec/stdlib/interfaces/server';
 import { BlockAttestation, BlockProposal } from '@aztec/stdlib/p2p';
-import { type MakeConsensusPayloadOptions, makeBlockProposal, makeL2BlockHeader, mockTx } from '@aztec/stdlib/testing';
+import { type MakeConsensusPayloadOptions, makeBlockProposal, makeL2BlockHeader } from '@aztec/stdlib/testing';
 import { Tx, TxHash } from '@aztec/stdlib/tx';
 
 import { describe, expect, it, jest } from '@jest/globals';
@@ -28,6 +29,7 @@ import {
   startTestP2PClients,
 } from '../../test-helpers/make-test-p2p-clients.js';
 import { MockGossipSubNetwork } from '../../test-helpers/mock-pubsub.js';
+import { createMockTxWithMetadata } from '../../test-helpers/mock-tx-helpers.js';
 
 const TEST_TIMEOUT = 120_000;
 jest.setTimeout(TEST_TIMEOUT);
@@ -69,11 +71,11 @@ describe('p2p client integration message propagation', () => {
     worldState.status.mockResolvedValue({
       state: mock(),
       syncSummary: {
-        latestBlockNumber: 0,
+        latestBlockNumber: BlockNumber.ZERO,
         latestBlockHash: '',
-        finalizedBlockNumber: 0,
+        finalizedBlockNumber: BlockNumber.ZERO,
         treesAreSynched: false,
-        oldestHistoricBlockNumber: 0,
+        oldestHistoricBlockNumber: BlockNumber.ZERO,
       },
     });
     logger.info(`Starting test ${expect.getState().currentTestName}`);
@@ -148,7 +150,7 @@ describe('p2p client integration message propagation', () => {
     return handleGossipedAttestationSpy;
   };
 
-  const assertBroadcast = async (clients: P2PClient[]) => {
+  const assertBroadcast = async (clients: P2PClient[], config: P2PConfig) => {
     const [client1, client2, client3] = clients;
     // Client 1 sends a tx a block proposal and an attestation and both clients 2 and 3 should receive them
     const client2TxPromise = promiseWithResolvers<Tx>();
@@ -169,7 +171,7 @@ describe('p2p client integration message propagation', () => {
     const client3HandleGossipedAttestationSpy = replaceBlockAttestationHandler(client3, client3AttestationPromise);
 
     // Client 1 sends a transaction, it should propagate to clients 2 and 3
-    const tx = await mockTx();
+    const tx = await createMockTxWithMetadata(config);
     await client1.sendTx(tx);
 
     // Client 1 sends a block proposal
@@ -261,7 +263,10 @@ describe('p2p client integration message propagation', () => {
       logger.info(`Finished waiting for clients to discover each other`);
 
       // Assert that messages get propagated
-      await assertBroadcast(clientsAndConfig.map(c => c.client));
+      await assertBroadcast(
+        clientsAndConfig.map(c => c.client),
+        testConfig.p2pBaseConfig,
+      );
 
       // Now stop clients 2 and 3
       logger.info(`Restarting clients 2 and 3`);
@@ -318,7 +323,7 @@ describe('p2p client integration message propagation', () => {
         );
 
         // Client 1 sends a transaction, it should propagate to clients 2 and 3
-        const tx = await mockTx();
+        const tx = await createMockTxWithMetadata(testConfig.p2pBaseConfig);
         await client1.client.sendTx(tx);
 
         // Client 1 sends a block proposal
@@ -400,6 +405,6 @@ describe('p2p client integration message propagation', () => {
 
     await sleep(1000);
 
-    await assertBroadcast(clients);
+    await assertBroadcast(clients, testConfig.p2pBaseConfig);
   });
 });

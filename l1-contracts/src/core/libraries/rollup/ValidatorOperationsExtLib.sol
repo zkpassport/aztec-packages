@@ -22,7 +22,7 @@ import {G1Point, G2Point} from "@aztec/shared/libraries/BN254Lib.sol";
  *      external functions primarily focused on:
  *      - Validator staking operations (deposit, withdraw, queue management)
  *      - Validator selection and committee setup
- *      - Block attestation invalidation
+ *      - Checkpoint attestation invalidation
  *      - Slashing mechanism integration
  *      - Epoch and proposer management
  */
@@ -54,8 +54,8 @@ library ValidatorOperationsExtLib {
     );
   }
 
-  function flushEntryQueue() external {
-    StakingLib.flushEntryQueue();
+  function flushEntryQueue(uint256 _toAdd) external {
+    StakingLib.flushEntryQueue(_toAdd);
   }
 
   function initiateWithdraw(address _attester, address _recipient) external returns (bool) {
@@ -66,8 +66,12 @@ library ValidatorOperationsExtLib {
     StakingLib.finalizeWithdraw(_attester);
   }
 
-  function initializeValidatorSelection(uint256 _targetCommitteeSize, uint256 _lagInEpochs) external {
-    ValidatorSelectionLib.initialize(_targetCommitteeSize, _lagInEpochs);
+  function initializeValidatorSelection(
+    uint256 _targetCommitteeSize,
+    uint256 _lagInEpochsForValidatorSet,
+    uint256 _lagInEpochsForRandao
+  ) external {
+    ValidatorSelectionLib.initialize(_targetCommitteeSize, _lagInEpochsForValidatorSet, _lagInEpochsForRandao);
   }
 
   function setupEpoch() external {
@@ -85,20 +89,20 @@ library ValidatorOperationsExtLib {
   }
 
   function invalidateBadAttestation(
-    uint256 _blockNumber,
+    uint256 _checkpointNumber,
     CommitteeAttestations memory _attestations,
     address[] memory _committee,
     uint256 _invalidIndex
   ) external {
-    InvalidateLib.invalidateBadAttestation(_blockNumber, _attestations, _committee, _invalidIndex);
+    InvalidateLib.invalidateBadAttestation(_checkpointNumber, _attestations, _committee, _invalidIndex);
   }
 
   function invalidateInsufficientAttestations(
-    uint256 _blockNumber,
+    uint256 _checkpointNumber,
     CommitteeAttestations memory _attestations,
     address[] memory _committee
   ) external {
-    InvalidateLib.invalidateInsufficientAttestations(_blockNumber, _attestations, _committee);
+    InvalidateLib.invalidateInsufficientAttestations(_checkpointNumber, _attestations, _committee);
   }
 
   function slash(address _attester, uint256 _amount) external returns (bool) {
@@ -129,8 +133,12 @@ library ValidatorOperationsExtLib {
     return ValidatorSelectionLib.getSamplingSize(_epoch);
   }
 
-  function getLagInEpochs() external view returns (uint256) {
-    return ValidatorSelectionLib.getLagInEpochs();
+  function getLagInEpochsForValidatorSet() external view returns (uint256) {
+    return ValidatorSelectionLib.getLagInEpochsForValidatorSet();
+  }
+
+  function getLagInEpochsForRandao() external view returns (uint256) {
+    return ValidatorSelectionLib.getLagInEpochsForRandao();
   }
 
   function getTargetCommitteeSize() external view returns (uint256) {
@@ -138,6 +146,11 @@ library ValidatorOperationsExtLib {
   }
 
   function getEntryQueueFlushSize() external view returns (uint256) {
-    return StakingLib.getEntryQueueFlushSize();
+    uint256 activeAttesterCount = StakingLib.getAttesterCountAtTime(Timestamp.wrap(block.timestamp));
+    return StakingLib.getEntryQueueFlushSize(activeAttesterCount);
+  }
+
+  function getAvailableValidatorFlushes() external view returns (uint256) {
+    return StakingLib.getAvailableValidatorFlushes();
   }
 }

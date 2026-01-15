@@ -1,17 +1,12 @@
 // This test should only use packages that are published to npm
 // docs:start:imports
-import { getDeployedTestAccounts } from '@aztec/accounts/testing';
-import {
-  EthAddress,
-  Fr,
-  L1TokenManager,
-  L1TokenPortalManager,
-  createAztecNodeClient,
-  createLogger,
-  createPXEClient,
-  waitForPXE,
-} from '@aztec/aztec.js';
-import { createExtendedL1Client, deployL1Contract } from '@aztec/ethereum';
+import { EthAddress } from '@aztec/aztec.js/addresses';
+import { L1TokenManager, L1TokenPortalManager } from '@aztec/aztec.js/ethereum';
+import { Fr } from '@aztec/aztec.js/fields';
+import { createLogger } from '@aztec/aztec.js/log';
+import { createAztecNodeClient, waitForNode } from '@aztec/aztec.js/node';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import { deployL1Contract } from '@aztec/ethereum/deploy-l1-contracts';
 import {
   FeeAssetHandlerAbi,
   FeeAssetHandlerBytecode,
@@ -23,7 +18,7 @@ import {
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
 import { TokenBridgeContract } from '@aztec/noir-contracts.js/TokenBridge';
 import { computeL2ToL1MembershipWitness } from '@aztec/stdlib/messaging';
-import { TestWallet } from '@aztec/test-wallet';
+import { TestWallet, registerInitialLocalNetworkAccountsInWallet } from '@aztec/test-wallet/server';
 
 import { getContract } from 'viem';
 
@@ -37,13 +32,13 @@ const ownerEthAddress = l1Client.account.address;
 
 const MINT_AMOUNT = BigInt(1e15);
 
-const setupSandbox = async () => {
-  const { AZTEC_NODE_URL = 'http://localhost:8079', PXE_URL = 'http://localhost:8080' } = process.env;
-  // eslint-disable-next-line @typescript-eslint/await-thenable
-  const pxe = await createPXEClient(PXE_URL);
-  await waitForPXE(pxe);
+const setupLocalNetwork = async () => {
+  const { AZTEC_NODE_URL = 'http://localhost:8080' } = process.env;
+
   const node = createAztecNodeClient(AZTEC_NODE_URL);
-  return { pxe, node };
+  await waitForNode(node);
+  const wallet = await TestWallet.create(node);
+  return { node, wallet };
 };
 
 async function deployTestERC20(): Promise<EthAddress> {
@@ -75,16 +70,23 @@ async function addMinter(l1TokenContract: EthAddress, l1TokenHandler: EthAddress
 }
 // docs:end:utils
 
+// To run these tests against a local network:
+// 1. Start a local Ethereum node (Anvil):
+//    anvil --host 127.0.0.1 --port 8545
+//
+// 2. Start the Aztec network:
+//    cd yarn-project/aztec
+//    NODE_NO_WARNINGS=1 ETHEREUM_HOSTS=http://127.0.0.1:8545 node ./dest/bin/index.js start --local-network
+//
+// 3. Run the tests:
+//    yarn test:e2e e2e_token_bridge_tutorial_test.test.ts
 describe('e2e_cross_chain_messaging token_bridge_tutorial_test', () => {
   it('Deploys tokens & bridges to L1 & L2, mints & publicly bridges tokens', async () => {
     // docs:start:setup
     const logger = createLogger('aztec:token-bridge-tutorial');
-    const { pxe, node } = await setupSandbox();
-    const wallet = new TestWallet(pxe);
-    const [ownerAccount] = await getDeployedTestAccounts(pxe);
-    await wallet.createSchnorrAccount(ownerAccount.secret, ownerAccount.salt, ownerAccount.signingKey);
-    const { address: ownerAztecAddress } = ownerAccount;
-    const l1ContractAddresses = (await pxe.getNodeInfo()).l1ContractAddresses;
+    const { wallet, node } = await setupLocalNetwork();
+    const [ownerAztecAddress] = await registerInitialLocalNetworkAccountsInWallet(wallet);
+    const l1ContractAddresses = (await node.getNodeInfo()).l1ContractAddresses;
     logger.info('L1 Contract Addresses:');
     logger.info(`Registry Address: ${l1ContractAddresses.registryAddress}`);
     logger.info(`Inbox Address: ${l1ContractAddresses.inboxAddress}`);
@@ -189,7 +191,7 @@ describe('e2e_cross_chain_messaging token_bridge_tutorial_test', () => {
       },
       true,
     );
-    await authwit.send({ from: ownerAztecAddress }).wait();
+    await authwit.send().wait();
     // docs:end:setup-withdrawal
 
     // docs:start:l2-withdraw

@@ -64,7 +64,7 @@ TEST(KeccakF1600ConstrainingTest, MultipleWithSimulationAndTraceGenInteractions)
 }
 
 // Test tag error handling when a memory value has an incorrect tag.
-// We test when the memory tag is not U64 for a read value at index (1, 2).
+// We test when the memory tag is not U64 for a read value at A[x=2][y=1].
 // We check that the tag_error is 1 for this index (flattened index 7) and that
 // we correctly propagate the error to the top.
 TEST(KeccakF1600ConstrainingTest, TagErrorHandling)
@@ -73,10 +73,11 @@ TEST(KeccakF1600ConstrainingTest, TagErrorHandling)
 
     const MemoryAddress src_addr = 0;
     const MemoryAddress dst_addr = 200;
-    const uint32_t space_id = 79;
+    const uint16_t space_id = 79;
 
-    // Position (1,2) in the 5x5 matrix corresponds to index 7 in the flattened array
-    const size_t error_offset = 7;              // (1 * 5) + 2 = 7
+    // Standard Keccak layout: memory[(y * 5) + x] = A[x][y]
+    // Position A[x=2][y=1] in the 5x5 matrix corresponds to index (1 * 5) + 2 = 7 in the flattened array
+    const size_t error_offset = 7;
     const MemoryTag error_tag = MemoryTag::U32; // Using U32 instead of U64 to trigger error
 
     testing::generate_keccak_trace_with_tag_error(trace, dst_addr, src_addr, error_offset, error_tag, space_id);
@@ -93,7 +94,7 @@ TEST(KeccakF1600ConstrainingTest, SrcAddressOutOfBounds)
 
     const MemoryAddress src_addr = AVM_HIGHEST_MEM_ADDRESS;
     const MemoryAddress dst_addr = 456;
-    const uint32_t space_id = 23;
+    const uint16_t space_id = 23;
 
     testing::generate_keccak_trace_with_slice_error(trace, dst_addr, src_addr, space_id);
 
@@ -109,7 +110,7 @@ TEST(KeccakF1600ConstrainingTest, DstAddressOutOfBounds)
 
     const MemoryAddress src_addr = 123;
     const MemoryAddress dst_addr = AVM_HIGHEST_MEM_ADDRESS - AVM_KECCAKF1600_STATE_SIZE + 2;
-    const uint32_t space_id = 23;
+    const uint16_t space_id = 23;
 
     testing::generate_keccak_trace_with_slice_error(trace, dst_addr, src_addr, space_id);
 

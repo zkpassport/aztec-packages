@@ -4,51 +4,50 @@ use aztec::macros::aztec;
 #[aztec]
 contract Updated {
     use aztec::{
-        macros::{functions::{private, public, utility}, storage::storage},
+        macros::{functions::external, storage::storage},
         messages::message_delivery::MessageDelivery,
-        protocol_types::constants::CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS,
-        state_vars::{PrivateMutable, PublicMutable},
+        protocol_types::{
+            address::AztecAddress, constants::CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS,
+        },
+        state_vars::{Owned, PrivateMutable, PublicMutable},
     };
     use contract_instance_registry::ContractInstanceRegistry;
-    use value_note::value_note::ValueNote;
+    use field_note::field_note::FieldNote;
 
     #[storage]
     struct Storage<Context> {
-        private_value: PrivateMutable<ValueNote, Context>,
+        private_value: Owned<PrivateMutable<FieldNote, Context>, Context>,
         public_value: PublicMutable<Field, Context>,
     }
 
-    #[public]
+    #[external("public")]
     fn set_public_value() {
-        storage.public_value.write(27);
+        self.storage.public_value.write(27);
     }
 
-    #[private]
+    #[external("private")]
     fn set_private_value() {
-        let owner = context.msg_sender();
+        let owner = self.msg_sender().unwrap();
 
-        storage.private_value.replace(|_old| ValueNote::new(27, owner)).emit(
-            &mut context,
-            owner,
+        self.storage.private_value.at(owner).replace(|_old| FieldNote { value: 27 }).deliver(
             MessageDelivery.CONSTRAINED_ONCHAIN,
         );
     }
 
-    #[public]
+    #[external("public")]
     fn get_update_delay() -> u64 {
-        ContractInstanceRegistry::at(CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS)
-            .get_update_delay()
-            .view(&mut context)
+        self.view(ContractInstanceRegistry::at(CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS)
+            .get_update_delay())
     }
 
-    #[utility]
-    unconstrained fn get_private_value() -> Field {
-        storage.private_value.view_note().value()
+    #[external("utility")]
+    unconstrained fn get_private_value(owner: AztecAddress) -> Field {
+        self.storage.private_value.at(owner).view_note().value
     }
 
-    #[utility]
+    #[external("utility")]
     unconstrained fn get_public_value() -> Field {
-        storage.public_value.read()
+        self.storage.public_value.read()
     }
 
 }

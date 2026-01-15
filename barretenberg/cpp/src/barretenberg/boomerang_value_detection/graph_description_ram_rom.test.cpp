@@ -42,7 +42,7 @@ TEST(boomerang_rom_ram_table, graph_description_rom_table)
     field_ct result = field_ct(witness_ct(&builder, (uint64_t)0));
 
     for (size_t i = 0; i < 10; ++i) {
-        safety_variables.insert(result.witness_index);
+        safety_variables.insert(result.get_witness_index());
         field_ct index(witness_ct(&builder, (uint64_t)i));
         index.fix_witness();
         result += table[index];
@@ -84,7 +84,7 @@ TEST(boomerang_rom_ram_table, graph_description_ram_table_read)
     std::unordered_set<uint32_t> safety_variables;
 
     for (size_t i = 0; i < 10; ++i) {
-        safety_variables.insert(result.witness_index);
+        safety_variables.insert(result.get_witness_index());
         field_ct index(witness_ct(&builder, (uint64_t)i));
         index.fix_witness();
         result += table.read(index);
@@ -119,14 +119,16 @@ TEST(boomerang_rom_ram_table, graph_description_ram_table_write)
     const size_t table_size = 10;
 
     std::vector<fr> table_values(table_size);
-    ram_table_ct table(&builder, table_size);
+    std::vector<field_ct> zeros(table_size, field_ct(0));
+    ram_table_ct table(&builder, zeros);
 
     for (size_t i = 0; i < table_size; ++i) {
         table.write(i, 0);
     }
+
     std::unordered_set<uint32_t> safety_variables;
     field_ct result(0);
-    safety_variables.insert(result.witness_index);
+    safety_variables.insert(result.get_witness_index());
 
     const auto update = [&]() {
         for (size_t i = 0; i < table_size / 2; ++i) {
@@ -151,9 +153,9 @@ TEST(boomerang_rom_ram_table, graph_description_ram_table_write)
             index1.fix_witness();
             index2.fix_witness();
             result += table.read(index1);
-            safety_variables.insert(result.witness_index);
+            safety_variables.insert(result.get_witness_index());
             result += table.read(index2);
-            safety_variables.insert(result.witness_index);
+            safety_variables.insert(result.get_witness_index());
         }
     };
 

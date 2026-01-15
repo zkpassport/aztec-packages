@@ -1,23 +1,28 @@
 import {
   ARCHIVE_HEIGHT,
-  INITIAL_L2_BLOCK_NUM,
   L1_TO_L2_MSG_TREE_HEIGHT,
   NOTE_HASH_TREE_HEIGHT,
   NULLIFIER_TREE_HEIGHT,
   PUBLIC_DATA_TREE_HEIGHT,
 } from '@aztec/constants';
 import { type L1ContractAddresses, L1ContractAddressesSchema } from '@aztec/ethereum/l1-contract-addresses';
+import {
+  BlockNumber,
+  BlockNumberPositiveSchema,
+  BlockNumberSchema,
+  type SlotNumber,
+} from '@aztec/foundation/branded-types';
+import type { Fr } from '@aztec/foundation/curves/bn254';
 import type { EthAddress } from '@aztec/foundation/eth-address';
-import type { Fr } from '@aztec/foundation/fields';
 import { createSafeJsonRpcClient, makeFetch } from '@aztec/foundation/json-rpc/client';
 import { MembershipWitness, SiblingPath } from '@aztec/foundation/trees';
 
 import { z } from 'zod';
 
 import type { AztecAddress } from '../aztec-address/index.js';
-import { type InBlock, inBlockSchemaFor } from '../block/in_block.js';
+import { type BlockParameter, BlockParameterSchema } from '../block/block_parameter.js';
+import { type DataInBlock, dataInBlockSchemaFor } from '../block/in_block.js';
 import { L2Block } from '../block/l2_block.js';
-import { type L2BlockNumber, L2BlockNumberSchema } from '../block/l2_block_number.js';
 import { type L2BlockSource, type L2Tips, L2TipsSchema } from '../block/l2_block_source.js';
 import { PublishedL2Block } from '../block/published_l2_block.js';
 import {
@@ -32,7 +37,6 @@ import {
 } from '../contract/index.js';
 import { GasFees } from '../gas/gas_fees.js';
 import { type LogFilter, LogFilterSchema } from '../logs/log_filter.js';
-import { PrivateLog } from '../logs/private_log.js';
 import { TxScopedL2Log } from '../logs/tx_scoped_l2_log.js';
 import { type ApiSchemaFor, optional, schemas } from '../schemas/schemas.js';
 import { MerkleTreeId } from '../trees/merkle_tree_id.js';
@@ -52,6 +56,7 @@ import {
 import { SingleValidatorStatsSchema, ValidatorsStatsSchema } from '../validators/schemas.js';
 import type { SingleValidatorStats, ValidatorsStats } from '../validators/types.js';
 import { type ComponentsVersions, getVersioningResponseHandler } from '../versioning/index.js';
+import { type AllowedElement, AllowedElementSchema } from './allowed_element.js';
 import { MAX_RPC_BLOCKS_LEN, MAX_RPC_LEN, MAX_RPC_TXS_LEN } from './api_limit.js';
 import {
   type GetContractClassLogsResponse,
@@ -86,10 +91,10 @@ export interface AztecNode
    * @returns The indices of leaves and the block metadata of a block in which the leaves were inserted.
    */
   findLeavesIndexes(
-    blockNumber: L2BlockNumber,
+    blockNumber: BlockParameter,
     treeId: MerkleTreeId,
     leafValues: Fr[],
-  ): Promise<(InBlock<bigint> | undefined)[]>;
+  ): Promise<(DataInBlock<bigint> | undefined)[]>;
 
   /**
    * Returns a sibling path for the given index in the nullifier tree.
@@ -98,7 +103,7 @@ export interface AztecNode
    * @returns The sibling path for the leaf index.
    */
   getNullifierSiblingPath(
-    blockNumber: L2BlockNumber,
+    blockNumber: BlockParameter,
     leafIndex: bigint,
   ): Promise<SiblingPath<typeof NULLIFIER_TREE_HEIGHT>>;
 
@@ -109,7 +114,7 @@ export interface AztecNode
    * @returns The sibling path for the leaf index.
    */
   getNoteHashSiblingPath(
-    blockNumber: L2BlockNumber,
+    blockNumber: BlockParameter,
     leafIndex: bigint,
   ): Promise<SiblingPath<typeof NOTE_HASH_TREE_HEIGHT>>;
 
@@ -119,7 +124,7 @@ export interface AztecNode
    * @param leafIndex - Index of the leaf in the tree.
    * @returns The sibling path.
    */
-  getArchiveSiblingPath(blockNumber: L2BlockNumber, leafIndex: bigint): Promise<SiblingPath<typeof ARCHIVE_HEIGHT>>;
+  getArchiveSiblingPath(blockNumber: BlockParameter, leafIndex: bigint): Promise<SiblingPath<typeof ARCHIVE_HEIGHT>>;
 
   /**
    * Returns a sibling path for a leaf in the committed public data tree.
@@ -128,7 +133,7 @@ export interface AztecNode
    * @returns The sibling path.
    */
   getPublicDataSiblingPath(
-    blockNumber: L2BlockNumber,
+    blockNumber: BlockParameter,
     leafIndex: bigint,
   ): Promise<SiblingPath<typeof PUBLIC_DATA_TREE_HEIGHT>>;
 
@@ -139,7 +144,7 @@ export interface AztecNode
    * @returns The nullifier membership witness (if found).
    */
   getNullifierMembershipWitness(
-    blockNumber: L2BlockNumber,
+    blockNumber: BlockParameter,
     nullifier: Fr,
   ): Promise<NullifierMembershipWitness | undefined>;
 
@@ -153,7 +158,7 @@ export interface AztecNode
    * we are trying to prove non-inclusion for.
    */
   getLowNullifierMembershipWitness(
-    blockNumber: L2BlockNumber,
+    blockNumber: BlockParameter,
     nullifier: Fr,
   ): Promise<NullifierMembershipWitness | undefined>;
 
@@ -166,7 +171,7 @@ export interface AztecNode
    * "in range" slot, means that the slot doesn't exist and the value is 0. If the low leaf preimage corresponds to the exact slot, the current value
    * is contained in the leaf preimage.
    */
-  getPublicDataWitness(blockNumber: L2BlockNumber, leafSlot: Fr): Promise<PublicDataWitness | undefined>;
+  getPublicDataWitness(blockNumber: BlockParameter, leafSlot: Fr): Promise<PublicDataWitness | undefined>;
 
   /**
    * Returns a membership witness for a given archive leaf at a given block.
@@ -174,7 +179,7 @@ export interface AztecNode
    * @param archive - The archive leaf we try to find the witness for.
    */
   getArchiveMembershipWitness(
-    blockNumber: L2BlockNumber,
+    blockNumber: BlockParameter,
     archive: Fr,
   ): Promise<MembershipWitness<typeof ARCHIVE_HEIGHT> | undefined>;
 
@@ -184,7 +189,7 @@ export interface AztecNode
    * @param noteHash - The note hash we try to find the witness for.
    */
   getNoteHashMembershipWitness(
-    blockNumber: L2BlockNumber,
+    blockNumber: BlockParameter,
     noteHash: Fr,
   ): Promise<MembershipWitness<typeof NOTE_HASH_TREE_HEIGHT> | undefined>;
 
@@ -195,12 +200,12 @@ export interface AztecNode
    * @returns A tuple of the index and the sibling path of the L1ToL2Message (undefined if not found).
    */
   getL1ToL2MessageMembershipWitness(
-    blockNumber: L2BlockNumber,
+    blockNumber: BlockParameter,
     l1ToL2Message: Fr,
   ): Promise<[bigint, SiblingPath<typeof L1_TO_L2_MSG_TREE_HEIGHT>] | undefined>;
 
   /** Returns the L2 block number in which this L1 to L2 message becomes available, or undefined if not found. */
-  getL1ToL2MessageBlock(l1ToL2Message: Fr): Promise<number | undefined>;
+  getL1ToL2MessageBlock(l1ToL2Message: Fr): Promise<BlockNumber | undefined>;
 
   /**
    * Returns whether an L1 to L2 message is synced by archiver.
@@ -215,26 +220,40 @@ export interface AztecNode
    * @param blockNumber - The block number at which to get the data.
    * @returns The L2 to L1 messages (undefined if the block number is not found).
    */
-  getL2ToL1Messages(blockNumber: L2BlockNumber): Promise<Fr[][] | undefined>;
+  getL2ToL1Messages(blockNumber: BlockParameter): Promise<Fr[][] | undefined>;
 
   /**
    * Get a block specified by its number.
    * @param number - The block number being requested.
    * @returns The requested block.
    */
-  getBlock(number: L2BlockNumber): Promise<L2Block | undefined>;
+  getBlock(number: BlockParameter): Promise<L2Block | undefined>;
+
+  /**
+   * Get a block specified by its hash.
+   * @param blockHash - The block hash being requested.
+   * @returns The requested block.
+   */
+  getBlockByHash(blockHash: Fr): Promise<L2Block | undefined>;
+
+  /**
+   * Get a block specified by its archive root.
+   * @param archive - The archive root being requested.
+   * @returns The requested block.
+   */
+  getBlockByArchive(archive: Fr): Promise<L2Block | undefined>;
 
   /**
    * Method to fetch the latest block number synchronized by the node.
    * @returns The block number.
    */
-  getBlockNumber(): Promise<number>;
+  getBlockNumber(): Promise<BlockNumber>;
 
   /**
    * Fetches the latest proven block number.
    * @returns The block number.
    */
-  getProvenBlockNumber(): Promise<number>;
+  getProvenBlockNumber(): Promise<BlockNumber>;
 
   /**
    * Method to determine if the node is ready to accept transactions.
@@ -255,13 +274,19 @@ export interface AztecNode
    * @param limit - The maximum number of blocks to return.
    * @returns The blocks requested.
    */
-  getBlocks(from: number, limit: number): Promise<L2Block[]>;
+  getBlocks(from: BlockNumber, limit: number): Promise<L2Block[]>;
 
   /**
    * Method to fetch the current base fees.
    * @returns The current base fees.
    */
   getCurrentBaseFees(): Promise<GasFees>;
+
+  /**
+   * Method to fetch the current max priority fee of txs in the mempool.
+   * @returns The current max priority fees.
+   */
+  getMaxPriorityFees(): Promise<GasFees>;
 
   /**
    * Method to fetch the version of the package.
@@ -297,14 +322,6 @@ export interface AztecNode
    * @param functionSignatures - An array of function signatures to register by selector.
    */
   registerContractFunctionSignatures(functionSignatures: string[]): Promise<void>;
-
-  /**
-   * Retrieves all private logs from up to `limit` blocks, starting from the block number `from`.
-   * @param from - The block number from which to begin retrieving logs.
-   * @param limit - The maximum number of blocks to retrieve logs from.
-   * @returns An array of private logs from the specified range of blocks.
-   */
-  getPrivateLogs(from: number, limit: number): Promise<PrivateLog[]>;
 
   /**
    * Gets public logs based on the provided filter.
@@ -391,13 +408,27 @@ export interface AztecNode
    * @param blockNumber - The block number at which to get the data or 'latest'.
    * @returns Storage value at the given contract slot.
    */
-  getPublicStorageAt(blockNumber: L2BlockNumber, contract: AztecAddress, slot: Fr): Promise<Fr>;
+  getPublicStorageAt(blockNumber: BlockParameter, contract: AztecAddress, slot: Fr): Promise<Fr>;
 
   /**
    * Returns the currently committed block header.
    * @returns The current committed block header.
    */
-  getBlockHeader(blockNumber?: L2BlockNumber): Promise<BlockHeader | undefined>;
+  getBlockHeader(blockNumber?: BlockParameter): Promise<BlockHeader | undefined>;
+
+  /**
+   * Get a block header specified by its hash.
+   * @param blockHash - The block hash being requested.
+   * @returns The requested block header.
+   */
+  getBlockHeaderByHash(blockHash: Fr): Promise<BlockHeader | undefined>;
+
+  /**
+   * Get a block header specified by its archive root.
+   * @param archive - The archive root being requested.
+   * @returns The requested block header.
+   */
+  getBlockHeaderByArchive(archive: Fr): Promise<BlockHeader | undefined>;
 
   /** Returns stats for validators if enabled. */
   getValidatorsStats(): Promise<ValidatorsStats>;
@@ -405,8 +436,8 @@ export interface AztecNode
   /** Returns stats for a single validator if enabled. */
   getValidatorStats(
     validatorAddress: EthAddress,
-    fromSlot?: bigint,
-    toSlot?: bigint,
+    fromSlot?: SlotNumber,
+    toSlot?: SlotNumber,
   ): Promise<SingleValidatorStats | undefined>;
 
   /**
@@ -442,6 +473,12 @@ export interface AztecNode
    * Returns the ENR of this node for peer discovery, if available.
    */
   getEncodedEnr(): Promise<string | undefined>;
+
+  /**
+   * Returns the list of allowed public setup elements configured for this node.
+   * @returns The list of allowed elements.
+   */
+  getAllowedPublicSetup(): Promise<AllowedElement[]>;
 }
 
 export const MAX_LOGS_PER_TAG = 10;
@@ -455,70 +492,77 @@ export const AztecNodeApiSchema: ApiSchemaFor<AztecNode> = {
 
   findLeavesIndexes: z
     .function()
-    .args(L2BlockNumberSchema, z.nativeEnum(MerkleTreeId), z.array(schemas.Fr).max(MAX_RPC_LEN))
-    .returns(z.array(optional(inBlockSchemaFor(schemas.BigInt)))),
+    .args(BlockParameterSchema, z.nativeEnum(MerkleTreeId), z.array(schemas.Fr).max(MAX_RPC_LEN))
+    .returns(z.array(optional(dataInBlockSchemaFor(schemas.BigInt)))),
 
   getNullifierSiblingPath: z
     .function()
-    .args(L2BlockNumberSchema, schemas.BigInt)
+    .args(BlockParameterSchema, schemas.BigInt)
     .returns(SiblingPath.schemaFor(NULLIFIER_TREE_HEIGHT)),
 
   getNoteHashSiblingPath: z
     .function()
-    .args(L2BlockNumberSchema, schemas.BigInt)
+    .args(BlockParameterSchema, schemas.BigInt)
     .returns(SiblingPath.schemaFor(NOTE_HASH_TREE_HEIGHT)),
 
   getArchiveSiblingPath: z
     .function()
-    .args(L2BlockNumberSchema, schemas.BigInt)
+    .args(BlockParameterSchema, schemas.BigInt)
     .returns(SiblingPath.schemaFor(ARCHIVE_HEIGHT)),
 
   getPublicDataSiblingPath: z
     .function()
-    .args(L2BlockNumberSchema, schemas.BigInt)
+    .args(BlockParameterSchema, schemas.BigInt)
     .returns(SiblingPath.schemaFor(PUBLIC_DATA_TREE_HEIGHT)),
 
   getNullifierMembershipWitness: z
     .function()
-    .args(L2BlockNumberSchema, schemas.Fr)
+    .args(BlockParameterSchema, schemas.Fr)
     .returns(NullifierMembershipWitness.schema.optional()),
 
   getLowNullifierMembershipWitness: z
     .function()
-    .args(L2BlockNumberSchema, schemas.Fr)
+    .args(BlockParameterSchema, schemas.Fr)
     .returns(NullifierMembershipWitness.schema.optional()),
 
-  getPublicDataWitness: z.function().args(L2BlockNumberSchema, schemas.Fr).returns(PublicDataWitness.schema.optional()),
+  getPublicDataWitness: z
+    .function()
+    .args(BlockParameterSchema, schemas.Fr)
+    .returns(PublicDataWitness.schema.optional()),
 
   getArchiveMembershipWitness: z
     .function()
-    .args(L2BlockNumberSchema, schemas.Fr)
+    .args(BlockParameterSchema, schemas.Fr)
     .returns(MembershipWitness.schemaFor(ARCHIVE_HEIGHT).optional()),
 
   getNoteHashMembershipWitness: z
     .function()
-    .args(L2BlockNumberSchema, schemas.Fr)
+    .args(BlockParameterSchema, schemas.Fr)
     .returns(MembershipWitness.schemaFor(NOTE_HASH_TREE_HEIGHT).optional()),
 
   getL1ToL2MessageMembershipWitness: z
     .function()
-    .args(L2BlockNumberSchema, schemas.Fr)
+    .args(BlockParameterSchema, schemas.Fr)
     .returns(z.tuple([schemas.BigInt, SiblingPath.schemaFor(L1_TO_L2_MSG_TREE_HEIGHT)]).optional()),
 
-  getL1ToL2MessageBlock: z.function().args(schemas.Fr).returns(z.number().optional()),
+  getL1ToL2MessageBlock: z.function().args(schemas.Fr).returns(BlockNumberSchema.optional()),
 
   isL1ToL2MessageSynced: z.function().args(schemas.Fr).returns(z.boolean()),
 
   getL2ToL1Messages: z
     .function()
-    .args(L2BlockNumberSchema)
+    .args(BlockParameterSchema)
     .returns(z.array(z.array(schemas.Fr)).optional()),
 
-  getBlock: z.function().args(L2BlockNumberSchema).returns(L2Block.schema.optional()),
+  getBlock: z.function().args(BlockParameterSchema).returns(L2Block.schema.optional()),
 
-  getBlockNumber: z.function().returns(z.number()),
+  getBlockByHash: z.function().args(schemas.Fr).returns(L2Block.schema.optional()),
 
-  getProvenBlockNumber: z.function().returns(z.number()),
+  getBlockByArchive: z.function().args(schemas.Fr).returns(L2Block.schema.optional()),
+
+  getBlockNumber: z.function().returns(BlockNumberSchema),
+
+  getProvenBlockNumber: z.function().returns(BlockNumberSchema),
 
   isReady: z.function().returns(z.boolean()),
 
@@ -526,15 +570,17 @@ export const AztecNodeApiSchema: ApiSchemaFor<AztecNode> = {
 
   getBlocks: z
     .function()
-    .args(z.number().gte(INITIAL_L2_BLOCK_NUM), z.number().gt(0).lte(MAX_RPC_BLOCKS_LEN))
+    .args(BlockNumberPositiveSchema, z.number().gt(0).lte(MAX_RPC_BLOCKS_LEN))
     .returns(z.array(L2Block.schema)),
 
   getPublishedBlocks: z
     .function()
-    .args(z.number().gte(INITIAL_L2_BLOCK_NUM), z.number().gt(0).lte(MAX_RPC_BLOCKS_LEN))
+    .args(BlockNumberPositiveSchema, z.number().gt(0).lte(MAX_RPC_BLOCKS_LEN))
     .returns(z.array(PublishedL2Block.schema)),
 
   getCurrentBaseFees: z.function().returns(GasFees.schema),
+
+  getMaxPriorityFees: z.function().returns(GasFees.schema),
 
   getNodeVersion: z.function().returns(z.string()),
 
@@ -550,11 +596,6 @@ export const AztecNodeApiSchema: ApiSchemaFor<AztecNode> = {
     .function()
     .args(z.array(z.string().max(MAX_SIGNATURE_LEN)).max(MAX_SIGNATURES_PER_REGISTER_CALL))
     .returns(z.void()),
-
-  getPrivateLogs: z
-    .function()
-    .args(z.number().gte(INITIAL_L2_BLOCK_NUM), z.number().lte(MAX_RPC_LEN))
-    .returns(z.array(PrivateLog.schema)),
 
   getPublicLogs: z.function().args(LogFilterSchema).returns(GetPublicLogsResponseSchema),
 
@@ -585,15 +626,19 @@ export const AztecNodeApiSchema: ApiSchemaFor<AztecNode> = {
 
   getTxsByHash: z.function().args(z.array(TxHash.schema).max(MAX_RPC_TXS_LEN)).returns(z.array(Tx.schema)),
 
-  getPublicStorageAt: z.function().args(L2BlockNumberSchema, schemas.AztecAddress, schemas.Fr).returns(schemas.Fr),
+  getPublicStorageAt: z.function().args(BlockParameterSchema, schemas.AztecAddress, schemas.Fr).returns(schemas.Fr),
 
-  getBlockHeader: z.function().args(optional(L2BlockNumberSchema)).returns(BlockHeader.schema.optional()),
+  getBlockHeader: z.function().args(optional(BlockParameterSchema)).returns(BlockHeader.schema.optional()),
+
+  getBlockHeaderByHash: z.function().args(schemas.Fr).returns(BlockHeader.schema.optional()),
+
+  getBlockHeaderByArchive: z.function().args(schemas.Fr).returns(BlockHeader.schema.optional()),
 
   getValidatorsStats: z.function().returns(ValidatorsStatsSchema),
 
   getValidatorStats: z
     .function()
-    .args(schemas.EthAddress, optional(schemas.BigInt), optional(schemas.BigInt))
+    .args(schemas.EthAddress, optional(schemas.SlotNumber), optional(schemas.SlotNumber))
     .returns(SingleValidatorStatsSchema.optional()),
 
   simulatePublicCalls: z.function().args(Tx.schema, optional(z.boolean())).returns(PublicSimulationOutput.schema),
@@ -611,6 +656,8 @@ export const AztecNodeApiSchema: ApiSchemaFor<AztecNode> = {
   getContract: z.function().args(schemas.AztecAddress).returns(ContractInstanceWithAddressSchema.optional()),
 
   getEncodedEnr: z.function().returns(z.string().optional()),
+
+  getAllowedPublicSetup: z.function().args().returns(z.array(AllowedElementSchema)),
 };
 
 export function createAztecNodeClient(

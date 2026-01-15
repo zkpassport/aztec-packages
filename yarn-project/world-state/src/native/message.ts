@@ -1,8 +1,10 @@
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import type { Tuple } from '@aztec/foundation/serialize';
 import { AppendOnlyTreeSnapshot, MerkleTreeId } from '@aztec/stdlib/trees';
 import type { StateReference } from '@aztec/stdlib/tx';
 import type { UInt32 } from '@aztec/stdlib/types';
+import type { WorldStateRevision } from '@aztec/stdlib/world-state';
 
 export enum WorldStateMessageType {
   GET_TREE_INFO = 100,
@@ -55,11 +57,11 @@ interface WithTreeId {
 
 export interface WorldStateStatusSummary {
   /** Last block number that can still be unwound. */
-  unfinalizedBlockNumber: bigint;
+  unfinalizedBlockNumber: BlockNumber;
   /** Last block number that is finalized and cannot be unwound. */
-  finalizedBlockNumber: bigint;
+  finalizedBlockNumber: BlockNumber;
   /** Oldest block still available for historical queries and forks. */
-  oldestHistoricalBlock: bigint;
+  oldestHistoricalBlock: BlockNumber;
   /** Whether the trees are in sync with each other */
   treesAreSynched: boolean;
 }
@@ -80,11 +82,11 @@ export interface TreeMeta {
   /** The tree's initial root value  */
   initialRoot: Fr;
   /** The current oldest historical block number of the tree */
-  oldestHistoricBlock: bigint;
+  oldestHistoricBlock: BlockNumber;
   /** The current unfinalized block number of the tree */
-  unfinalizedBlockHeight: bigint;
+  unfinalizedBlockHeight: BlockNumber;
   /** The current finalized block number of the tree */
-  finalizedBlockHeight: bigint;
+  finalizedBlockHeight: BlockNumber;
 }
 
 export interface DBStats {
@@ -172,9 +174,9 @@ export function buildEmptyTreeMeta() {
     depth: 0,
     size: 0n,
     committedSize: 0n,
-    unfinalizedBlockHeight: 0n,
-    finalizedBlockHeight: 0n,
-    oldestHistoricBlock: 0n,
+    unfinalizedBlockHeight: BlockNumber.ZERO,
+    finalizedBlockHeight: BlockNumber.ZERO,
+    oldestHistoricBlock: BlockNumber.ZERO,
     root: Fr.ZERO,
     initialRoot: Fr.ZERO,
     initialSize: 0n,
@@ -203,9 +205,9 @@ export function buildEmptyWorldStateDBStats() {
 
 export function buildEmptyWorldStateSummary() {
   return {
-    unfinalizedBlockNumber: 0n,
-    finalizedBlockNumber: 0n,
-    oldestHistoricalBlock: 0n,
+    unfinalizedBlockNumber: BlockNumber.ZERO,
+    finalizedBlockNumber: BlockNumber.ZERO,
+    oldestHistoricalBlock: BlockNumber.ZERO,
     treesAreSynched: true,
   } as WorldStateStatusSummary;
 }
@@ -219,9 +221,9 @@ export function buildEmptyWorldStateStatusFull() {
 }
 
 export function sanitizeSummary(summary: WorldStateStatusSummary) {
-  summary.finalizedBlockNumber = BigInt(summary.finalizedBlockNumber);
-  summary.unfinalizedBlockNumber = BigInt(summary.unfinalizedBlockNumber);
-  summary.oldestHistoricalBlock = BigInt(summary.oldestHistoricalBlock);
+  summary.finalizedBlockNumber = BlockNumber.fromBigInt(BigInt(summary.finalizedBlockNumber));
+  summary.unfinalizedBlockNumber = BlockNumber.fromBigInt(BigInt(summary.unfinalizedBlockNumber));
+  summary.oldestHistoricalBlock = BlockNumber.fromBigInt(BigInt(summary.oldestHistoricalBlock));
   return summary;
 }
 
@@ -233,11 +235,11 @@ export function sanitizeDBStats(stats: DBStats) {
 
 export function sanitizeMeta(meta: TreeMeta) {
   meta.committedSize = BigInt(meta.committedSize);
-  meta.finalizedBlockHeight = BigInt(meta.finalizedBlockHeight);
+  meta.finalizedBlockHeight = BlockNumber.fromBigInt(BigInt(meta.finalizedBlockHeight));
   meta.initialSize = BigInt(meta.initialSize);
-  meta.oldestHistoricBlock = BigInt(meta.oldestHistoricBlock);
+  meta.oldestHistoricBlock = BlockNumber.fromBigInt(BigInt(meta.oldestHistoricBlock));
   meta.size = BigInt(meta.size);
-  meta.unfinalizedBlockHeight = BigInt(meta.unfinalizedBlockHeight);
+  meta.unfinalizedBlockHeight = BlockNumber.fromBigInt(BigInt(meta.unfinalizedBlockHeight));
   return meta;
 }
 
@@ -309,7 +311,7 @@ interface WithLeafValues {
 }
 
 interface BlockShiftRequest extends WithCanonicalForkId {
-  toBlockNumber: bigint;
+  toBlockNumber: BlockNumber;
 }
 
 interface WithLeaves {
@@ -408,7 +410,7 @@ interface UpdateArchiveRequest extends WithForkId {
 }
 
 interface SyncBlockRequest extends WithCanonicalForkId {
-  blockNumber: number;
+  blockNumber: BlockNumber;
   blockStateRef: BlockStateReference;
   blockHeaderHash: Fr;
   paddedNoteHashes: readonly SerializedLeafValue[];
@@ -419,7 +421,7 @@ interface SyncBlockRequest extends WithCanonicalForkId {
 
 interface CreateForkRequest extends WithCanonicalForkId {
   latest: boolean;
-  blockNumber: number;
+  blockNumber: BlockNumber;
 }
 
 interface CreateForkResponse {
@@ -536,23 +538,6 @@ export type WorldStateResponse = {
 
   [WorldStateMessageType.CLOSE]: void;
 };
-
-export type WorldStateRevision = {
-  forkId: number;
-  blockNumber: number;
-  includeUncommitted: boolean;
-};
-export function worldStateRevision(
-  includeUncommitted: boolean,
-  forkId: number | undefined,
-  blockNumber: number | undefined,
-): WorldStateRevision {
-  return {
-    forkId: forkId ?? 0,
-    blockNumber: blockNumber ?? 0,
-    includeUncommitted,
-  };
-}
 
 type TreeStateReference = readonly [Buffer, number | bigint];
 type BlockStateReference = Map<Exclude<MerkleTreeId, MerkleTreeId.ARCHIVE>, TreeStateReference>;

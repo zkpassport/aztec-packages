@@ -10,7 +10,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 import { keystoreSchema } from '../src/schemas.js';
-import type { EthMnemonicConfig, ProverKeyStoreWithId } from './types.js';
+import type { MnemonicConfig, ProverKeyStoreWithId } from './types.js';
 
 // Helper to load example JSON files
 const loadExample = (filename: string) => {
@@ -61,10 +61,17 @@ describe('Keystore Schema Validation', () => {
 
     const parsed = keystoreSchema.parse(keystore);
     expect(parsed.schemaVersion).toBe(1);
-    expect(parsed.validators).toHaveLength(3);
+    expect(parsed.validators).toHaveLength(5);
     expect(parsed.remoteSigner).toBe('https://localhost:8080');
     const address = parsed.slasher as EthAddress;
     expect(address.equals(EthAddress.fromString('0x1234567890123456789012345678901234567890'))).toBeTruthy();
+
+    // BLS attester check
+    expect(parsed.validators).toBeDefined();
+    const v0: any = parsed.validators![4];
+    expect(typeof v0.attester).toBe('object');
+    expect(v0.attester.eth).toBe('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(v0.attester.bls).toBe('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
   });
 
   it('should validate prover with publishers example', () => {
@@ -76,7 +83,8 @@ describe('Keystore Schema Validation', () => {
     expect(typeof parsed.prover).toBe('object');
     const prover = parsed.prover as ProverKeyStoreWithId;
     expect(prover.id.equals(EthAddress.fromString('0x1234567890123456789012345678901234567890'))).toBeTruthy();
-    expect(prover.publisher).toHaveLength(2);
+    expect(Array.isArray(prover.publisher)).toBe(true);
+    expect(prover.publisher as any[]).toHaveLength(2);
     expect(parsed.fundingAccount).toBe('0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd');
   });
 
@@ -89,7 +97,29 @@ describe('Keystore Schema Validation', () => {
     expect(typeof parsed.prover).toBe('object');
     const prover = parsed.prover as ProverKeyStoreWithId;
     expect(prover.id.equals(EthAddress.fromString('0x1234567890123456789012345678901234567890'))).toBeTruthy();
-    expect((parsed.prover as any).publisher).toBe('0x1234567890123456789012345678901234567890123456789012345678901234');
+    if (Array.isArray(prover.publisher)) {
+      expect(prover.publisher).toHaveLength(1);
+      expect(prover.publisher[0]).toBe('0x1234567890123456789012345678901234567890123456789012345678901234');
+    } else {
+      expect(typeof prover.publisher === 'string').toBe(true);
+      expect(prover.publisher).toBe('0x1234567890123456789012345678901234567890123456789012345678901234');
+    }
+  });
+
+  it('should validate prover with mnemonic publisher example', () => {
+    const keystore = loadExample('prover-with-mnemonic-publisher.json');
+    expect(() => keystoreSchema.parse(keystore)).not.toThrow();
+
+    const parsed = keystoreSchema.parse(keystore);
+    expect(parsed.schemaVersion).toBe(1);
+    expect(typeof parsed.prover).toBe('object');
+    const prover = parsed.prover as ProverKeyStoreWithId;
+    expect(prover.id.equals(EthAddress.fromString('0x1234567890123456789012345678901234567890'))).toBeTruthy();
+
+    const mnemonic = 'test test test test test test test test test test test junk';
+    const publisher: MnemonicConfig = prover.publisher as MnemonicConfig;
+    expect(publisher.mnemonic).toBe(mnemonic);
+    expect(publisher.addressCount).toBe(3);
   });
 
   it('should validate prover with mnemonic publisher example', () => {
@@ -128,5 +158,138 @@ describe('Keystore Schema Validation', () => {
     };
 
     expect(() => keystoreSchema.parse(keystore)).toThrow();
+  });
+
+  it('should reject keystore with unexpected top-level fields', () => {
+    const keystore = {
+      schemaVersion: 1,
+      validators: [
+        {
+          attester: '0x1234567890123456789012345678901234567890123456789012345678901234',
+          feeRecipient: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        },
+      ],
+      publisher: '0x1234567890123456789012345678901234567890123456789012345678901234',
+    };
+
+    expect(() => keystoreSchema.parse(keystore)).toThrow(/unrecognized/i);
+  });
+
+  it('should reject validator config with unexpected fields', () => {
+    const keystore = {
+      schemaVersion: 1,
+      validators: [
+        {
+          attester: '0x1234567890123456789012345678901234567890123456789012345678901234',
+          feeRecipient: '0x1234567890123456789012345678901234567890123456789012345678901234',
+          unexpectedField: 'should fail',
+        },
+      ],
+    };
+
+    expect(() => keystoreSchema.parse(keystore)).toThrow(/unrecognized/i);
+  });
+
+  it('should reject attester object with unexpected fields', () => {
+    const keystore = {
+      schemaVersion: 1,
+      validators: [
+        {
+          attester: {
+            eth: '0x1234567890123456789012345678901234567890123456789012345678901234',
+            bls: '0x1234567890123456789012345678901234567890123456789012345678901234',
+            unexpectedField: 'should fail',
+          },
+          feeRecipient: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        },
+      ],
+    };
+
+    expect(() => keystoreSchema.parse(keystore)).toThrow(/unrecognized/i);
+  });
+
+  it('should reject remote signer config object with unexpected fields', () => {
+    const keystore = {
+      schemaVersion: 1,
+      validators: [
+        {
+          attester: '0x1234567890123456789012345678901234567890123456789012345678901234',
+          feeRecipient: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        },
+      ],
+      remoteSigner: {
+        remoteSignerUrl: 'https://localhost:8080',
+        unexpectedField: 'should fail',
+      },
+    };
+
+    expect(() => keystoreSchema.parse(keystore)).toThrow(/unrecognized/i);
+  });
+
+  it('should reject encrypted key file config with unexpected fields', () => {
+    const keystore = {
+      schemaVersion: 1,
+      validators: [
+        {
+          attester: {
+            path: '/path/to/keystore.json',
+            password: 'secret',
+            unexpectedField: 'should fail',
+          },
+          feeRecipient: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        },
+      ],
+    };
+
+    expect(() => keystoreSchema.parse(keystore)).toThrow(/unrecognized/i);
+  });
+
+  it('should reject mnemonic config with unexpected fields', () => {
+    const keystore = {
+      schemaVersion: 1,
+      validators: [
+        {
+          attester: {
+            mnemonic: 'test test test test test test test test test test test junk',
+            addressCount: 3,
+            unexpectedField: 'should fail',
+          },
+          feeRecipient: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        },
+      ],
+    };
+
+    expect(() => keystoreSchema.parse(keystore)).toThrow(/unrecognized/i);
+  });
+
+  it('should reject prover config object with unexpected fields', () => {
+    const keystore = {
+      schemaVersion: 1,
+      prover: {
+        id: '0x1234567890123456789012345678901234567890',
+        publisher: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        unexpectedField: 'should fail',
+      },
+    };
+
+    expect(() => keystoreSchema.parse(keystore)).toThrow(/unrecognized/i);
+  });
+
+  it('should reject remote signer account object with unexpected fields', () => {
+    const keystore = {
+      schemaVersion: 1,
+      validators: [
+        {
+          attester: {
+            address: '0x1234567890123456789012345678901234567890',
+            remoteSignerUrl: 'https://localhost:8080',
+            unexpectedField: 'should fail',
+          },
+          feeRecipient: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        },
+      ],
+    };
+
+    expect(() => keystoreSchema.parse(keystore)).toThrow(/unrecognized/i);
   });
 });

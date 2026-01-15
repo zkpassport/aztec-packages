@@ -1,4 +1,4 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { updateInlineTestData } from '@aztec/foundation/testing/files';
 import { TxHash } from '@aztec/stdlib/tx';
 
@@ -116,7 +116,7 @@ describe('LogRetrievalResponse', () => {
   });
 
   it('serialization of some matches snapshots and output of Noir serialization', () => {
-    const serialized = LogRetrievalResponse.toSerializedOption();
+    const serialized = LogRetrievalResponse.toSerializedOption(null);
 
     // Test against snapshot
     expect(serialized.map(f => f.toString())).toMatchInlineSnapshot(`

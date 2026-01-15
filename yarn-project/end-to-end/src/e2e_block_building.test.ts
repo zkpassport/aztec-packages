@@ -1,33 +1,27 @@
 import type { AztecNodeService } from '@aztec/aztec-node';
-import {
-  type AztecAddress,
-  type AztecNode,
-  BatchCall,
-  ContractDeployer,
-  ContractFunctionInteraction,
-  Fr,
-  type Logger,
-  type PXE,
-  TxStatus,
-  type Wallet,
-  retryUntil,
-  sleep,
-} from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { BatchCall, ContractFunctionInteraction, type DeployOptions } from '@aztec/aztec.js/contracts';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import { TxStatus } from '@aztec/aztec.js/tx';
 import { AnvilTestWatcher, CheatCodes } from '@aztec/aztec/testing';
 import { asyncMap } from '@aztec/foundation/async-map';
+import { BlockNumber, EpochNumber } from '@aztec/foundation/branded-types';
 import { times, unique } from '@aztec/foundation/collection';
-import { poseidon2Hash } from '@aztec/foundation/crypto';
+import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
+import { retryUntil } from '@aztec/foundation/retry';
+import { sleep } from '@aztec/foundation/sleep';
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
-import { StatefulTestContract, StatefulTestContractArtifact } from '@aztec/noir-test-contracts.js/StatefulTest';
+import { StatefulTestContract } from '@aztec/noir-test-contracts.js/StatefulTest';
 import { TestContract } from '@aztec/noir-test-contracts.js/Test';
 import type { BlockBuilder, SequencerClient } from '@aztec/sequencer-client';
 import type { TestSequencerClient } from '@aztec/sequencer-client/test';
-import { Set } from '@aztec/simulator/public/avm/opcodes';
-import { type PublicTxResult, PublicTxSimulator } from '@aztec/simulator/server';
+import type { PublicTxResult, PublicTxSimulatorInterface } from '@aztec/simulator/server';
 import { getProofSubmissionDeadlineEpoch } from '@aztec/stdlib/epoch-helpers';
 import type { AztecNodeAdmin } from '@aztec/stdlib/interfaces/client';
 import { TX_ERROR_EXISTING_NULLIFIER, type Tx } from '@aztec/stdlib/tx';
-import { TestWallet } from '@aztec/test-wallet';
+import { TestWallet, proveInteraction } from '@aztec/test-wallet/server';
 
 import { jest } from '@jest/globals';
 import 'jest-extended';
@@ -38,9 +32,8 @@ import { setup } from './fixtures/utils.js';
 describe('e2e_block_building', () => {
   jest.setTimeout(20 * 60 * 1000); // 20 minutes
 
-  let pxe: PXE;
   let logger: Logger;
-  let wallet: Wallet;
+  let wallet: TestWallet;
 
   let ownerAddress: AztecAddress;
   let minterAddress: AztecAddress;
@@ -56,14 +49,11 @@ describe('e2e_block_building', () => {
   });
 
   describe('multi-txs block', () => {
-    const artifact = StatefulTestContractArtifact;
-
     beforeAll(async () => {
       let sequencerClient: SequencerClient | undefined;
       let maybeAztecNodeAdmin: AztecNodeAdmin | undefined;
       ({
         teardown,
-        pxe,
         logger,
         aztecNode,
         aztecNodeAdmin: maybeAztecNodeAdmin,
@@ -128,7 +118,7 @@ describe('e2e_block_building', () => {
 
       // Flood the mempool with TX_COUNT simultaneous txs
       const methods = times(TX_COUNT, i => contract.methods.increment_public_value(ownerAddress, i));
-      const provenTxs = await asyncMap(methods, method => method.prove({ from: ownerAddress }));
+      const provenTxs = await asyncMap(methods, method => proveInteraction(wallet, method, { from: ownerAddress }));
       logger.info(`Sending ${TX_COUNT} txs to the node`);
       const txs = await Promise.all(provenTxs.map(tx => tx.send()));
       logger.info(`All ${TX_COUNT} txs have been sent`, {
@@ -147,22 +137,23 @@ describe('e2e_block_building', () => {
       // We need to create them sequentially since we cannot have parallel calls to a circuit
       const TX_COUNT = 8;
       await aztecNodeAdmin.setConfig({ minTxsPerBlock: TX_COUNT });
-      const deployer = new ContractDeployer(artifact, wallet);
 
       // Need to have value > 0, so adding + 1
       // We need to do so, because noir currently will fail if the multiscalarmul is in an `if`
       // that we DO NOT enter. This should be fixed by https://github.com/noir-lang/noir/issues/5045.
-      const methods = times(TX_COUNT, i => deployer.deploy(ownerAddress, i + 1));
+      const methods = times(TX_COUNT, i => StatefulTestContract.deploy(wallet, ownerAddress, i + 1));
       const provenTxs = [];
+      const addresses = [];
       for (let i = 0; i < TX_COUNT; i++) {
-        provenTxs.push(
-          await methods[i].prove({
-            from: ownerAddress,
-            contractAddressSalt: new Fr(BigInt(i + 1)),
-            skipClassPublication: true,
-            skipInstancePublication: true,
-          }),
-        );
+        const options: DeployOptions = {
+          from: ownerAddress,
+          contractAddressSalt: new Fr(BigInt(i + 1)),
+          skipClassPublication: true,
+          skipInstancePublication: true,
+        };
+        const instance = await methods[i].getInstance(options);
+        addresses.push(instance.address);
+        provenTxs.push(await proveInteraction(wallet, methods[i], options));
       }
 
       // Send them simultaneously to be picked up by the sequencer
@@ -178,8 +169,8 @@ describe('e2e_block_building', () => {
 
       // Assert all contracts got deployed
       const isContractDeployed = async (address: AztecAddress) =>
-        !!(await pxe.getContractMetadata(address)).contractInstance;
-      const areDeployed = await Promise.all(receipts.map(r => isContractDeployed(r.contract.address)));
+        !!(await wallet.getContractMetadata(address)).contractInstance;
+      const areDeployed = await Promise.all(addresses.map(a => isContractDeployed(a)));
       expect(areDeployed).toEqual(times(TX_COUNT, () => true));
     });
 
@@ -197,7 +188,7 @@ describe('e2e_block_building', () => {
       const methods = times(TX_COUNT, i => contract.methods.increment_public_value(ownerAddress, i));
       const provenTxs = [];
       for (let i = 0; i < TX_COUNT; i++) {
-        provenTxs.push(await methods[i].prove({ from: ownerAddress }));
+        provenTxs.push(await proveInteraction(wallet, methods[i], { from: ownerAddress }));
       }
 
       // Send them simultaneously to be picked up by the sequencer
@@ -265,12 +256,9 @@ describe('e2e_block_building', () => {
         [minterAddress, true],
       );
 
-      const deployerTx = await deployMethod.prove({ from: ownerAddress });
-      const callInteractionTx = await callInteraction.prove({ from: ownerAddress });
-
       const [deployTxReceipt, callTxReceipt] = await Promise.all([
-        deployerTx.send().wait(),
-        callInteractionTx.send().wait(),
+        deployMethod.send({ from: ownerAddress }).wait(),
+        callInteraction.send({ from: ownerAddress }).wait(),
       ]);
 
       expect(deployTxReceipt.blockNumber).toEqual(callTxReceipt.blockNumber);
@@ -284,7 +272,6 @@ describe('e2e_block_building', () => {
     beforeAll(async () => {
       ({
         teardown,
-        pxe,
         logger,
         wallet,
         accounts: [ownerAddress],
@@ -411,7 +398,6 @@ describe('e2e_block_building', () => {
     beforeAll(async () => {
       ({
         teardown,
-        pxe,
         logger,
         wallet,
         accounts: [ownerAddress],
@@ -443,7 +429,7 @@ describe('e2e_block_building', () => {
       const valuesAsArray = Object.values(values);
 
       const action = testContract.methods.emit_array_as_encrypted_log(valuesAsArray, ownerAddress, true);
-      const tx = await action.prove({ from: ownerAddress });
+      const tx = await proveInteraction(wallet, action, { from: ownerAddress });
       const rct = await tx.send().wait();
 
       // compare logs
@@ -452,15 +438,15 @@ describe('e2e_block_building', () => {
       expect(privateLogs.length).toBe(3);
 
       // The first two logs are encrypted.
-      const events = await pxe.getPrivateEvents(
-        testContract.address,
-        TestContract.events.ExampleEvent,
-        rct.blockNumber!,
-        1,
-        [ownerAddress],
-      );
-      expect(events[0]).toEqual(values);
-      expect(events[1]).toEqual(nestedValues);
+      const events = await wallet.getPrivateEvents(TestContract.events.ExampleEvent, {
+        contractAddress: testContract.address,
+        fromBlock: BlockNumber(rct.blockNumber!),
+        toBlock: BlockNumber(rct.blockNumber! + 1),
+        scopes: [ownerAddress],
+      });
+
+      expect(events[0].event).toEqual(values);
+      expect(events[1].event).toEqual(nestedValues);
 
       // The last log is not encrypted.
       // The first field is the first value and is siloed with contract address by the kernel circuit.
@@ -481,7 +467,7 @@ describe('e2e_block_building', () => {
 
     // Regression for https://github.com/AztecProtocol/aztec-packages/issues/7918
     it('publishes two empty blocks', async () => {
-      ({ teardown, pxe, logger, aztecNode } = await setup(0, {
+      ({ teardown, wallet, logger, aztecNode } = await setup(0, {
         minTxsPerBlock: 0,
         skipProtocolContracts: true,
       }));
@@ -496,19 +482,23 @@ describe('e2e_block_building', () => {
         skipProtocolContracts: true,
         numberOfInitialFundedAccounts: 1,
       });
-      ({ teardown, pxe, logger, aztecNode, wallet } = context);
+      ({ teardown, logger, aztecNode, wallet } = context);
       await sleep(1000);
 
       const [accountData] = context.initialFundedAccounts;
 
       const accountManager = await (wallet as TestWallet).createSchnorrAccount(accountData.secret, accountData.salt);
-      await accountManager.deploy().wait();
+      const deployMethod = await accountManager.getDeployMethod();
+      await deployMethod
+        .send({
+          from: AztecAddress.ZERO,
+        })
+        .wait();
     });
 
     it('can simulate public txs while building a block', async () => {
       ({
         teardown,
-        pxe,
         logger,
         aztecNode,
         wallet,
@@ -550,7 +540,6 @@ describe('e2e_block_building', () => {
       });
       ({
         teardown,
-        pxe,
         logger,
         aztecNode,
         wallet,
@@ -569,30 +558,31 @@ describe('e2e_block_building', () => {
         ]);
       const batches = times(2, makeBatch);
 
-      // This is embarrassingly brittle. What we want to do here is: we want the sequencer to wait until both
-      // txs have arrived (so minTxsPerBlock=2), but agree to build a block with 1 tx only, so we change the config
-      // to minTxsPerBlock=1 as soon as we start processing. We also want to simulate an AVM failure in tx processing
-      // for only one of the txs, and near the end so all nullifiers have been emitted. So we throw on one of the last
-      // calls to SET. Note that this will break on brillig or AVM changes that change how many SET operations we use.
-      let setCount = 0;
-      const origExecute = Set.prototype.execute;
-      const spy = jest.spyOn(Set.prototype, 'execute').mockImplementation(async function (...args: any[]) {
-        setCount++;
-        if (setCount === 1) {
-          context.sequencer?.updateConfig({ minTxsPerBlock: 1 });
-        } else if (setCount === 48) {
-          throw new Error('Simulated failure in AVM opcode SET');
-        }
-        // @ts-expect-error: eslint-be-happy
-        await origExecute.call(this, ...args);
-      });
+      // We want the sequencer to wait until both txs have arrived (so minTxsPerBlock=2), but agree to build
+      // a block with 1 tx only, so we change the config to minTxsPerBlock=1 as soon as we start processing.
+      // We also want to simulate an AVM failure in tx processing for only one of the txs.
+      let simulateCount = 0;
+      interceptTxProcessorSimulate(
+        aztecNode as AztecNodeService,
+        async (tx: Tx, originalSimulate: (tx: Tx) => Promise<PublicTxResult>) => {
+          simulateCount++;
+          if (simulateCount === 1) {
+            context.sequencer?.updateConfig({ minTxsPerBlock: 1 });
+          }
+          const result = await originalSimulate(tx);
+          if (simulateCount === 2) {
+            throw new Error('Simulated failure in public tx simulation');
+          }
+          return result;
+        },
+      );
 
       const txs = await Promise.all(batches.map(batch => batch.send({ from: ownerAddress })));
       logger.warn(`Sent two txs to test contract`, { txs: await Promise.all(txs.map(tx => tx.getTxHash())) });
       await Promise.race(txs.map(tx => tx.wait({ timeout: 60 })));
 
-      logger.warn(`At least one tx has been mined (after ${spy.mock.calls.length} AVM SET invocations)`);
-      expect(setCount).toBeGreaterThanOrEqual(48);
+      logger.warn(`At least one tx has been mined (after ${simulateCount} public tx simulations)`);
+      expect(simulateCount).toBeGreaterThanOrEqual(2);
       const lastBlock = await context.aztecNode.getBlockHeader();
       expect(lastBlock).toBeDefined();
 
@@ -606,7 +596,7 @@ describe('e2e_block_building', () => {
     let contract: StatefulTestContract;
     let cheatCodes: CheatCodes;
     let ownerAddress: AztecAddress;
-    let initialBlockNumber: number;
+    let initialBlockNumber: BlockNumber;
     let teardown: () => Promise<void>;
 
     beforeEach(async () => {
@@ -656,7 +646,9 @@ describe('e2e_block_building', () => {
 
       logger.info('Advancing past the proof submission window');
 
-      await cheatCodes.rollup.advanceToEpoch(getProofSubmissionDeadlineEpoch(2n, { proofSubmissionEpochs: 1 }));
+      await cheatCodes.rollup.advanceToEpoch(
+        getProofSubmissionDeadlineEpoch(EpochNumber(2), { proofSubmissionEpochs: 1 }),
+      );
 
       // Wait until the sequencer kicks out tx1
       logger.info(`Waiting for node to prune tx1`);
@@ -703,7 +695,7 @@ describe('e2e_block_building', () => {
       .mockImplementation(async (...args: Parameters<BlockBuilder['makeBlockBuilderDeps']>) => {
         logger.warn('Creating mocked public tx simulator');
         const deps = await originalCreateDeps(...args);
-        const simulator: PublicTxSimulator = (deps.processor as any).publicTxSimulator;
+        const simulator: PublicTxSimulatorInterface = (deps.processor as any).publicTxSimulator;
         const originalSimulate = simulator.simulate.bind(simulator);
         jest.spyOn(simulator, 'simulate').mockImplementation((tx: Tx) => stub(tx, originalSimulate));
         return deps;

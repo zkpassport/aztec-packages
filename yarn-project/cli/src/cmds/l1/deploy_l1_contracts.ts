@@ -1,6 +1,7 @@
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
-import { type EthAddress, Fr } from '@aztec/aztec.js';
-import { getL1ContractsConfigEnvVars } from '@aztec/ethereum';
+import type { EthAddress } from '@aztec/aztec.js/addresses';
+import { Fr } from '@aztec/aztec.js/fields';
+import { getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
 import { SecretValue } from '@aztec/foundation/config';
 import type { LogFn, Logger } from '@aztec/foundation/log';
 import { getGenesisValues } from '@aztec/world-state/testing';
@@ -22,7 +23,7 @@ export async function deployL1Contracts(
   createVerificationJson: string | false,
   initialValidators: EthAddress[],
   realVerifier: boolean,
-  flushEntryQueue: boolean,
+  existingToken: EthAddress | undefined,
   log: LogFn,
   debugLogger: Logger,
 ) {
@@ -51,9 +52,9 @@ export async function deployL1Contracts(
     fundingNeeded,
     acceleratedTestDeployments,
     config,
+    existingToken,
     realVerifier,
     createVerificationJson,
-    flushEntryQueue,
     debugLogger,
   );
 

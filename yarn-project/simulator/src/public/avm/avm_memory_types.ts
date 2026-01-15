@@ -8,7 +8,7 @@ import {
   MEM_TAG_U128,
 } from '@aztec/constants';
 import { toBufferBE } from '@aztec/foundation/bigint-buffer';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import type { FunctionsOf } from '@aztec/foundation/types';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
@@ -74,6 +74,7 @@ export abstract class IntegralValue extends MemoryValue {
  **/
 function UnsignedIntegerClassFactory(bits: number) {
   return class NewUintClass extends IntegralValue {
+    static readonly bits: number = bits;
     static readonly mod: bigint = 1n << BigInt(bits);
     static readonly bitmask: bigint = this.mod - 1n;
     public readonly n: bigint; // Cannot be private due to TS limitations.
@@ -108,12 +109,20 @@ function UnsignedIntegerClassFactory(bits: number) {
 
     // No sign extension.
     public shr(rhs: NewUintClass): NewUintClass {
-      // Note that this.n is > 0 by class invariant.
+      // Note that this.n is >= 0 by class invariant.
       return this.build(this.n >> rhs.n);
     }
 
     public shl(rhs: NewUintClass): NewUintClass {
-      return this.build((this.n << rhs.n) & NewUintClass.bitmask);
+      const shiftAmount = rhs.n;
+      const bitSize = BigInt(NewUintClass.bits);
+
+      // Shifting by more than the bit size always results in 0
+      if (shiftAmount >= bitSize) {
+        return this.build(0n);
+      }
+
+      return this.build((this.n << shiftAmount) & NewUintClass.bitmask);
     }
 
     public and(rhs: NewUintClass): NewUintClass {

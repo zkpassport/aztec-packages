@@ -1,3 +1,4 @@
+mod child_proof_vk_tests;
 mod consecutive_rollups_tests;
 mod failures_tests;
 mod rollup_structure_tests;
@@ -10,7 +11,6 @@ use crate::{
         block_root_rollup_private_inputs::BlockRootRollupPrivateInputs,
         block_root_single_tx_first_rollup_private_inputs::BlockRootSingleTxFirstRollupPrivateInputs,
         block_root_single_tx_rollup_private_inputs::BlockRootSingleTxRollupPrivateInputs,
-        components::BlockRollupPublicInputsComposer,
     },
     tests::RollupFixtureBuilder,
 };
@@ -20,12 +20,13 @@ use types::{
         append_only_tree_snapshot::AppendOnlyTreeSnapshot, block_header::BlockHeader,
         checkpoint_constant_data::CheckpointConstantData, state_reference::StateReference,
     },
+    blob_data::SpongeBlob,
     constants::{
-        ARCHIVE_HEIGHT, L1_TO_L2_MSG_SUBTREE_SIBLING_PATH_LENGTH, PARITY_ROOT_VK_INDEX,
+        ARCHIVE_HEIGHT, L1_TO_L2_MSG_SUBTREE_ROOT_SIBLING_PATH_LENGTH, PARITY_ROOT_VK_INDEX,
         PRIVATE_TX_BASE_ROLLUP_VK_INDEX, PUBLIC_TX_BASE_ROLLUP_VK_INDEX, TX_MERGE_ROLLUP_VK_INDEX,
     },
     hash::accumulate_sha256,
-    merkle_tree::root::root_from_sibling_path,
+    merkle_tree::root_from_sibling_path,
     traits::Hash,
 };
 
@@ -40,7 +41,7 @@ struct TestBuilder {
     parity_root: ParityPublicInputs,
     parity_root_vk_index: u32,
     previous_l1_to_l2: AppendOnlyTreeSnapshot,
-    new_l1_to_l2_message_subtree_sibling_path: [Field; L1_TO_L2_MSG_SUBTREE_SIBLING_PATH_LENGTH],
+    new_l1_to_l2_message_subtree_root_sibling_path: [Field; L1_TO_L2_MSG_SUBTREE_ROOT_SIBLING_PATH_LENGTH],
     new_archive_sibling_path: [Field; ARCHIVE_HEIGHT],
     checkpoint_constants: CheckpointConstantData,
 }
@@ -97,7 +98,7 @@ impl TestBuilder {
         let slot_number = fixture_builder.start_slot_number;
         let parity_root = fixture_builder.get_parity_public_inputs(slot_number);
 
-        let (previous_l1_to_l2, new_l1_to_l2_message_subtree_sibling_path, new_l1_to_l2) =
+        let (previous_l1_to_l2, new_l1_to_l2_message_subtree_root_sibling_path, new_l1_to_l2) =
             fixture_builder.build_l1_to_l2_message_subtree_for_insertion(slot_number);
         left_rollup.constants.l1_to_l2_tree_snapshot = new_l1_to_l2;
         right_rollup.constants.l1_to_l2_tree_snapshot = new_l1_to_l2;
@@ -121,7 +122,7 @@ impl TestBuilder {
             parity_root,
             parity_root_vk_index: PARITY_ROOT_VK_INDEX,
             previous_l1_to_l2,
-            new_l1_to_l2_message_subtree_sibling_path,
+            new_l1_to_l2_message_subtree_root_sibling_path,
             new_archive_sibling_path,
             checkpoint_constants,
         }
@@ -162,24 +163,23 @@ impl TestBuilder {
             RollupFixtureBuilder::make_proof_data(self.right_rollup, self.right_rollup_vk_index),
         ];
 
-        let new_l1_to_l2_message_subtree_sibling_path =
-            self.new_l1_to_l2_message_subtree_sibling_path;
+        let new_l1_to_l2_message_subtree_root_sibling_path =
+            self.new_l1_to_l2_message_subtree_root_sibling_path;
         let new_archive_sibling_path = self.new_archive_sibling_path;
 
         if self.num_left_txs == 0 {
             let left = self.left_rollup;
             let previous_state = StateReference {
                 l1_to_l2_message_tree: self.previous_l1_to_l2,
-                partial: self.left_rollup.start_partial_state,
+                partial: self.left_rollup.start_tree_snapshots,
             };
             BlockRootEmptyTxFirstRollupPrivateInputs {
                 parity_root,
                 previous_archive: left.constants.last_archive,
                 previous_state,
                 constants: self.checkpoint_constants,
-                start_sponge_blob: left.start_sponge_blob,
                 timestamp: left.constants.global_variables.timestamp,
-                new_l1_to_l2_message_subtree_sibling_path,
+                new_l1_to_l2_message_subtree_root_sibling_path,
                 new_archive_sibling_path,
             }
                 .execute()
@@ -188,7 +188,7 @@ impl TestBuilder {
                 parity_root,
                 previous_rollup: previous_rollups[0],
                 previous_l1_to_l2: self.previous_l1_to_l2,
-                new_l1_to_l2_message_subtree_sibling_path,
+                new_l1_to_l2_message_subtree_root_sibling_path,
                 new_archive_sibling_path,
             }
                 .execute()
@@ -197,7 +197,7 @@ impl TestBuilder {
                 parity_root,
                 previous_rollups,
                 previous_l1_to_l2: self.previous_l1_to_l2,
-                new_l1_to_l2_message_subtree_sibling_path,
+                new_l1_to_l2_message_subtree_root_sibling_path,
                 new_archive_sibling_path,
             }
                 .execute()
@@ -233,6 +233,9 @@ impl TestBuilder {
             self.right_rollup
         };
 
+        let is_empty_block = self.num_left_txs == 0;
+        let is_single_tx_block = self.num_right_txs == 0;
+
         assert_eq(pi.num_blocks(), 1);
 
         // --- Constants ---
@@ -241,7 +244,7 @@ impl TestBuilder {
             chain_id: left.constants.global_variables.chain_id,
             version: left.constants.global_variables.version,
             vk_tree_root: left.constants.vk_tree_root,
-            protocol_contract_tree_root: left.constants.protocol_contract_tree_root,
+            protocol_contracts_hash: left.constants.protocol_contracts_hash,
             prover_id: left.constants.prover_id,
             slot_number: left.constants.global_variables.slot_number,
             coinbase: left.constants.global_variables.coinbase,
@@ -252,13 +255,28 @@ impl TestBuilder {
 
         // --- Sponge blobs ---
 
-        assert_eq(pi.start_sponge_blob, left.start_sponge_blob);
+        let expected_start_sponge_blob = if is_empty_block {
+            SpongeBlob::init()
+        } else {
+            // Although the first block should always have an empty start sponge blob, but it's not checked in this
+            // circuit. So here we simply check that the output is whatever value assigned to the left rollup.
+            left.start_sponge_blob
+        };
+        assert_eq(pi.start_sponge_blob, expected_start_sponge_blob);
 
-        let block_end_marker = BlockRollupPublicInputsComposer::create_block_end_marker(
+        let mut expected_end_sponge_blob = if is_empty_block {
+            SpongeBlob::init()
+        } else {
+            right.end_sponge_blob
+        };
+        expected_end_sponge_blob.absorb_block_end_data(
+            left.constants.global_variables,
+            pi.previous_archive,
+            pi.end_state,
             self.num_left_txs + self.num_right_txs,
+            pi.accumulated_mana_used,
+            self.is_first_block_root,
         );
-        let mut expected_end_sponge_blob = right.end_sponge_blob;
-        expected_end_sponge_blob.absorb([block_end_marker], 1);
         assert_eq(pi.end_sponge_blob, expected_end_sponge_blob);
 
         // --- Archive ---
@@ -275,9 +293,10 @@ impl TestBuilder {
             total_fees: pi.accumulated_fees,
             total_mana_used: pi.accumulated_mana_used,
         };
+        let block_header_hash = block_header.hash();
         let expected_archive_root = root_from_sibling_path(
-            block_header.hash(),
-            pi.previous_archive.next_available_leaf_index as Field,
+            block_header_hash,
+            pi.previous_archive.next_available_leaf_index,
             self.new_archive_sibling_path,
         );
         assert_eq(pi.new_archive.root, expected_archive_root);
@@ -287,11 +306,15 @@ impl TestBuilder {
             pi.previous_archive.next_available_leaf_index + 1,
         );
 
+        // --- Block headers hash ---
+
+        assert_eq(pi.block_headers_hash, block_header_hash);
+
         // --- Partial state ---
 
-        assert_eq(pi.start_state.partial, left.start_partial_state);
-        assert_eq(pi.end_state.partial, right.end_partial_state);
-        if self.num_left_txs == 0 {
+        assert_eq(pi.start_state.partial, left.start_tree_snapshots);
+        assert_eq(pi.end_state.partial, right.end_tree_snapshots);
+        if is_empty_block {
             assert_eq(pi.start_state.partial, pi.end_state.partial);
         } else {
             assert(pi.start_state.partial != pi.end_state.partial);
@@ -325,20 +348,31 @@ impl TestBuilder {
         };
         assert_eq(pi.in_hash, expected_in_hash);
 
-        // --- Out hash / fees / mana used ---
+        // --- Out hash --
 
-        let (expected_out_hash, expected_fees, expected_mana_used) = if self.num_left_txs == 0 {
-            (0, 0, 0)
-        } else if self.num_right_txs == 0 {
-            (left.out_hash, left.accumulated_fees, left.accumulated_mana_used)
+        let expected_out_hash = if is_empty_block {
+            0
+        } else if is_single_tx_block | (right.out_hash == 0) {
+            left.out_hash
+        } else if left.out_hash == 0 {
+            right.out_hash
+        } else {
+            accumulate_sha256(left.out_hash, right.out_hash)
+        };
+        assert_eq(pi.out_hash, expected_out_hash);
+
+        // --- fees / mana used ---
+
+        let (expected_fees, expected_mana_used) = if is_empty_block {
+            (0, 0)
+        } else if is_single_tx_block {
+            (left.accumulated_fees, left.accumulated_mana_used)
         } else {
             (
-                accumulate_sha256(left.out_hash, right.out_hash),
                 left.accumulated_fees + right.accumulated_fees,
                 left.accumulated_mana_used + right.accumulated_mana_used,
             )
         };
-        assert_eq(pi.out_hash, expected_out_hash);
         assert_eq(pi.accumulated_fees, expected_fees);
         assert_eq(pi.accumulated_mana_used, expected_mana_used);
     }

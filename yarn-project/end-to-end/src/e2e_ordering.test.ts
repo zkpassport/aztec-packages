@@ -1,9 +1,15 @@
 // Test suite for testing proper ordering of side effects
-import { AztecAddress, type AztecNode, Fr, type FunctionSelector, type Wallet, toBigIntBE } from '@aztec/aztec.js';
+import type { FunctionSelector } from '@aztec/aztec.js/abi';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import { toBigIntBE } from '@aztec/foundation/bigint-buffer';
 import { serializeToBuffer } from '@aztec/foundation/serialize';
 import { ChildContract } from '@aztec/noir-test-contracts.js/Child';
 import { ParentContract } from '@aztec/noir-test-contracts.js/Parent';
 import { computeCalldataHash } from '@aztec/stdlib/hash';
+import type { TestWallet } from '@aztec/test-wallet/server';
+import { proveInteraction } from '@aztec/test-wallet/server';
 
 import { jest } from '@jest/globals';
 
@@ -15,20 +21,18 @@ const TIMEOUT = 300_000;
 describe('e2e_ordering', () => {
   jest.setTimeout(TIMEOUT);
 
-  let wallet: Wallet;
+  let wallet: TestWallet;
   let aztecNode: AztecNode;
   let defaultAccountAddress: AztecAddress;
   let teardown: () => Promise<void>;
 
   const expectLogsFromLastBlockToBe = async (logMessages: bigint[]) => {
-    // docs:start:get_logs
     const fromBlock = await aztecNode.getBlockNumber();
     const logFilter = {
       fromBlock,
       toBlock: fromBlock + 1,
     };
     const publicLogs = (await aztecNode.getPublicLogs(logFilter)).logs;
-    // docs:end:get_logs
 
     const bigintLogs = publicLogs.map(extendedLog => toBigIntBE(serializeToBuffer(extendedLog.log.getEmittedFields())));
 
@@ -71,7 +75,7 @@ describe('e2e_ordering', () => {
         async method => {
           const expectedOrder = expectedOrders[method];
           const action = parent.methods[method](child.address, pubSetValueSelector);
-          const tx = await action.prove({ from: defaultAccountAddress });
+          const tx = await proveInteraction(wallet, action, { from: defaultAccountAddress });
 
           await tx.send().wait();
 

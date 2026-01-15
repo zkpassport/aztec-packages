@@ -4,10 +4,12 @@
  *
  * @packageDocumentation
  */
-import { getAccountContractAddress } from '@aztec/aztec.js';
-import { Fr, GrumpkinScalar } from '@aztec/foundation/fields';
+import { getAccountContractAddress } from '@aztec/aztec.js/account';
+import { Fr } from '@aztec/foundation/curves/bn254';
+import { GrumpkinScalar } from '@aztec/foundation/curves/grumpkin';
 import type { ContractArtifact } from '@aztec/stdlib/abi';
 import { loadContractArtifact } from '@aztec/stdlib/abi';
+import type { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { deriveSigningKey } from '@aztec/stdlib/keys';
 
 import { SchnorrBaseAccountContract } from './account_contract.js';
@@ -47,7 +49,11 @@ export class SchnorrAccountContract extends SchnorrBaseAccountContract {
  * @param salt - The contract address salt.
  * @param signingPrivateKey - A specific signing private key that's not derived from the secret.
  */
-export async function getSchnorrAccountContractAddress(secret: Fr, salt: Fr, signingPrivateKey?: GrumpkinScalar) {
+export async function getSchnorrAccountContractAddress(
+  secret: Fr,
+  salt: Fr,
+  signingPrivateKey?: GrumpkinScalar,
+): Promise<AztecAddress> {
   const signingKey = signingPrivateKey ?? deriveSigningKey(secret);
   const accountContract = new SchnorrAccountContract(signingKey);
   return await getAccountContractAddress(accountContract, secret, salt);

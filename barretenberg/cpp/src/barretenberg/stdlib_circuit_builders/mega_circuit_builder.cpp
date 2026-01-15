@@ -46,19 +46,19 @@ template <typename FF> void MegaCircuitBuilder_<FF>::add_mega_gates_to_ensure_al
     // Create an arbitrary calldata read gate
     add_public_calldata(this->add_variable(BusVector::DEFAULT_VALUE));    // add one entry in calldata
     auto raw_read_idx = static_cast<uint32_t>(get_calldata().size()) - 1; // read data that was just added
-    auto read_idx = this->add_variable(raw_read_idx);
+    auto read_idx = this->add_variable(FF(raw_read_idx));
     update_finalize_witnesses({ read_idx, read_calldata(read_idx) });
 
     // Create an arbitrary secondary_calldata read gate
     add_public_secondary_calldata(this->add_variable(BusVector::DEFAULT_VALUE)); // add one entry in secondary_calldata
     raw_read_idx = static_cast<uint32_t>(get_secondary_calldata().size()) - 1;   // read data that was just added
-    read_idx = this->add_variable(raw_read_idx);
+    read_idx = this->add_variable(FF(raw_read_idx));
     update_finalize_witnesses({ read_idx, read_secondary_calldata(read_idx) });
 
     // Create an arbitrary return data read gate
     add_public_return_data(this->add_variable(BusVector::DEFAULT_VALUE)); // add one entry in return data
     raw_read_idx = static_cast<uint32_t>(get_return_data().size()) - 1;   // read data that was just added
-    read_idx = this->add_variable(raw_read_idx);
+    read_idx = this->add_variable(FF(raw_read_idx));
     update_finalize_witnesses({ read_idx, read_return_data(read_idx) });
 
     if (op_queue->get_current_subtable_size() == 0) {
@@ -178,8 +178,8 @@ ecc_op_tuple MegaCircuitBuilder_<FF>::populate_ecc_op_wires(const UltraOp& ultra
     op_tuple.z_2 = this->add_variable(ultra_op.z_2);
 
     // Set the indices for the op values for each of the two rows
-    uint32_t op_val_idx_1 = op_tuple.op;    // genuine op code value
-    uint32_t op_val_idx_2 = this->zero_idx; // second row value always set to 0
+    uint32_t op_val_idx_1 = op_tuple.op;      // genuine op code value
+    uint32_t op_val_idx_2 = this->zero_idx(); // second row value always set to 0
     // If this is a random operation, the op values are randomized
     if (ultra_op.op_code.is_random_op) {
         op_val_idx_1 = this->add_variable(ultra_op.op_code.random_value_1);
@@ -222,9 +222,30 @@ template <typename FF> void MegaCircuitBuilder_<FF>::queue_ecc_random_op()
     (void)populate_ecc_op_wires(ultra_op);
 }
 
+/**
+ * @brief Add a hiding op with random (possibly non-curve) Px, Py values to the op queue and circuit.
+ *
+ * @details This op provides statistical hiding (~508 bits) for the accumulated_result in Translator/ECCVM.
+ * The Px, Py values are random field elements that may not be on the curve. The op uses opcode 3 (eq+reset)
+ * for Translator compatibility. In ECCVM, this op is prepended to land at row 1 (lagrange_second == 1),
+ * since row 0 is identically zero (for shifts).
+ *
+ * @param Px Random field element for x-coordinate
+ * @param Py Random field element for y-coordinate
+ */
+template <typename FF>
+void MegaCircuitBuilder_<FF>::queue_ecc_hiding_op(const curve::BN254::BaseField& Px, const curve::BN254::BaseField& Py)
+{
+    // Add the operation to the op queue (returns the UltraOp for gate creation)
+    auto ultra_op = op_queue->append_hiding_op(Px, Py);
+
+    // Add corresponding gates for the operation
+    populate_ecc_op_wires(ultra_op);
+}
+
 template <typename FF> void MegaCircuitBuilder_<FF>::set_goblin_ecc_op_code_constant_variables()
 {
-    null_op_idx = this->zero_idx; // constant 0 is is associated with the zero index
+    null_op_idx = this->zero_idx(); // constant 0 is is associated with the zero index
     add_accum_op_idx = this->put_constant_variable(FF(EccOpCode{ .add = true }.value()));
     mul_accum_op_idx = this->put_constant_variable(FF(EccOpCode{ .mul = true }.value()));
     equality_op_idx = this->put_constant_variable(FF(EccOpCode{ .eq = true, .reset = true }.value()));
@@ -268,11 +289,11 @@ template <typename FF>
 void MegaCircuitBuilder_<FF>::create_databus_read_gate(const databus_lookup_gate_<FF>& in, const BusId bus_idx)
 {
     auto& block = this->blocks.busread;
-    block.populate_wires(in.value, in.index, this->zero_idx, this->zero_idx);
+    block.populate_wires(in.value, in.index, this->zero_idx(), this->zero_idx());
     apply_databus_selectors(bus_idx);
 
     this->check_selector_length_consistency();
-    ++this->num_gates;
+    this->increment_num_gates();
 }
 
 template <typename FF> void MegaCircuitBuilder_<FF>::apply_databus_selectors(const BusId bus_idx)
@@ -298,18 +319,10 @@ template <typename FF> void MegaCircuitBuilder_<FF>::apply_databus_selectors(con
         break;
     }
     }
-    block.q_busread().emplace_back(1);
+    block.q_4().emplace_back(0);
     block.q_m().emplace_back(0);
     block.q_c().emplace_back(0);
-    block.q_delta_range().emplace_back(0);
-    block.q_arith().emplace_back(0);
-    block.q_4().emplace_back(0);
-    block.q_lookup_type().emplace_back(0);
-    block.q_elliptic().emplace_back(0);
-    block.q_memory().emplace_back(0);
-    block.q_nnf().emplace_back(0);
-    block.q_poseidon2_external().emplace_back(0);
-    block.q_poseidon2_internal().emplace_back(0);
+    block.set_gate_selector(1);
 }
 
 template class MegaCircuitBuilder_<bb::fr>;

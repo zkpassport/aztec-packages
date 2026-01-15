@@ -3,6 +3,8 @@
 set -e
 
 # Installs required dependencies for running an Aztec Bootnode, creates a start script for starting the bootnode and a systemd entry
+# This script fetches the canonical bootnode list from the network config in AztecProtocol/networks repo
+# The list includes ENRs from all bootnode operators (not just ours)
 
 # From terraform
 LOCATION="${LOCATION}"
@@ -15,6 +17,7 @@ L1_CHAIN_ID="${L1_CHAIN_ID}"
 NETWORK_NAME="${NETWORK_NAME}"
 TAG="${TAG}"
 OTEL_COLLECTOR_URL="${OTEL_COLLECTOR_URL}"
+REGION="${REGION}"
 
 # Update system packages
 echo "Updating system packages..."
@@ -100,6 +103,7 @@ CONTAINER_NAME="aztec-bootnode"
 REPO=aztecprotocol
 IMAGE=aztec
 LOG_LEVEL=verbose
+OTEL_RESOURCE_ATTRIBUTES="region=${REGION},ip=${PUBLIC_IP},network=${NETWORK_NAME}"
 
 cat <<EOF > /home/$SSH_USER/tag.sh
 #!/usr/bin/env bash
@@ -111,13 +115,25 @@ if [[ -n "$OTEL_COLLECTOR_URL" ]]; then
   export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT="$OTEL_COLLECTOR_URL/v1/metrics"
 fi
 
-cat << 'EOF' > /home/$SSH_USER/start.sh
+cat <<EOF > /home/$SSH_USER/start.sh
 #!/usr/bin/env bash
 source ./tag.sh
 echo "Starting bootnode container..."
-JSON=$(curl -s http://static.aztec.network/$NETWORK_NAME/bootnodes.json)
+
+# Try primary URL first, fallback to metadata.aztec.network if unreachable
+JSON=$(curl -s --fail http://static.aztec.network/$NETWORK_NAME/bootnodes.json 2>/dev/null)
+if [ -z "$JSON" ]; then
+  echo "Primary URL unreachable, trying fallback..."
+  JSON=$(curl -s --fail https://metadata.aztec.network/network_config.json 2>/dev/null)
+  if [ -z "$JSON" ]; then
+    echo "Error: Could not fetch bootnode data from any source"
+    exit 1
+  fi
+fi
+
 export BOOTSTRAP_NODES=$(echo "$JSON" | jq -r '.bootnodes | join(",")')
 echo "Bootnode enrs: $BOOTSTRAP_NODES"
+
 docker system prune -f
 docker pull $REPO/$IMAGE:$TAG
 docker run \
@@ -136,6 +152,7 @@ docker run \
  --env BOOTSTRAP_NODES \
  --env LOG_LEVEL \
  --env OTEL_EXPORTER_OTLP_METRICS_ENDPOINT \
+ --env OTEL_RESOURCE_ATTRIBUTES \
  $REPO/$IMAGE:$TAG start --p2p-bootstrap
 EOF
 chmod +x /home/$SSH_USER/start.sh
@@ -173,6 +190,7 @@ Environment="IMAGE=$IMAGE"
 Environment="TAG=$TAG"
 Environment="CONTAINER_NAME=$CONTAINER_NAME"
 Environment="OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=$OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
+Environment="OTEL_RESOURCE_ATTRIBUTES=$OTEL_RESOURCE_ATTRIBUTES"
 ExecStartPre=-/usr/bin/docker rm -f $CONTAINER_NAME
 ExecStart=/home/$SSH_USER/start.sh
 ExecStop=/usr/bin/docker stop $CONTAINER_NAME

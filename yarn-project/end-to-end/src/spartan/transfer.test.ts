@@ -1,12 +1,19 @@
-import { type PXE, SponsoredFeePaymentMethod, readFieldCompressedString } from '@aztec/aztec.js';
+import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import { readFieldCompressedString } from '@aztec/aztec.js/utils';
 import { createLogger } from '@aztec/foundation/log';
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
+import { TestWallet, proveInteraction } from '@aztec/test-wallet/server';
 
 import { jest } from '@jest/globals';
 import type { ChildProcess } from 'child_process';
 
 import { getSponsoredFPCAddress } from '../fixtures/utils.js';
-import { type TestAccounts, deploySponsoredTestAccounts, startCompatiblePXE } from './setup_test_wallets.js';
+import {
+  type TestAccounts,
+  createWalletAndAztecNodeClient,
+  deploySponsoredTestAccountsWithTokens,
+} from './setup_test_wallets.js';
 import { setupEnvironment, startPortForwardForRPC } from './utils.js';
 
 const config = setupEnvironment(process.env);
@@ -21,7 +28,8 @@ describe('token transfer test', () => {
 
   let testAccounts: TestAccounts;
   const forwardProcesses: ChildProcess[] = [];
-  let pxe: PXE;
+  let wallet: TestWallet;
+  let aztecNode: AztecNode;
   let cleanup: undefined | (() => Promise<void>);
 
   afterAll(async () => {
@@ -33,10 +41,9 @@ describe('token transfer test', () => {
     const { process, port } = await startPortForwardForRPC(config.NAMESPACE);
     forwardProcesses.push(process);
     const rpcUrl = `http://127.0.0.1:${port}`;
+    ({ wallet, aztecNode, cleanup } = await createWalletAndAztecNodeClient(rpcUrl, config.REAL_VERIFIER, logger));
 
-    ({ pxe, cleanup } = await startCompatiblePXE(rpcUrl, config.REAL_VERIFIER, logger));
-
-    testAccounts = await deploySponsoredTestAccounts(pxe, MINT_AMOUNT, logger);
+    testAccounts = await deploySponsoredTestAccountsWithTokens(wallet, aztecNode, MINT_AMOUNT, logger);
     expect(ROUNDS).toBeLessThanOrEqual(MINT_AMOUNT);
   });
 
@@ -67,14 +74,15 @@ describe('token transfer test', () => {
 
     // For each round, make both private and public transfers
     for (let i = 1n; i <= ROUNDS; i++) {
-      const txs = testAccounts.accounts.map(async a =>
-        (await TokenContract.at(testAccounts.tokenAddress, testAccounts.wallet)).methods
-          .transfer_in_public(a, recipient, transferAmount, 0)
-          .prove({
-            from: a,
-            fee: { paymentMethod: new SponsoredFeePaymentMethod(await getSponsoredFPCAddress()) },
-          }),
-      );
+      const txs = testAccounts.accounts.map(async a => {
+        const token = TokenContract.at(testAccounts.tokenAddress, testAccounts.wallet);
+        return proveInteraction(wallet, token.methods.transfer_in_public(a, recipient, transferAmount, 0), {
+          from: a,
+          fee: {
+            paymentMethod: new SponsoredFeePaymentMethod(await getSponsoredFPCAddress()),
+          },
+        });
+      });
 
       const provenTxs = await Promise.all(txs);
 

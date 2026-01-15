@@ -15,8 +15,6 @@ void gasImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
 {
     using C = ColumnAndShifts;
 
-    BB_BENCH_NAME("accumulate/gas");
-
     const auto execution_BASE_L2_GAS = in.get(C::execution_opcode_gas) + in.get(C::execution_addressing_gas);
     const auto execution_DYNAMIC_L2_GAS_USED =
         in.get(C::execution_dynamic_l2_gas) * in.get(C::execution_dynamic_l2_gas_factor);
@@ -27,14 +25,16 @@ void gasImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
 
     {
         using View = typename std::tuple_element_t<0, ContainerOverSubrelations>::View;
-        auto tmp = (static_cast<View>(in.get(C::execution_total_gas_l2)) -
-                    (static_cast<View>(in.get(C::execution_prev_l2_gas_used)) + CView(execution_L2_GAS_USED)));
+        auto tmp = static_cast<View>(in.get(C::execution_sel_should_check_gas)) *
+                   ((static_cast<View>(in.get(C::execution_prev_l2_gas_used)) + CView(execution_L2_GAS_USED)) -
+                    static_cast<View>(in.get(C::execution_total_gas_l2)));
         std::get<0>(evals) += (tmp * scaling_factor);
     }
     {
         using View = typename std::tuple_element_t<1, ContainerOverSubrelations>::View;
-        auto tmp = (static_cast<View>(in.get(C::execution_total_gas_da)) -
-                    (static_cast<View>(in.get(C::execution_prev_da_gas_used)) + CView(execution_DA_GAS_USED)));
+        auto tmp = static_cast<View>(in.get(C::execution_sel_should_check_gas)) *
+                   ((static_cast<View>(in.get(C::execution_prev_da_gas_used)) + CView(execution_DA_GAS_USED)) -
+                    static_cast<View>(in.get(C::execution_total_gas_da)));
         std::get<1>(evals) += (tmp * scaling_factor);
     }
     {

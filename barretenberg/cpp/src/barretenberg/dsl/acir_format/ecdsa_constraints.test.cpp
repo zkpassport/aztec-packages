@@ -2,6 +2,7 @@
 #include "acir_format.hpp"
 #include "acir_format_mocks.hpp"
 #include "barretenberg/crypto/ecdsa/ecdsa.hpp"
+#include "barretenberg/dsl/acir_format/test_class_predicate.hpp"
 #include "barretenberg/dsl/acir_format/utils.hpp"
 #include "barretenberg/dsl/acir_format/witness_constant.hpp"
 #include "barretenberg/stdlib/primitives/curves/secp256k1.hpp"
@@ -15,19 +16,97 @@ using namespace bb;
 using namespace bb::crypto;
 using namespace acir_format;
 
-template <class Curve> class EcdsaConstraintsTest : public ::testing::Test {
+template <class Curve> class EcdsaTestingFunctions {
   public:
     using Builder = Curve::Builder;
     using FrNative = Curve::fr;
     using FqNative = Curve::fq;
     using G1Native = Curve::g1;
-    using Flavor = std::conditional_t<std::is_same_v<Builder, UltraCircuitBuilder>, UltraFlavor, MegaFlavor>;
+    using AcirConstraint = EcdsaConstraint;
+
+    struct InvalidWitness {
+      public:
+        enum class Target : uint8_t {
+            None,
+            HashIsNotAByteArray, // Set one element of the hash > 255
+            ZeroR,               // Set R=0 (tests ECDSA validation)
+            ZeroS,               // Set S=0 (tests ECDSA validation)
+            HighS,               // Set S=high (tests malleability protection)
+            P,                   // Invalidate public key
+            Result               // Invalid signature with claimed valid result
+        };
+
+        static std::vector<Target> get_all()
+        {
+            return { Target::None,  Target::HashIsNotAByteArray, Target::ZeroR, Target::ZeroS, Target::HighS, Target::P,
+                     Target::Result };
+        }
+
+        static std::vector<std::string> get_labels()
+        {
+            return { "None", "Hash is not a byte array", "Zero R", "Zero S", "High S", "Public key", "Result" };
+        }
+    };
 
     // Reproducible test
     static constexpr FrNative private_key =
         FrNative("0xd67abee717b3fc725adf59e2cc8cd916435c348b277dd814a34e3ceb279436c2");
 
-    static size_t generate_ecdsa_constraint(EcdsaConstraint& ecdsa_constraint, WitnessVector& witness_values)
+    static void invalidate_witness(EcdsaConstraint& ecdsa_constraints,
+                                   WitnessVector& witness_values,
+                                   const InvalidWitness::Target& invalid_witness_target)
+    {
+        // For most ECDSA invalidation cases, we set result=0 to ensure that the failure mode caught by the test is
+        // specific to the particular case being tested, not just simple verification failure.
+        // For the "Result" case we test the mismatch between actual and claimed result.
+        if (invalid_witness_target != InvalidWitness::Target::None &&
+            invalid_witness_target != InvalidWitness::Target::Result) {
+            witness_values[ecdsa_constraints.result] = bb::fr(0);
+        }
+
+        switch (invalid_witness_target) {
+        case InvalidWitness::Target::HashIsNotAByteArray:
+            // Set all bytes of hash to 256 (invalid as it doesn't fit in one byte)
+            for (size_t idx = 0; idx < 32; idx++) {
+                witness_values[ecdsa_constraints.hashed_message[idx]] = bb::fr(256);
+            };
+            break;
+        case InvalidWitness::Target::ZeroR:
+            // Set r = 0 (invalid ECDSA signature component)
+            for (size_t idx = 0; idx < 32; idx++) {
+                witness_values[ecdsa_constraints.signature[idx]] = bb::fr(0);
+            };
+            break;
+        case InvalidWitness::Target::ZeroS:
+            // Set s = 0 (tests ECDSA validation: s must be non-zero)
+            for (size_t idx = 32; idx < 64; idx++) {
+                witness_values[ecdsa_constraints.signature[idx]] = bb::fr(0);
+            };
+            break;
+        case InvalidWitness::Target::HighS:
+            // Set s = high value (tests signature malleability protection)
+            for (size_t idx = 32; idx < 64; idx++) {
+                witness_values[ecdsa_constraints.signature[idx]] = bb::fr(255);
+            };
+            break;
+        case InvalidWitness::Target::P:
+            // Invalidate public key
+            witness_values[ecdsa_constraints.pub_x_indices[0]] += bb::fr(1);
+            break;
+        case InvalidWitness::Target::Result:
+            // Test enforcement of verification result: tamper signature but claim it's valid
+            witness_values[ecdsa_constraints.signature[31]] = bb::fr(0);
+            witness_values[ecdsa_constraints.result] = bb::fr(1);
+            break;
+        case InvalidWitness::Target::None:
+            break;
+        }
+    }
+
+    /**
+     * @brief Generate valid ECDSA constraint with witness predicate equal to true
+     */
+    static void generate_constraints(EcdsaConstraint& ecdsa_constraint, WitnessVector& witness_values)
     {
         std::string message_string = "Instructions unclear, ask again later.";
 
@@ -51,76 +130,47 @@ template <class Curve> class EcdsaConstraintsTest : public ::testing::Test {
         FqNative::serialize_to_buffer(account.public_key.y, &buffer_y[0]);
 
         // Create witness indices and witnesses
-        size_t num_variables = 0;
-
         std::array<uint32_t, 32> hashed_message_indices =
-            add_to_witness_and_track_indices<uint8_t, 32>(witness_values, std::span(hashed_message));
-        num_variables += hashed_message_indices.size();
+            add_to_witness_and_track_indices<std::span<uint8_t>, 32>(witness_values, std::span(hashed_message));
 
         std::array<uint32_t, 32> pub_x_indices =
-            add_to_witness_and_track_indices<uint8_t, 32>(witness_values, std::span(buffer_x));
-        num_variables += pub_x_indices.size();
+            add_to_witness_and_track_indices<std::span<uint8_t>, 32>(witness_values, std::span(buffer_x));
 
         std::array<uint32_t, 32> pub_y_indices =
-            add_to_witness_and_track_indices<uint8_t, 32>(witness_values, std::span(buffer_y));
-        num_variables += pub_y_indices.size();
+            add_to_witness_and_track_indices<std::span<uint8_t>, 32>(witness_values, std::span(buffer_y));
 
         std::array<uint32_t, 32> r_indices =
-            add_to_witness_and_track_indices<uint8_t, 32>(witness_values, std::span(signature.r));
-        num_variables += r_indices.size();
+            add_to_witness_and_track_indices<std::span<uint8_t>, 32>(witness_values, std::span(signature.r));
 
         std::array<uint32_t, 32> s_indices =
-            add_to_witness_and_track_indices<uint8_t, 32>(witness_values, std::span(signature.s));
-        num_variables += s_indices.size();
+            add_to_witness_and_track_indices<std::span<uint8_t>, 32>(witness_values, std::span(signature.s));
 
-        uint32_t result_index = static_cast<uint32_t>(num_variables);
-        bb::fr result = bb::fr::one();
-        witness_values.emplace_back(result);
-        num_variables += 1;
+        uint32_t result_index = add_to_witness_and_track_indices(witness_values, bb::fr(1));
+
+        uint32_t predicate_index = add_to_witness_and_track_indices(witness_values, bb::fr(1));
 
         // Restructure vectors into array
         std::array<uint32_t, 64> signature_indices;
         std::ranges::copy(r_indices, signature_indices.begin());
         std::ranges::copy(s_indices, signature_indices.begin() + 32);
 
-        ecdsa_constraint = EcdsaConstraint{ .hashed_message = hashed_message_indices,
+        ecdsa_constraint = EcdsaConstraint{ .type = Curve::type,
+                                            .hashed_message = hashed_message_indices,
                                             .signature = signature_indices,
                                             .pub_x_indices = pub_x_indices,
                                             .pub_y_indices = pub_y_indices,
-                                            .predicate = WitnessOrConstant<bb::fr>::from_constant(bb::fr::one()),
+                                            .predicate = WitnessOrConstant<bb::fr>::from_index(predicate_index),
                                             .result = result_index };
-
-        return num_variables;
     }
+};
 
-    static std::pair<AcirFormat, WitnessVector> generate_constraint_system()
-    {
-        EcdsaConstraint ecdsa_constraint;
-        WitnessVector witness_values;
-        size_t num_variables = generate_ecdsa_constraint(ecdsa_constraint, witness_values);
-        AcirFormat constraint_system = {
-            .varnum = static_cast<uint32_t>(num_variables),
-            .num_acir_opcodes = 1,
-            .public_inputs = {},
-            .original_opcode_indices = create_empty_original_opcode_indices(),
-        };
-
-        if constexpr (Curve::type == bb::CurveType::SECP256K1) {
-            constraint_system.ecdsa_k1_constraints = { ecdsa_constraint };
-        } else {
-            constraint_system.ecdsa_r1_constraints = { ecdsa_constraint };
-        }
-
-        mock_opcode_indices(constraint_system);
-
-        return { constraint_system, witness_values };
-    }
-
+template <class Curve>
+class EcdsaConstraintsTest : public ::testing::Test, public TestClassWithPredicate<EcdsaTestingFunctions<Curve>> {
   protected:
     static void SetUpTestSuite() { bb::srs::init_file_crs_factory(bb::srs::bb_crs_path()); }
 };
 
-using CurveTypes = testing::Types<stdlib::secp256k1<MegaCircuitBuilder>,
+using CurveTypes = testing::Types<stdlib::secp256k1<UltraCircuitBuilder>,
                                   stdlib::secp256r1<UltraCircuitBuilder>,
                                   stdlib::secp256k1<MegaCircuitBuilder>,
                                   stdlib::secp256r1<MegaCircuitBuilder>>;
@@ -129,33 +179,39 @@ TYPED_TEST_SUITE(EcdsaConstraintsTest, CurveTypes);
 
 TYPED_TEST(EcdsaConstraintsTest, GenerateVKFromConstraints)
 {
-    using Flavor = TestFixture::Flavor;
-    using Builder = TestFixture::Builder;
-    using ProvingKey = ProverInstance_<Flavor>;
-    using VerificationKey = Flavor::VerificationKey;
+    using Flavor =
+        std::conditional_t<std::is_same_v<typename TypeParam::Builder, UltraCircuitBuilder>, UltraFlavor, MegaFlavor>;
+    TestFixture::template test_vk_independence<Flavor>();
+}
 
-    auto [constraint_system, witness_values] = TestFixture::generate_constraint_system();
+TYPED_TEST(EcdsaConstraintsTest, ConstantTrue)
+{
+    BB_DISABLE_ASSERTS();
+    TestFixture::test_constant_true(TestFixture::InvalidWitnessTarget::Result);
+}
 
-    std::shared_ptr<VerificationKey> vk_from_witness;
-    {
-        AcirProgram program{ constraint_system, witness_values };
-        auto builder = create_circuit<Builder>(program);
-        info("Num gates: ", builder.get_estimated_num_finalized_gates());
+TYPED_TEST(EcdsaConstraintsTest, WitnessTrue)
+{
+    BB_DISABLE_ASSERTS();
+    TestFixture::test_witness_true(TestFixture::InvalidWitnessTarget::Result);
+}
 
-        auto prover_instance = std::make_shared<ProvingKey>(builder);
-        vk_from_witness = std::make_shared<VerificationKey>(prover_instance->get_precomputed());
+TYPED_TEST(EcdsaConstraintsTest, WitnessFalse)
+{
+    BB_DISABLE_ASSERTS();
+    TestFixture::test_witness_false();
+}
 
-        // Validate the builder
-        EXPECT_TRUE(CircuitChecker::check(builder));
-    }
+TYPED_TEST(EcdsaConstraintsTest, WitnessFalseSlow)
+{
+    // This test is equal to WitnessFalse but also checks that each configuration would have failed if the
+    // predicate were witness true. It can be useful for debugging.
+    BB_DISABLE_ASSERTS();
+    TestFixture::test_witness_false_slow();
+}
 
-    std::shared_ptr<VerificationKey> vk_from_constraint;
-    {
-        AcirProgram program{ constraint_system, /*witness=*/{} };
-        auto builder = create_circuit<Builder>(program);
-        auto prover_instance = std::make_shared<ProvingKey>(builder);
-        vk_from_constraint = std::make_shared<VerificationKey>(prover_instance->get_precomputed());
-    }
-
-    EXPECT_EQ(*vk_from_witness, *vk_from_constraint);
+TYPED_TEST(EcdsaConstraintsTest, InvalidWitnesses)
+{
+    BB_DISABLE_ASSERTS();
+    [[maybe_unused]] std::vector<std::string> _ = TestFixture::test_invalid_witnesses();
 }

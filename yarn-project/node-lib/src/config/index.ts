@@ -7,8 +7,8 @@ export type SharedNodeConfig = {
   sponsoredFPC: boolean;
   /** Sync mode: full to always sync via L1, snapshot to download a snapshot if there is no local data, force-snapshot to download even if there is local data. */
   syncMode: 'full' | 'snapshot' | 'force-snapshot';
-  /** Base URL for snapshots index. Index file will be searched at `SNAPSHOTS_BASE_URL/aztec-L1_CHAIN_ID-VERSION-ROLLUP_ADDRESS/index.json` */
-  snapshotsUrl?: string;
+  /** Base URLs for snapshots index. Index file will be searched at `SNAPSHOTS_BASE_URL/aztec-L1_CHAIN_ID-VERSION-ROLLUP_ADDRESS/index.json` */
+  snapshotsUrls?: string[];
 
   /** Auto update mode: disabled - to completely ignore remote signals to update the node. enabled - to respect the signals (potentially shutting this node down). log - check for updates but log a warning instead of applying them*/
   autoUpdate?: 'disabled' | 'notify' | 'config' | 'config-and-version';
@@ -17,6 +17,11 @@ export type SharedNodeConfig = {
 
   /** URL of the Web3Signer instance */
   web3SignerUrl?: string;
+  /** Whether to run in fisherman mode */
+  fishermanMode?: boolean;
+
+  /** Force verification of tx Chonk proofs. Only used for testnet */
+  debugForceTxProofVerification: boolean;
 };
 
 export const sharedNodeConfigMappings: ConfigMappingsType<SharedNodeConfig> = {
@@ -36,9 +41,16 @@ export const sharedNodeConfigMappings: ConfigMappingsType<SharedNodeConfig> = {
       'Set sync mode to `full` to always sync via L1, `snapshot` to download a snapshot if there is no local data, `force-snapshot` to download even if there is local data.',
     defaultValue: 'snapshot',
   },
-  snapshotsUrl: {
-    env: 'SYNC_SNAPSHOTS_URL',
-    description: 'Base URL for snapshots index.',
+  snapshotsUrls: {
+    env: 'SYNC_SNAPSHOTS_URLS',
+    description: 'Base URLs for snapshots index, comma-separated.',
+    parseEnv: (val: string) =>
+      val
+        .split(',')
+        .map(url => url.trim())
+        .filter(url => url.length > 0),
+    fallback: ['SYNC_SNAPSHOTS_URL'],
+    defaultValue: [],
   },
   autoUpdate: {
     env: 'AUTO_UPDATE',
@@ -53,5 +65,15 @@ export const sharedNodeConfigMappings: ConfigMappingsType<SharedNodeConfig> = {
     env: 'WEB3_SIGNER_URL',
     description: 'URL of the Web3Signer instance',
     parseEnv: (val: string) => val.trim(),
+  },
+  fishermanMode: {
+    env: 'FISHERMAN_MODE',
+    description: 'Whether to run in fisherman mode.',
+    ...booleanConfigHelper(false),
+  },
+  debugForceTxProofVerification: {
+    env: 'DEBUG_FORCE_TX_PROOF_VERIFICATION',
+    description: 'Whether to force tx proof verification. Only has an effect if real proving is turned off',
+    ...booleanConfigHelper(false),
   },
 };

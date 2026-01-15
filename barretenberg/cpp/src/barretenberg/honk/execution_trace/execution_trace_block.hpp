@@ -10,7 +10,6 @@
 #include "barretenberg/common/ref_array.hpp"
 #include "barretenberg/common/ref_vector.hpp"
 #include "barretenberg/common/serialize.hpp"
-#include "barretenberg/common/slab_allocator.hpp"
 #include "barretenberg/common/throw_or_abort.hpp"
 #include <cstddef>
 
@@ -141,7 +140,7 @@ template <typename FF> class ZeroSelector : public Selector<FF> {
 
     void push_back(const FF& value) override
     {
-        ASSERT(value.is_zero());
+        BB_ASSERT(value.is_zero());
         size_++;
     }
 
@@ -153,14 +152,14 @@ template <typename FF> class ZeroSelector : public Selector<FF> {
 
     void set(size_t idx, int value) override
     {
-        BB_ASSERT_LT(idx, size_);
+        BB_ASSERT_DEBUG(idx < size_);
         BB_ASSERT_EQ(value, 0, "Calling ZeroSelector::set with a non zero value.");
     }
 
     void set(size_t idx, const FF& value) override
     {
-        BB_ASSERT_LT(idx, size_);
-        ASSERT(value.is_zero());
+        BB_ASSERT_DEBUG(idx < size_);
+        BB_ASSERT(value.is_zero());
         size_++;
     }
 
@@ -170,7 +169,7 @@ template <typename FF> class ZeroSelector : public Selector<FF> {
 
     const FF& operator[](size_t index) const override
     {
-        BB_ASSERT_LT(index, size_);
+        BB_ASSERT_DEBUG(index < size_);
         return zero;
     }
 
@@ -211,7 +210,7 @@ template <typename FF> class SlabVectorSelector : public Selector<FF> {
     bool empty() const override { return data.empty(); }
 
   private:
-    SlabVector<FF> data;
+    std::vector<FF> data;
 };
 
 /**
@@ -225,7 +224,7 @@ template <typename FF, size_t NUM_WIRES_> class ExecutionTraceBlock {
     static constexpr size_t NUM_WIRES = NUM_WIRES_;
 
     using SelectorType = Selector<FF>;
-    using WireType = SlabVector<uint32_t>;
+    using WireType = std::vector<uint32_t>;
     using Wires = std::array<WireType, NUM_WIRES>;
 
     ExecutionTraceBlock() = default;
@@ -258,7 +257,7 @@ template <typename FF, size_t NUM_WIRES_> class ExecutionTraceBlock {
 
     uint32_t trace_offset() const
     {
-        ASSERT(trace_offset_ != std::numeric_limits<uint32_t>::max());
+        BB_ASSERT(trace_offset_ != std::numeric_limits<uint32_t>::max());
         return trace_offset_;
     }
 
@@ -279,11 +278,6 @@ template <typename FF, size_t NUM_WIRES_> class ExecutionTraceBlock {
 #endif
     }
 
-    uint32_t get_fixed_size(bool is_structured = true) const
-    {
-        return is_structured ? fixed_size : static_cast<uint32_t>(size());
-    }
-
 #ifdef TRACY_HACK_GATES_AS_MEMORY
     ~ExecutionTraceBlock()
     {
@@ -296,7 +290,6 @@ template <typename FF, size_t NUM_WIRES_> class ExecutionTraceBlock {
         }
     }
 #endif
-    uint32_t fixed_size = 0; // Fixed size for use in structured trace
 
     virtual RefVector<Selector<FF>> get_selectors() = 0;
 

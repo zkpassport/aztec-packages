@@ -6,7 +6,7 @@ import {
   RECURSIVE_PROOF_LENGTH,
   ULTRA_KECCAK_PROOF_LENGTH,
 } from '@aztec/constants';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { runInDirectory } from '@aztec/foundation/fs';
 import { createLogger } from '@aztec/foundation/log';
 import { BufferReader } from '@aztec/foundation/serialize';
@@ -38,8 +38,8 @@ import {
   convertParityRootPrivateInputsToWitnessMap,
   convertPrivateTxBaseRollupOutputsFromWitnessMap,
   convertPrivateTxBaseRollupPrivateInputsToWitnessMap,
-  convertPublicTubeOutputsFromWitnessMap,
-  convertPublicTubePrivateInputsToWitnessMap,
+  convertPublicChonkVerifierOutputsFromWitnessMap,
+  convertPublicChonkVerifierPrivateInputsToWitnessMap,
   convertPublicTxBaseRollupOutputsFromWitnessMap,
   convertPublicTxBaseRollupPrivateInputsToWitnessMap,
   convertRootRollupOutputsFromWitnessMap,
@@ -61,7 +61,6 @@ import {
   makeProofAndVerificationKey,
   makePublicInputsAndRecursiveProof,
 } from '@aztec/stdlib/interfaces/server';
-import type { PrivateToPublicKernelCircuitPublicInputs } from '@aztec/stdlib/kernel';
 import type { ParityBasePrivateInputs, ParityPublicInputs, ParityRootPrivateInputs } from '@aztec/stdlib/parity';
 import { Proof, RecursiveProof, makeRecursiveProofFromBinary } from '@aztec/stdlib/proofs';
 import {
@@ -78,7 +77,8 @@ import {
   CheckpointRootRollupPrivateInputs,
   CheckpointRootSingleBlockRollupPrivateInputs,
   type PrivateTxBaseRollupPrivateInputs,
-  PublicTubePrivateInputs,
+  PublicChonkVerifierPrivateInputs,
+  PublicChonkVerifierPublicInputs,
   PublicTxBaseRollupPrivateInputs,
   type RootRollupPrivateInputs,
   type RootRollupPublicInputs,
@@ -202,22 +202,19 @@ export class BBNativeRollupProver implements ServerCircuitProver {
     return proofAndVk;
   }
 
-  public async getPublicTubeProof(
-    inputs: PublicTubePrivateInputs,
+  public async getPublicChonkVerifierProof(
+    inputs: PublicChonkVerifierPrivateInputs,
   ): Promise<
-    PublicInputsAndRecursiveProof<
-      PrivateToPublicKernelCircuitPublicInputs,
-      typeof NESTED_RECURSIVE_ROLLUP_HONK_PROOF_LENGTH
-    >
+    PublicInputsAndRecursiveProof<PublicChonkVerifierPublicInputs, typeof NESTED_RECURSIVE_ROLLUP_HONK_PROOF_LENGTH>
   > {
-    const artifactName = 'PublicTube';
+    const artifactName = 'PublicChonkVerifier';
 
     const { circuitOutput, proof } = await this.createRecursiveProof(
       inputs,
       artifactName,
       NESTED_RECURSIVE_ROLLUP_HONK_PROOF_LENGTH,
-      convertPublicTubePrivateInputsToWitnessMap,
-      convertPublicTubeOutputsFromWitnessMap,
+      convertPublicChonkVerifierPrivateInputsToWitnessMap,
+      convertPublicChonkVerifierOutputsFromWitnessMap,
     );
 
     const verificationKey = this.getVerificationKeyDataForCircuit(artifactName);
@@ -590,7 +587,7 @@ export class BBNativeRollupProver implements ServerCircuitProver {
     convertInput: (input: CircuitInputType) => WitnessMap,
     convertOutput: (outputWitness: WitnessMap) => CircuitOutputType,
   ): Promise<{ circuitOutput: CircuitOutputType; proof: RecursiveProof<PROOF_LENGTH> }> {
-    // this probably is gonna need to call client ivc
+    // this probably is gonna need to call chonk
     const operation = async (bbWorkingDirectory: string) => {
       const { provingResult, circuitOutput: output } = await this.generateProofWithBB(
         input,

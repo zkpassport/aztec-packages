@@ -1,4 +1,7 @@
-import { type AztecAddress, type PXE, PublicFeePaymentMethod, type Wallet } from '@aztec/aztec.js';
+import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { PublicFeePaymentMethod } from '@aztec/aztec.js/fee';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import type { FPCContract } from '@aztec/noir-contracts.js/FPC';
 import type { TokenContract as BananaCoin } from '@aztec/noir-contracts.js/Token';
 import { GasSettings } from '@aztec/stdlib/gas';
@@ -7,8 +10,8 @@ import { expectMapping } from '../fixtures/utils.js';
 import { FeesTest } from './fees_test.js';
 
 describe('e2e_fees public_payment', () => {
+  let aztecNode: AztecNode;
   let wallet: Wallet;
-  let pxe: PXE;
   let aliceAddress: AztecAddress;
   let bobAddress: AztecAddress;
   let sequencerAddress: AztecAddress;
@@ -22,7 +25,8 @@ describe('e2e_fees public_payment', () => {
     await t.applyBaseSnapshots();
     await t.applyFPCSetupSnapshot();
     await t.applyFundAliceWithBananas();
-    ({ wallet, aliceAddress, bobAddress, sequencerAddress, bananaCoin, bananaFPC, gasSettings, pxe } = await t.setup());
+    ({ wallet, aliceAddress, bobAddress, sequencerAddress, bananaCoin, bananaFPC, gasSettings, aztecNode } =
+      await t.setup());
   });
 
   afterAll(async () => {
@@ -42,7 +46,7 @@ describe('e2e_fees public_payment', () => {
   beforeEach(async () => {
     gasSettings = GasSettings.from({
       ...gasSettings,
-      maxFeesPerGas: await pxe.getCurrentBaseFees(),
+      maxFeesPerGas: await aztecNode.getCurrentBaseFees(),
     });
 
     [
@@ -56,18 +60,15 @@ describe('e2e_fees public_payment', () => {
 
   it('pays fees for tx that make public transfer', async () => {
     const bananasToSendToBob = 10n;
-    // docs:start:fpc
     const tx = await bananaCoin.methods
       .transfer_in_public(aliceAddress, bobAddress, bananasToSendToBob, 0)
       .send({
         from: aliceAddress,
         fee: {
-          gasSettings,
-          paymentMethod: new PublicFeePaymentMethod(bananaFPC.address, aliceAddress, wallet),
+          paymentMethod: new PublicFeePaymentMethod(bananaFPC.address, aliceAddress, wallet, gasSettings),
         },
       })
       .wait();
-    // docs:end:fpc
 
     const feeAmount = tx.transactionFee!;
 

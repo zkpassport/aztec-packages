@@ -1,5 +1,5 @@
 import { CONTRACT_CLASS_LOG_SIZE_IN_FIELDS } from '@aztec/constants';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { jsonStringify } from '@aztec/foundation/json-rpc';
 
 import { AztecAddress } from '../aztec-address/index.js';
@@ -41,7 +41,7 @@ describe('ContractClassLog', () => {
       ContractClassLogFields.fromEmittedFields(smallLogFields),
       smallLogFields.length,
     );
-    expect(smallLog.toBlobFields().length).toEqual(smallLogFields.length + 1 /* length */ + 1 /* contract address */);
+    expect(smallLog.toBlobFields().length).toEqual(smallLogFields.length + 1 /* contract address */);
 
     const largeLogFields = Array.from({ length: CONTRACT_CLASS_LOG_SIZE_IN_FIELDS - smallLogFields.length }, () =>
       Fr.random(),
@@ -51,6 +51,6 @@ describe('ContractClassLog', () => {
       ContractClassLogFields.fromEmittedFields(largeLogFields),
       largeLogFields.length,
     );
-    expect(largeLog.toBlobFields().length).toEqual(largeLogFields.length + 1 /* length */ + 1 /* contract address */);
+    expect(largeLog.toBlobFields().length).toEqual(largeLogFields.length + 1 /* contract address */);
   });
 });

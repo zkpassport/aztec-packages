@@ -1,7 +1,11 @@
-import { type AztecAddress, EthAddress, ProvenTx, sleep } from '@aztec/aztec.js';
+import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { EthAddress } from '@aztec/aztec.js/addresses';
 import { parseBooleanEnv } from '@aztec/foundation/config';
+import { sleep } from '@aztec/foundation/sleep';
 import { Timer } from '@aztec/foundation/timer';
 import type { IVCProofVerificationResult } from '@aztec/stdlib/interfaces/server';
+import type { Tx } from '@aztec/stdlib/tx';
+import { type TestWallet, proveInteraction } from '@aztec/test-wallet/server';
 
 import '@jest/globals';
 import { mkdir, writeFile } from 'fs/promises';
@@ -26,14 +30,15 @@ describe('transaction benchmarks', () => {
   const COINBASE_ADDRESS = EthAddress.random();
   const t = new FullProverTest('full_prover', 1, COINBASE_ADDRESS, REAL_PROOFS);
 
-  let { provenAssets, logger } = t;
+  let { provenAsset, logger } = t;
   let sender: AztecAddress;
   let recipient: AztecAddress;
+  let provenWallet: TestWallet;
 
   const results: any[] = [];
 
-  let publicProvenTx: ProvenTx;
-  let privateProvenTx: ProvenTx;
+  let publicProvenTx: Tx;
+  let privateProvenTx: Tx;
 
   const toPrettyString = () => {
     let pretty = '';
@@ -54,27 +59,28 @@ describe('transaction benchmarks', () => {
     await t.setup();
 
     ({
-      provenAssets,
+      provenWallet,
+      provenAsset,
       accounts: [sender, recipient],
       logger,
     } = t);
 
     // Create the two transactions
-    const privateBalance = await provenAssets[0].methods.balance_of_private(sender).simulate({ from: sender });
+    const privateBalance = await provenAsset.methods.balance_of_private(sender).simulate({ from: sender });
     const privateSendAmount = privateBalance / 10n;
     expect(privateSendAmount).toBeGreaterThan(0n);
-    const privateInteraction = provenAssets[0].methods.transfer(recipient, privateSendAmount);
+    const privateInteraction = provenAsset.methods.transfer(recipient, privateSendAmount);
 
-    const publicBalance = await provenAssets[1].methods.balance_of_public(sender).simulate({ from: sender });
+    const publicBalance = await provenAsset.methods.balance_of_public(sender).simulate({ from: sender });
     const publicSendAmount = publicBalance / 10n;
     expect(publicSendAmount).toBeGreaterThan(0n);
-    const publicInteraction = provenAssets[1].methods.transfer_in_public(sender, recipient, publicSendAmount, 0);
+    const publicInteraction = provenAsset.methods.transfer_in_public(sender, recipient, publicSendAmount, 0);
 
     // Prove them
     logger.info(`Proving txs`);
     const [publicTx, privateTx] = await Promise.all([
-      publicInteraction.prove({ from: sender }),
-      privateInteraction.prove({ from: sender }),
+      proveInteraction(provenWallet, publicInteraction, { from: sender }),
+      proveInteraction(provenWallet, privateInteraction, { from: sender }),
     ]);
 
     publicProvenTx = publicTx;
@@ -108,13 +114,18 @@ describe('transaction benchmarks', () => {
     'makes both public and private transfers',
     () => {
       const compressTx = (
-        txAsBuffer: Buffer,
+        tx: Tx,
         compress: (data: Buffer) => Buffer,
         uncompress: (data: Buffer) => Buffer,
         name: string,
         txType: string,
       ) => {
         logger.info(`Compressing ${txType} tx with ${name}`);
+        const chonkProofBuffer = tx.chonkProof.toBuffer();
+        const proofSize = chonkProofBuffer.length;
+        const compressedProof = compress(chonkProofBuffer);
+        const proofSizeCompressed = compressedProof.length;
+        const txAsBuffer = tx.toBuffer();
         const numIterations = 50;
         const uncompressed: Buffer[] = Array.from({ length: numIterations }, () => Buffer.alloc(0));
         const compressed: Buffer[] = Array.from({ length: numIterations }, () => Buffer.alloc(0));
@@ -155,38 +166,49 @@ describe('transaction benchmarks', () => {
           value: compressed[0].length,
           unit: 'bytes',
         });
+        results.push({
+          name: `Tx Compression/${txType}/${name}/Uncompressed Size`,
+          value: txAsBuffer.length,
+          unit: 'bytes',
+        });
+        results.push({
+          name: `Tx Compression/${txType}/${name}/Chonk Proof Size`,
+          value: proofSize,
+          unit: 'bytes',
+        });
+        results.push({
+          name: `Tx Compression/${txType}/${name}/Chonk Proof Size Compressed`,
+          value: proofSizeCompressed,
+          unit: 'bytes',
+        });
       };
 
-      const privateTxAsBuffer = privateProvenTx.toBuffer();
-
       compressTx(
-        privateTxAsBuffer,
+        privateProvenTx,
         compressSync,
         (data: Buffer) => uncompressSync(data) as Buffer,
         'Snappy',
         'Private Transfer',
       );
-      compressTx(privateTxAsBuffer, zstdCompressSync, zstdDecompressSync, 'Zstd', 'Private Transfer');
-      compressTx(privateTxAsBuffer, deflateSync, inflateSync, 'Deflate', 'Private Transfer');
-      compressTx(privateTxAsBuffer, brotliCompressSync, brotliDecompressSync, 'Brotli', 'Private Transfer');
-
-      const publicTxAsBuffer = publicProvenTx.toBuffer();
+      compressTx(privateProvenTx, zstdCompressSync, zstdDecompressSync, 'Zstd', 'Private Transfer');
+      compressTx(privateProvenTx, deflateSync, inflateSync, 'Deflate', 'Private Transfer');
+      compressTx(privateProvenTx, brotliCompressSync, brotliDecompressSync, 'Brotli', 'Private Transfer');
 
       compressTx(
-        publicTxAsBuffer,
+        publicProvenTx,
         compressSync,
         (data: Buffer) => uncompressSync(data) as Buffer,
         'Snappy',
         'Public Transfer',
       );
-      compressTx(publicTxAsBuffer, zstdCompressSync, zstdDecompressSync, 'Zstd', 'Public Transfer');
-      compressTx(publicTxAsBuffer, deflateSync, inflateSync, 'Deflate', 'Public Transfer');
-      compressTx(publicTxAsBuffer, brotliCompressSync, brotliDecompressSync, 'Brotli', 'Public Transfer');
+      compressTx(publicProvenTx, zstdCompressSync, zstdDecompressSync, 'Zstd', 'Public Transfer');
+      compressTx(publicProvenTx, deflateSync, inflateSync, 'Deflate', 'Public Transfer');
+      compressTx(publicProvenTx, brotliCompressSync, brotliDecompressSync, 'Brotli', 'Public Transfer');
     },
     TIMEOUT,
   );
 
-  const runSingleProofVerificationTest = async (tx: ProvenTx, type: 'Private' | 'Public') => {
+  const runSingleProofVerificationTest = async (tx: Tx, type: 'Private' | 'Public') => {
     const numIterations = 20;
     const resultsArray: (IVCProofVerificationResult | undefined)[] = Array.from({ length: numIterations }).map(
       _ => undefined,

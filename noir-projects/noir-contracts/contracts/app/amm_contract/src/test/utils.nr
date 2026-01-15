@@ -1,9 +1,7 @@
 use crate::AMM;
 use aztec::{
     protocol_types::address::AztecAddress,
-    test::helpers::{
-        authwit::add_private_authwit_from_call_interface, test_environment::TestEnvironment,
-    },
+    test::helpers::{authwit::add_private_authwit_from_call, test_environment::TestEnvironment},
 };
 use token::Token;
 
@@ -63,7 +61,7 @@ pub(crate) unconstrained fn setup() -> (TestEnvironment, AztecAddress, AztecAddr
 }
 
 pub(crate) unconstrained fn add_liquidity(
-    env: &mut TestEnvironment,
+    env: TestEnvironment,
     amm_address: AztecAddress,
     token0_address: AztecAddress,
     token1_address: AztecAddress,
@@ -82,29 +80,21 @@ pub(crate) unconstrained fn add_liquidity(
     env.call_private(minter, token0.mint_to_private(liquidity_provider, amount0_max));
     env.call_private(minter, token1.mint_to_private(liquidity_provider, amount1_max));
 
-    let transfer0_call_interface = token0.transfer_to_public_and_prepare_private_balance_increase(
+    let transfer0_call = token0.transfer_to_public_and_prepare_private_balance_increase(
         liquidity_provider,
         amm_address,
         amount0_max,
         AUTHWIT_NONCE,
     );
-    add_private_authwit_from_call_interface(
-        liquidity_provider,
-        amm_address,
-        transfer0_call_interface,
-    );
+    add_private_authwit_from_call(env, liquidity_provider, amm_address, transfer0_call);
 
-    let transfer1_call_interface = token1.transfer_to_public_and_prepare_private_balance_increase(
+    let transfer1_call = token1.transfer_to_public_and_prepare_private_balance_increase(
         liquidity_provider,
         amm_address,
         amount1_max,
         AUTHWIT_NONCE,
     );
-    add_private_authwit_from_call_interface(
-        liquidity_provider,
-        amm_address,
-        transfer1_call_interface,
-    );
+    add_private_authwit_from_call(env, liquidity_provider, amm_address, transfer1_call);
 
     env.call_private(
         liquidity_provider,
@@ -113,7 +103,7 @@ pub(crate) unconstrained fn add_liquidity(
 }
 
 pub(crate) unconstrained fn remove_liquidity(
-    env: &mut TestEnvironment,
+    env: TestEnvironment,
     amm_address: AztecAddress,
     liquidity_token_address: AztecAddress,
     liquidity_provider: AztecAddress,
@@ -124,16 +114,17 @@ pub(crate) unconstrained fn remove_liquidity(
     let liquidity_token = Token::at(liquidity_token_address);
     let amm = AMM::at(amm_address);
 
-    let transfer_liquidity_call_interface = liquidity_token.transfer_to_public(
+    let transfer_liquidity_call = liquidity_token.transfer_to_public(
         liquidity_provider,
         amm_address,
         liquidity_amount,
         AUTHWIT_NONCE,
     );
-    add_private_authwit_from_call_interface(
+    add_private_authwit_from_call(
+        env,
         liquidity_provider,
         amm_address,
-        transfer_liquidity_call_interface,
+        transfer_liquidity_call,
     );
 
     env.call_private(

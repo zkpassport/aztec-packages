@@ -1,25 +1,28 @@
-import type { Fr } from '@aztec/foundation/fields';
-import type { FieldsOf } from '@aztec/foundation/types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import type { AuthWitness } from '@aztec/stdlib/auth-witness';
-import type { AztecAddress } from '@aztec/stdlib/aztec-address';
 import type { GasSettings } from '@aztec/stdlib/gas';
-import type { TxExecutionRequest } from '@aztec/stdlib/tx';
+import type { ExecutionPayload, TxExecutionRequest } from '@aztec/stdlib/tx';
 
-import type { ExecutionPayload } from './payload.js';
+import { z } from 'zod';
 
 /**
- * General options for the tx execution.
+ * Information on the connected chain. Used by wallets when constructing transactions to protect against replay
+ * attacks.
  */
-export type TxExecutionOptions = {
-  /** Whether the transaction can be cancelled. */
-  cancellable?: boolean;
-  /**
-   * A nonce to inject into the app payload of the transaction. When used with cancellable=true, this nonce will be
-   * used to compute a nullifier that allows cancelling this transaction by submitting a new one with the same nonce
-   * but higher fee. The nullifier ensures only one transaction can succeed.
-   */
-  txNonce?: Fr;
+export type ChainInfo = {
+  /** The L1 chain id */
+  chainId: Fr;
+  /** The version of the rollup  */
+  version: Fr;
 };
+
+/**
+ * Zod schema for ChainInfo
+ */
+export const ChainInfoSchema = z.object({
+  chainId: Fr.schema,
+  version: Fr.schema,
+});
 
 /**
  * Creates transaction execution requests out of a set of function calls, a fee payment method and
@@ -29,14 +32,14 @@ export interface EntrypointInterface {
   /**
    * Generates an execution request out of set of function calls.
    * @param exec - The execution intents to be run.
-   * @param fee - The fee options for the transaction.
-   * @param options - Transaction nonce and whether the transaction is cancellable.
+   * @param gasSettings - The gas settings for the transaction.
+   * @param options - Miscellaneous tx options that enable/disable features of the entrypoint
    * @returns The authenticated transaction execution request.
    */
   createTxExecutionRequest(
     exec: ExecutionPayload,
-    fee: FeeOptions,
-    options: TxExecutionOptions,
+    gasSettings: GasSettings,
+    options?: any,
   ): Promise<TxExecutionRequest>;
 }
 
@@ -49,48 +52,3 @@ export interface AuthWitnessProvider {
    */
   createAuthWit(messageHash: Fr | Buffer): Promise<AuthWitness>;
 }
-
-/**
- * Holds information about how the fee for a transaction is to be paid.
- */
-export interface FeePaymentMethod {
-  /** The asset used to pay the fee. */
-  getAsset(): Promise<AztecAddress>;
-  /**
-   * Returns the data to be added to the final execution request
-   * to pay the fee in the given asset
-   * @param gasSettings - The gas limits and max fees.
-   * @returns The function calls to pay the fee.
-   */
-  getExecutionPayload(gasSettings: GasSettings): Promise<ExecutionPayload>;
-  /**
-   * The expected fee payer for this tx.
-   */
-  getFeePayer(): Promise<AztecAddress>;
-}
-
-/**
- * Fee payment options for a transaction.
- */
-export type FeeOptions = {
-  /** The fee payment method to use */
-  paymentMethod: FeePaymentMethod;
-  /** The gas settings */
-  gasSettings: GasSettings;
-};
-
-// docs:start:user_fee_options
-/** Fee options as set by a user. */
-export type UserFeeOptions = {
-  /** The fee payment method to use */
-  paymentMethod?: FeePaymentMethod;
-  /** The gas settings */
-  gasSettings?: Partial<FieldsOf<GasSettings>>;
-  /** Percentage to pad the base fee by, if empty, defaults to 0.5 */
-  baseFeePadding?: number;
-  /** Whether to run an initial simulation of the tx with high gas limit to figure out actual gas settings. */
-  estimateGas?: boolean;
-  /** Percentage to pad the estimated gas limits by, if empty, defaults to 0.1. Only relevant if estimateGas is set. */
-  estimatedGasPadding?: number;
-};
-// docs:end:user_fee_options

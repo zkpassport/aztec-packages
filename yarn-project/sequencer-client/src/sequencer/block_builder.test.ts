@@ -1,7 +1,8 @@
-import { DefaultL1ContractsConfig } from '@aztec/ethereum';
+import { DefaultL1ContractsConfig } from '@aztec/ethereum/config';
+import { BlockNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { timesParallel } from '@aztec/foundation/collection';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import { createLogger } from '@aztec/foundation/log';
 import { TestDateProvider } from '@aztec/foundation/timer';
 import type { PublicProcessor } from '@aztec/simulator/server';
@@ -39,8 +40,8 @@ describe('BlockBuilder', () => {
   const chainId: number = 12345;
   const version: number = 1;
   let hash: string;
-  let lastBlockNumber: number;
-  let newBlockNumber: number;
+  let lastBlockNumber: BlockNumber;
+  let newBlockNumber: BlockNumber;
   let globalVariables: GlobalVariables;
   let worldState: MockProxy<WorldStateSynchronizer>;
   let fork: MockProxy<MerkleTreeWriteOperations>;
@@ -80,14 +81,14 @@ describe('BlockBuilder', () => {
     feeRecipient = await AztecAddress.random();
     hash = Fr.ZERO.toString();
     initialBlockHeader = BlockHeader.empty();
-    lastBlockNumber = 0;
-    newBlockNumber = lastBlockNumber + 1;
+    lastBlockNumber = BlockNumber.ZERO;
+    newBlockNumber = BlockNumber(lastBlockNumber + 1);
     newSlotNumber = newBlockNumber + 1;
     globalVariables = new GlobalVariables(
       new Fr(chainId),
       new Fr(version),
       newBlockNumber,
-      new Fr(newSlotNumber),
+      SlotNumber(newSlotNumber),
       /*timestamp=*/ 0n,
       coinbase,
       feeRecipient,
@@ -106,7 +107,7 @@ describe('BlockBuilder', () => {
     fork = mock<MerkleTreeWriteOperations>({
       getInitialHeader: () => initialBlockHeader,
       getTreeInfo: (treeId: MerkleTreeId) =>
-        Promise.resolve({ treeId, root: Fr.random().toBuffer(), size: 64n, depth: 5 }),
+        Promise.resolve({ treeId, root: Fr.random().toBuffer(), size: 1024n, depth: 10 }),
       findLeafIndices: (_treeId: MerkleTreeId, _values: any[]) => Promise.resolve([undefined]),
       getStateReference: () => Promise.resolve(makeStateReference()),
     });
@@ -120,8 +121,8 @@ describe('BlockBuilder', () => {
         syncSummary: {
           latestBlockNumber: lastBlockNumber,
           latestBlockHash: hash,
-          finalizedBlockNumber: 0,
-          oldestHistoricBlockNumber: 0,
+          finalizedBlockNumber: BlockNumber.ZERO,
+          oldestHistoricBlockNumber: BlockNumber.ZERO,
           treesAreSynched: true,
         },
       } satisfies WorldStateSynchronizerStatus),
@@ -162,7 +163,7 @@ describe('BlockBuilder', () => {
     expect(publicProcessor.process).toHaveBeenCalledWith(iterator, {}, validator);
     logger.info('Built Block', blockResult.block);
     expect(blockResult.block.header.globalVariables.blockNumber).toBe(newBlockNumber);
-    expect(blockResult.block.header.globalVariables.slotNumber.toNumber()).toBe(newSlotNumber);
+    expect(blockResult.block.header.globalVariables.slotNumber).toBe(newSlotNumber);
     expect(blockResult.block.header.globalVariables.coinbase.toString()).toBe(coinbase.toString());
     expect(blockResult.block.header.globalVariables.feeRecipient.toString()).toBe(feeRecipient.toString());
     expect(blockResult.block.header.globalVariables.gasFees).toEqual(GasFees.empty());

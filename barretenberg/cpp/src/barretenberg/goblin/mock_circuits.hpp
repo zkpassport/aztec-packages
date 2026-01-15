@@ -19,38 +19,44 @@
 #include "barretenberg/stdlib/hash/sha256/sha256.hpp"
 #include "barretenberg/stdlib/honk_verifier/ultra_recursive_verifier.hpp"
 #include "barretenberg/stdlib/primitives/curves/secp256k1.hpp"
-#include "barretenberg/stdlib/protogalaxy_verifier/protogalaxy_recursive_verifier.hpp"
 #include "barretenberg/stdlib/special_public_inputs/special_public_inputs.hpp"
 #include "barretenberg/stdlib_circuit_builders/mock_circuits.hpp"
 
 namespace bb {
 
+/**
+ * @brief Generate a test circuit using SHA256 compression (sha256_block)
+ *
+ * @details Creates circuit constraints by iteratively calling sha256_block,
+ * feeding the output as h_init for the next iteration. This tests the
+ * primitive exposed to ACIR (Sha256Compression opcode).
+ */
 template <typename Builder> void generate_sha256_test_circuit(Builder& builder, size_t num_iterations)
 {
-    std::string in;
-    in.resize(32);
-    stdlib::byte_array<Builder> input(&builder, in);
+    using field_ct = stdlib::field_t<Builder>;
+    using witness_ct = stdlib::witness_t<Builder>;
+
+    // SHA-256 initial hash values (FIPS 180-4 section 5.3.3)
+    constexpr std::array<uint32_t, 8> H_INIT = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                                                 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
+
+    // Initialize h_init as witnesses
+    std::array<field_ct, 8> h_init;
+    for (size_t i = 0; i < 8; i++) {
+        h_init[i] = witness_ct(&builder, H_INIT[i]);
+    }
+
+    // Create a block of zeros as witnesses
+    std::array<field_ct, 16> block;
+    for (size_t i = 0; i < 16; i++) {
+        block[i] = witness_ct(&builder, 0);
+    }
+
+    // Iterate: feed output of compression back as h_init for next round
     for (size_t i = 0; i < num_iterations; i++) {
-        input = stdlib::SHA256<Builder>::hash(input);
+        h_init = stdlib::SHA256<Builder>::sha256_block(h_init, block);
     }
 }
-
-/**
- * @brief An arbitrary but small-ish structuring that can be used for testing with non-trivial circuits in cases when
- * they overflow
- */
-static constexpr TraceStructure SMALL_TEST_STRUCTURE_FOR_OVERFLOWS{ .ecc_op = 1 << 14,
-                                                                    .busread = 1 << 14,
-                                                                    .lookup = 1 << 14,
-                                                                    .pub_inputs = 1 << 14,
-                                                                    .arithmetic = 1 << 15,
-                                                                    .delta_range = 1 << 14,
-                                                                    .elliptic = 1 << 14,
-                                                                    .memory = 1 << 14,
-                                                                    .nnf = 1 << 7,
-                                                                    .poseidon2_external = 1 << 14,
-                                                                    .poseidon2_internal = 1 << 15,
-                                                                    .overflow = 0 };
 
 class GoblinMockCircuits {
   public:
@@ -99,7 +105,6 @@ class GoblinMockCircuits {
         // MegaHonk circuits (where we don't explicitly need to add goblin ops), in IVC merge proving happens prior to
         // folding where the absense of goblin ecc ops will result in zero commitments.
         MockCircuits::construct_goblin_ecc_op_circuit(builder);
-        bb::stdlib::recursion::honk::AppIO::add_default(builder);
     }
 
     /**
@@ -149,12 +154,16 @@ class GoblinMockCircuits {
 
     static void construct_and_merge_mock_circuits(Goblin& goblin, const size_t num_circuits = 3)
     {
+        using Fq = curve::Grumpkin::ScalarField;
         for (size_t idx = 0; idx < num_circuits - 1; ++idx) {
             MegaCircuitBuilder builder{ goblin.op_queue };
             if (idx == num_circuits - 2) {
                 // Last circuit appended needs to begin with a no-op for translator to be shiftable
                 builder.queue_ecc_no_op();
+                // Add random ops at START for Translator ZK (lands at beginning of op queue table)
                 randomise_op_queue(builder, TranslatorCircuitBuilder::NUM_RANDOM_OPS_START);
+                // Add hiding op for ECCVM ZK (prepended to ECCVM ops at row 1)
+                builder.queue_ecc_hiding_op(Fq::random_element(), Fq::random_element());
             }
             construct_simple_circuit(builder);
             goblin.prove_merge();
@@ -163,13 +172,14 @@ class GoblinMockCircuits {
         }
         MegaCircuitBuilder builder{ goblin.op_queue };
         GoblinMockCircuits::construct_simple_circuit(builder);
+        // Add random ops at END for Translator ZK
         randomise_op_queue(builder, TranslatorCircuitBuilder::NUM_RANDOM_OPS_END);
     }
 
     /**
      * @brief Construct a mock kernel circuit
      * @details Construct an arbitrary circuit meant to represent the aztec private function execution kernel. Recursive
-     * folding verification is handled internally by ClientIvc, not in the kernel.
+     * folding verification is handled internally by Chonk, not in the kernel.
      *
      * @param builder
      * @param function_fold_proof

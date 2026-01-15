@@ -1,23 +1,24 @@
-// docs:start:cross_chain_test_harness
+import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { EthAddress } from '@aztec/aztec.js/addresses';
+import { AuthWitness } from '@aztec/aztec.js/authorization';
 import {
-  AuthWitness,
-  type AztecAddress,
-  type AztecNode,
-  EthAddress,
-  type FieldsOf,
-  Fr,
   type L1TokenManager,
   L1TokenPortalManager,
   type L2AmountClaim,
   type L2AmountClaimWithRecipient,
-  type Logger,
-  type PXE,
-  type SiblingPath,
-  type TxReceipt,
-  type Wallet,
-  retryUntil,
-} from '@aztec/aztec.js';
-import { type ExtendedViemWalletClient, type L1ContractAddresses, deployL1Contract } from '@aztec/ethereum';
+} from '@aztec/aztec.js/ethereum';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import type { SiblingPath } from '@aztec/aztec.js/trees';
+import type { TxReceipt } from '@aztec/aztec.js/tx';
+import type { Wallet } from '@aztec/aztec.js/wallet';
+import { deployL1Contract } from '@aztec/ethereum/deploy-l1-contracts';
+import type { L1ContractAddresses } from '@aztec/ethereum/l1-contract-addresses';
+import type { ExtendedViemWalletClient } from '@aztec/ethereum/types';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { retryUntil } from '@aztec/foundation/retry';
+import type { FieldsOf } from '@aztec/foundation/types';
 import { TestERC20Abi, TokenPortalAbi, TokenPortalBytecode } from '@aztec/l1-artifacts';
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
 import { TokenBridgeContract } from '@aztec/noir-contracts.js/TokenBridge';
@@ -26,7 +27,6 @@ import { type Hex, getContract } from 'viem';
 
 import { mintTokensToPrivate } from '../fixtures/token_utils.js';
 
-// docs:start:deployAndInitializeTokenAndBridgeContracts
 /**
  * Deploy L1 token and portal, initialize portal, deploy a non native l2 token contract, its L2 bridge contract and attach is to the portal.
  * @param wallet - the wallet instance
@@ -111,7 +111,6 @@ export async function deployAndInitializeTokenAndBridgeContracts(
 
   return { token, bridge, tokenPortalAddress, tokenPortal, underlyingERC20 };
 }
-// docs:end:deployAndInitializeTokenAndBridgeContracts
 
 export type CrossChainContext = {
   l2Token: AztecAddress;
@@ -131,7 +130,6 @@ export type CrossChainContext = {
 export class CrossChainTestHarness {
   static async new(
     aztecNode: AztecNode,
-    pxeService: PXE,
     l1Client: ExtendedViemWalletClient,
     wallet: Wallet,
     ownerAddress: AztecAddress,
@@ -139,7 +137,7 @@ export class CrossChainTestHarness {
     underlyingERC20Address: EthAddress,
   ): Promise<CrossChainTestHarness> {
     const ethAccount = EthAddress.fromString((await l1Client.getAddresses())[0]);
-    const l1ContractAddresses = (await pxeService.getNodeInfo()).l1ContractAddresses;
+    const l1ContractAddresses = (await aztecNode.getNodeInfo()).l1ContractAddresses;
 
     // Deploy and initialize all required contracts
     logger.info('Deploying and initializing token, portal and its bridge...');
@@ -154,7 +152,6 @@ export class CrossChainTestHarness {
 
     return new CrossChainTestHarness(
       aztecNode,
-      pxeService,
       logger,
       token,
       bridge,
@@ -174,8 +171,6 @@ export class CrossChainTestHarness {
   constructor(
     /** Aztec node instance. */
     public aztecNode: AztecNode,
-    /** Private eXecution Environment (PXE). */
-    public pxeService: PXE,
     /** Logger. */
     public logger: Logger,
 
@@ -329,7 +324,7 @@ export class CrossChainTestHarness {
 
   withdrawFundsFromBridgeOnL1(
     amount: bigint,
-    blockNumber: number | bigint,
+    blockNumber: BlockNumber,
     messageIndex: bigint,
     siblingPath: SiblingPath<number>,
   ) {
@@ -387,4 +382,3 @@ export class CrossChainTestHarness {
     };
   }
 }
-// docs:end:cross_chain_test_harness

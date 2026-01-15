@@ -1,8 +1,10 @@
 import type { EpochCache } from '@aztec/epoch-cache';
-import { Secp256k1Signer } from '@aztec/foundation/crypto';
-import { Fr } from '@aztec/foundation/fields';
+import { SlotNumber } from '@aztec/foundation/branded-types';
+import { Secp256k1Signer } from '@aztec/foundation/crypto/secp256k1-signer';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { PeerErrorSeverity } from '@aztec/stdlib/p2p';
 import { makeBlockProposal, makeL2BlockHeader } from '@aztec/stdlib/testing';
+import { TxHash } from '@aztec/stdlib/tx';
 
 import { mock } from 'jest-mock-extended';
 
@@ -14,7 +16,7 @@ describe('BlockProposalValidator', () => {
 
   beforeEach(() => {
     epochCache = mock<EpochCache>();
-    validator = new BlockProposalValidator(epochCache);
+    validator = new BlockProposalValidator(epochCache, { txsPermitted: true });
   });
 
   it('returns high tolerance error if slot number is not current or next slot', async () => {
@@ -25,8 +27,8 @@ describe('BlockProposalValidator', () => {
 
     // Mock epoch cache to return different slot numbers
     (epochCache.getProposerAttesterAddressInCurrentOrNextSlot as jest.Mock).mockResolvedValue({
-      currentSlot: 98n,
-      nextSlot: 99n,
+      currentSlot: SlotNumber(98),
+      nextSlot: SlotNumber(99),
       currentProposer: Fr.random(),
       nextProposer: Fr.random(),
     });
@@ -48,8 +50,8 @@ describe('BlockProposalValidator', () => {
 
     // Mock epoch cache to return valid slots but different proposers
     (epochCache.getProposerAttesterAddressInCurrentOrNextSlot as jest.Mock).mockResolvedValue({
-      currentSlot: 100n,
-      nextSlot: 101n,
+      currentSlot: SlotNumber(100),
+      nextSlot: SlotNumber(101),
       currentProposer: currentProposer.address,
       nextProposer: nextProposer.address,
     });
@@ -71,8 +73,8 @@ describe('BlockProposalValidator', () => {
 
     // Mock epoch cache to return valid slots but different proposers
     (epochCache.getProposerAttesterAddressInCurrentOrNextSlot as jest.Mock).mockResolvedValue({
-      currentSlot: 100n,
-      nextSlot: 101n,
+      currentSlot: SlotNumber(100),
+      nextSlot: SlotNumber(101),
       currentProposer: currentProposer.address,
       nextProposer: nextProposer.address,
     });
@@ -93,8 +95,8 @@ describe('BlockProposalValidator', () => {
 
     // Mock epoch cache to return valid slots but different proposers
     (epochCache.getProposerAttesterAddressInCurrentOrNextSlot as jest.Mock).mockResolvedValue({
-      currentSlot: 100n,
-      nextSlot: 101n,
+      currentSlot: SlotNumber(100),
+      nextSlot: SlotNumber(101),
       currentProposer: currentProposer.address,
       nextProposer: nextProposer.address,
     });
@@ -115,8 +117,8 @@ describe('BlockProposalValidator', () => {
 
     // Mock epoch cache for valid case
     (epochCache.getProposerAttesterAddressInCurrentOrNextSlot as jest.Mock).mockResolvedValue({
-      currentSlot: 100n,
-      nextSlot: 101n,
+      currentSlot: SlotNumber(100),
+      nextSlot: SlotNumber(101),
       currentProposer: currentProposer.address,
       nextProposer: nextProposer.address,
     });
@@ -137,13 +139,84 @@ describe('BlockProposalValidator', () => {
 
     // Mock epoch cache for valid case
     (epochCache.getProposerAttesterAddressInCurrentOrNextSlot as jest.Mock).mockResolvedValue({
-      currentSlot: 100n,
-      nextSlot: 101n,
+      currentSlot: SlotNumber(100),
+      nextSlot: SlotNumber(101),
       currentProposer: currentProposer.address,
       nextProposer: nextProposer.address,
     });
 
     const result = await validator.validate(mockProposal);
     expect(result).toBeUndefined();
+  });
+
+  describe('transaction permission validation', () => {
+    it('returns mid tolerance error if txs not permitted and proposal contains txHashes', async () => {
+      const currentProposer = Secp256k1Signer.random();
+      const validatorWithTxsDisabled = new BlockProposalValidator(epochCache, { txsPermitted: false });
+
+      // Create a block proposal with transaction hashes
+      const mockProposal = makeBlockProposal({
+        header: makeL2BlockHeader(1, 100, 100),
+        signer: currentProposer,
+        txHashes: [TxHash.random(), TxHash.random()], // Include some tx hashes
+      });
+
+      // Mock epoch cache to return valid proposer (so only tx permission check fails)
+      (epochCache.getProposerAttesterAddressInCurrentOrNextSlot as jest.Mock).mockResolvedValue({
+        currentSlot: SlotNumber(100),
+        nextSlot: SlotNumber(101),
+        currentProposer: currentProposer.address,
+        nextProposer: Fr.random(),
+      });
+
+      const result = await validatorWithTxsDisabled.validate(mockProposal);
+      expect(result).toBe(PeerErrorSeverity.MidToleranceError);
+    });
+
+    it('returns undefined if txs not permitted but proposal has no txHashes', async () => {
+      const currentProposer = Secp256k1Signer.random();
+      const validatorWithTxsDisabled = new BlockProposalValidator(epochCache, { txsPermitted: false });
+
+      // Create a block proposal without transaction hashes
+      const mockProposal = makeBlockProposal({
+        header: makeL2BlockHeader(1, 100, 100),
+        signer: currentProposer,
+        txHashes: [], // Empty tx hashes array
+      });
+
+      // Mock epoch cache for valid case
+      (epochCache.getProposerAttesterAddressInCurrentOrNextSlot as jest.Mock).mockResolvedValue({
+        currentSlot: SlotNumber(100),
+        nextSlot: SlotNumber(101),
+        currentProposer: currentProposer.address,
+        nextProposer: Fr.random(),
+      });
+
+      const result = await validatorWithTxsDisabled.validate(mockProposal);
+      expect(result).toBeUndefined();
+    });
+
+    it('returns undefined if txs permitted and proposal contains txHashes', async () => {
+      const currentProposer = Secp256k1Signer.random();
+      // validator already created with txsPermitted = true in beforeEach
+
+      // Create a block proposal with transaction hashes
+      const mockProposal = makeBlockProposal({
+        header: makeL2BlockHeader(1, 100, 100),
+        signer: currentProposer,
+        txHashes: [TxHash.random(), TxHash.random()], // Include some tx hashes
+      });
+
+      // Mock epoch cache for valid case
+      (epochCache.getProposerAttesterAddressInCurrentOrNextSlot as jest.Mock).mockResolvedValue({
+        currentSlot: SlotNumber(100),
+        nextSlot: SlotNumber(101),
+        currentProposer: currentProposer.address,
+        nextProposer: Fr.random(),
+      });
+
+      const result = await validator.validate(mockProposal);
+      expect(result).toBeUndefined();
+    });
   });
 });

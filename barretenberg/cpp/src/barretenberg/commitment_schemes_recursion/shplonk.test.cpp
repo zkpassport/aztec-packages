@@ -4,7 +4,6 @@
 #include "barretenberg/stdlib/primitives/curves/bn254.hpp"
 #include "barretenberg/stdlib/primitives/curves/grumpkin.hpp"
 #include "barretenberg/stdlib/proof/proof.hpp"
-#include "barretenberg/stdlib/transcript/transcript.hpp"
 #include <gtest/gtest.h>
 
 using namespace bb;
@@ -72,7 +71,7 @@ TYPED_TEST(ShplonkRecursionTest, Simple)
     using ShplonkVerifier = ShplonkVerifier_<Curve>;
     using Fr = typename Curve::ScalarField;
     using Commitment = typename Curve::AffineElement;
-    using Transcript = bb::BaseTranscript<stdlib::recursion::honk::StdlibTranscriptParams<Builder>>;
+    using Transcript = StdlibTranscript<Builder>;
     using StdlibProof = stdlib::Proof<Builder>;
 
     // Prover transcript
@@ -96,8 +95,7 @@ TYPED_TEST(ShplonkRecursionTest, Simple)
         this->native_to_stdlib_opening_claims(&builder, native_verifier_claims, native_verifier_claims.size());
 
     // Shplonk verifier functionality
-    auto verifier_transcript = std::make_shared<Transcript>();
-    verifier_transcript->load_proof(stdlib_proof);
+    auto verifier_transcript = std::make_shared<Transcript>(stdlib_proof);
     [[maybe_unused]] auto _ = verifier_transcript->template receive_from_prover<Fr>("Init");
     [[maybe_unused]] auto batched_verifier_claim =
         ShplonkVerifier::reduce_verification(Commitment::one(&builder), stdlib_opening_claims, verifier_transcript);
@@ -116,7 +114,7 @@ TYPED_TEST(ShplonkRecursionTest, LinearlyDependent)
     using GroupElement = Curve::Element;
     using Commitment = typename Curve::AffineElement;
     using OpeningClaim = OpeningClaim<Curve>;
-    using Transcript = bb::BaseTranscript<stdlib::recursion::honk::StdlibTranscriptParams<Builder>>;
+    using Transcript = StdlibTranscript<Builder>;
     using StdlibProof = stdlib::Proof<Builder>;
 
     // Prover transcript
@@ -170,8 +168,7 @@ TYPED_TEST(ShplonkRecursionTest, LinearlyDependent)
         // Opening claim for the linear combination
         stdlib_opening_claims.emplace_back(OpeningClaim({ r, eval }, commit));
 
-        auto verifier_transcript = std::make_shared<Transcript>();
-        verifier_transcript->load_proof(stdlib_proof);
+        auto verifier_transcript = std::make_shared<Transcript>(stdlib_proof);
         [[maybe_unused]] auto _ = verifier_transcript->template receive_from_prover<Fr>("Init");
         [[maybe_unused]] auto batched_verifier_claim =
             ShplonkVerifier::reduce_verification(Commitment::one(&builder), stdlib_opening_claims, verifier_transcript);
@@ -179,7 +176,7 @@ TYPED_TEST(ShplonkRecursionTest, LinearlyDependent)
         EXPECT_TRUE(CircuitChecker::check(builder));
 
         if constexpr (std::is_same_v<Builder, UltraCircuitBuilder>) {
-            info("Num gates UltraCircuitBuilder (non-efficient way: size-5 MSM + size-2 MSM): ", builder.num_gates);
+            info("Num gates UltraCircuitBuilder (non-efficient way: size-5 MSM + size-2 MSM): ", builder.num_gates());
         } else if constexpr (std::is_same_v<Builder, MegaCircuitBuilder>) {
             info("Num MSM rows MegaCircuitBuilder (non-efficient way: size-5 MSM + size-2 MSM): ",
                  builder.op_queue->get_num_rows());
@@ -219,8 +216,7 @@ TYPED_TEST(ShplonkRecursionTest, LinearlyDependent)
         };
 
         // Shplonk verifier functionality - cheap way
-        auto verifier_transcript = std::make_shared<Transcript>();
-        verifier_transcript->load_proof(stdlib_proof);
+        auto verifier_transcript = std::make_shared<Transcript>(stdlib_proof);
         [[maybe_unused]] auto _ = verifier_transcript->template receive_from_prover<Fr>("Init");
 
         ShplonkVerifier verifier(stdlib_commitments, verifier_transcript, native_opening_claims.size());
@@ -232,7 +228,7 @@ TYPED_TEST(ShplonkRecursionTest, LinearlyDependent)
         EXPECT_TRUE(CircuitChecker::check(builder));
 
         if constexpr (std::is_same_v<Builder, UltraCircuitBuilder>) {
-            info("Num gates UltraCircuitBuilder (efficient way: size-4 MSM): ", builder.num_gates);
+            info("Num gates UltraCircuitBuilder (efficient way: size-4 MSM): ", builder.num_gates());
         } else if constexpr (std::is_same_v<Builder, MegaCircuitBuilder>) {
             info("Num MSM rows MegaCircuitBuilder (efficient way: size-4 MSM): ", builder.op_queue->get_num_rows());
         }

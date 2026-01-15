@@ -1,5 +1,6 @@
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
-import { type Operator, getL1ContractsConfigEnvVars } from '@aztec/ethereum';
+import { getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
+import type { Operator } from '@aztec/ethereum/deploy-l1-contracts';
 import type { EthAddress } from '@aztec/foundation/eth-address';
 import type { LogFn, Logger } from '@aztec/foundation/log';
 import { getGenesisValues } from '@aztec/world-state/testing';
@@ -20,6 +21,7 @@ export async function deployNewRollup(
   json: boolean,
   initialValidators: Operator[],
   realVerifier: boolean,
+  createVerificationJson: string | false,
   log: LogFn,
   debugLogger: Logger,
 ) {
@@ -43,6 +45,7 @@ export async function deployNewRollup(
     fundingNeeded,
     config,
     realVerifier,
+    createVerificationJson,
     debugLogger,
   );
 

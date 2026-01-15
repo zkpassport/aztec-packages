@@ -5,8 +5,10 @@
 // =====================
 
 #pragma once
+#include <sstream>
 #include <utility>
 
+#include "barretenberg/crypto/sha256/sha256.hpp"
 #include "barretenberg/honk/execution_trace/mega_execution_trace.hpp"
 #include "barretenberg/op_queue/ecc_op_queue.hpp"
 #include "databus.hpp"
@@ -21,7 +23,6 @@ template <typename FF> class MegaCircuitBuilder_ : public UltraCircuitBuilder_<M
   public:
     using ExecutionTrace = MegaExecutionTraceBlocks;
 
-    static constexpr CircuitType CIRCUIT_TYPE = CircuitType::ULTRA;
     static constexpr size_t DEFAULT_NON_NATIVE_FIELD_LIMB_BITS =
         UltraCircuitBuilder_<MegaExecutionTraceBlocks>::DEFAULT_NON_NATIVE_FIELD_LIMB_BITS;
 
@@ -40,6 +41,7 @@ template <typename FF> class MegaCircuitBuilder_ : public UltraCircuitBuilder_<M
     ecc_op_tuple queue_ecc_eq(bool in_finalize = true);
     ecc_op_tuple queue_ecc_no_op();
     void queue_ecc_random_op();
+    void queue_ecc_hiding_op(const curve::BN254::BaseField& Px, const curve::BN254::BaseField& Py);
 
   private:
     ecc_op_tuple populate_ecc_op_wires(const UltraOp& ultra_op, bool in_finalize = false);
@@ -49,8 +51,9 @@ template <typename FF> class MegaCircuitBuilder_ : public UltraCircuitBuilder_<M
 
   public:
     MegaCircuitBuilder_(const size_t size_hint = 0,
-                        std::shared_ptr<ECCOpQueue> op_queue_in = std::make_shared<ECCOpQueue>())
-        : UltraCircuitBuilder_<MegaExecutionTraceBlocks>(size_hint)
+                        std::shared_ptr<ECCOpQueue> op_queue_in = std::make_shared<ECCOpQueue>(),
+                        bool is_write_vk_mode = false)
+        : UltraCircuitBuilder_<MegaExecutionTraceBlocks>(size_hint, is_write_vk_mode)
         , op_queue(std::move(op_queue_in))
     {
         BB_BENCH();
@@ -72,19 +75,22 @@ template <typename FF> class MegaCircuitBuilder_ : public UltraCircuitBuilder_<M
      * @param op_queue_in Op queue to which goblinized group ops will be added
      * @param witness_values witnesses values known to acir
      * @param public_inputs indices of public inputs in witness array
-     * @param varnum number of known witness
+     * @param is_write_vk_mode true if the builder is used to generate the vk of a circuit
      *
-     * @note The size of witness_values may be less than varnum. The former is the set of actual witness values known at
-     * the time of acir generation. The former may be larger and essentially acounts for placeholders for witnesses that
-     * we know will exist but whose values are not known during acir generation. Both are in general less than the total
-     * number of variables/witnesses that might be present for a circuit generated from acir, since many gates will
-     * depend on the details of the bberg implementation (or more generally on the backend used to process acir).
+     * @note witness_values is the vector of witness values known at the time of acir generation. It is filled with
+     * witness values which are interleaved with zeros when witnesses are optimized away.
+     *
+     * @note The length of the witness vector is in general less than total number of variables/witnesses that might be
+     * present for a circuit generated from acir, since many gates will depend on the details of the bberg
+     * implementation (or more generally on the backend used to process acir).
+     *
      */
     MegaCircuitBuilder_(std::shared_ptr<ECCOpQueue> op_queue_in,
-                        auto& witness_values,
+                        const std::vector<FF>& witness_values,
                         const std::vector<uint32_t>& public_inputs,
-                        size_t varnum)
-        : UltraCircuitBuilder_<MegaExecutionTraceBlocks>(/*size_hint=*/0, witness_values, public_inputs, varnum)
+                        const bool is_write_vk_mode)
+        : UltraCircuitBuilder_<MegaExecutionTraceBlocks>(
+              /*size_hint=*/0, witness_values, public_inputs, is_write_vk_mode)
         , op_queue(std::move(op_queue_in))
     {
         // Instantiate the subtable to be populated with goblin ecc ops from this circuit. The merge settings indicate
@@ -125,60 +131,6 @@ template <typename FF> class MegaCircuitBuilder_ : public UltraCircuitBuilder_<M
     void add_mega_gates_to_ensure_all_polys_are_non_zero();
 
     size_t get_num_constant_gates() const override { return 0; }
-
-    /**
-     * @brief Get the final number of gates in a circuit, which consists of the sum of:
-     * 1) Current number number of actual gates
-     * 2) Number of public inputs, as we'll need to add a gate for each of them
-     * 3) Number of Rom array-associated gates
-     * 4) Number of range-list associated gates
-     * 5) Number of non-native field multiplication gates.
-     *
-     * @return size_t
-     */
-    size_t get_estimated_num_finalized_gates() const override
-    {
-        auto num_ultra_gates = UltraCircuitBuilder_<MegaExecutionTraceBlocks>::get_estimated_num_finalized_gates();
-        auto num_goblin_ecc_op_gates = this->blocks.ecc_op.size();
-        return num_ultra_gates + num_goblin_ecc_op_gates;
-    }
-
-    /**
-     * @brief Dynamically compute the number of gates added by the "add_gates_to_ensure_all_polys_are_non_zero" method
-     * @note This does NOT add the gates to the present builder
-     *
-     */
-    size_t get_num_gates_added_to_ensure_nonzero_polynomials()
-    {
-        MegaCircuitBuilder_<FF> builder; // instantiate new builder
-
-        size_t num_gates_prior = builder.get_estimated_num_finalized_gates();
-        builder.add_ultra_and_mega_gates_to_ensure_all_polys_are_non_zero();
-        size_t num_gates_post = builder.get_estimated_num_finalized_gates(); // accounts for finalization gates
-
-        return num_gates_post - num_gates_prior;
-    }
-
-    /**x
-     * @brief Print the number and composition of gates in the circuit
-     *
-     */
-    void print_num_estimated_finalized_gates() const override
-    {
-        size_t count = 0;
-        size_t rangecount = 0;
-        size_t romcount = 0;
-        size_t ramcount = 0;
-        size_t nnfcount = 0;
-        UltraCircuitBuilder_<MegaExecutionTraceBlocks>::get_num_estimated_gates_split_into_components(
-            count, rangecount, romcount, ramcount, nnfcount);
-        auto num_goblin_ecc_op_gates = this->blocks.ecc_op.size();
-
-        size_t total = count + romcount + ramcount + rangecount + num_goblin_ecc_op_gates;
-        std::cout << "gates = " << total << " (arith " << count << ", rom " << romcount << ", ram " << ramcount
-                  << ", range " << rangecount << ", non native field gates " << nnfcount << ", goblin ecc op gates "
-                  << num_goblin_ecc_op_gates << "), pubinp = " << this->num_public_inputs() << std::endl;
-    }
 
     /**
      * @brief Add a witness variable to the public calldata.
@@ -245,6 +197,45 @@ template <typename FF> class MegaCircuitBuilder_ : public UltraCircuitBuilder_<M
     const BusVector& get_calldata() const { return databus[static_cast<size_t>(BusId::CALLDATA)]; }
     const BusVector& get_secondary_calldata() const { return databus[static_cast<size_t>(BusId::SECONDARY_CALLDATA)]; }
     const BusVector& get_return_data() const { return databus[static_cast<size_t>(BusId::RETURNDATA)]; }
+
+    /**
+     * @brief Compute a hash of the circuit
+     * @details Hashes all wires and selectors from each block. Note that this encompases all gate data, copy
+     * constraints, and public inputs (via pub inputs block). Useful for debugging purposes to identify where two
+     * circuits diverge.
+     */
+    std::string hash() const
+    {
+        using serialize::write;
+        std::vector<uint8_t> buffer;
+
+        // Hash each block's complete structure - need to const_cast to call non-const methods
+        auto& blocks_ref = const_cast<MegaExecutionTraceBlocks&>(this->blocks);
+        for (auto& block : blocks_ref.get()) {
+            // Hash all wires; implicitly contains copy constraint information
+            for (const auto& wire : block.wires) {
+                for (const auto& idx : wire) {
+                    write(buffer, idx);
+                }
+            }
+
+            // Hash all selectors
+            auto selectors = block.get_selectors();
+            for (auto& selector : selectors) {
+                for (size_t i = 0; i < selector.size(); ++i) {
+                    write(buffer, selector[i]);
+                }
+            }
+        }
+
+        // Compute SHA256 hash
+        auto hash_bytes = crypto::sha256(buffer);
+
+        // Convert to hex string
+        std::stringstream ss;
+        ss << hash_bytes;
+        return ss.str();
+    }
 };
 using MegaCircuitBuilder = MegaCircuitBuilder_<bb::fr>;
 } // namespace bb

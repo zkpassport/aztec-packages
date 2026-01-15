@@ -1,5 +1,8 @@
 import { getSchnorrAccountContractAddress } from '@aztec/accounts/schnorr';
-import { AztecAddress, Fr, GrumpkinScalar, type Logger, type Wallet } from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { Fr, GrumpkinScalar } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
 
 import { deployToken, expectTokenBalance } from './fixtures/token_utils.js';
@@ -38,7 +41,7 @@ describe('e2e_multiple_accounts_1_enc_key', () => {
     ({ teardown, logger, wallet, accounts } = await setup(numAccounts, { initialFundedAccounts }));
     logger.info('Account contracts deployed');
 
-    token = await deployToken(wallet, accounts[0], initialBalance, logger);
+    ({ contract: token } = await deployToken(wallet, accounts[0], initialBalance, logger));
   });
 
   afterEach(() => teardown());
@@ -54,7 +57,7 @@ describe('e2e_multiple_accounts_1_enc_key', () => {
     const sender = accounts[senderIndex];
     const receiver = accounts[receiverIndex];
 
-    const contractWithWallet = await TokenContract.at(token.address, wallet);
+    const contractWithWallet = TokenContract.at(token.address, wallet);
 
     await contractWithWallet.methods.transfer(receiver, transferAmount).send({ from: accounts[senderIndex] }).wait();
 

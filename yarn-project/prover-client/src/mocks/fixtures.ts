@@ -1,19 +1,16 @@
-import { MAX_NOTE_HASHES_PER_TX, MAX_NULLIFIERS_PER_TX, NULLIFIER_TREE_HEIGHT } from '@aztec/constants';
-import { padArrayEnd } from '@aztec/foundation/collection';
-import { randomBytes } from '@aztec/foundation/crypto';
+import { BlockNumber, SlotNumber } from '@aztec/foundation/branded-types';
+import { randomBytes } from '@aztec/foundation/crypto/random';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import type { Logger } from '@aztec/foundation/log';
+import type { FieldsOf } from '@aztec/foundation/types';
 import { fileURLToPath } from '@aztec/foundation/url';
 import { getVKTreeRoot } from '@aztec/noir-protocol-circuits-types/vk-tree';
-import { protocolContractTreeRoot } from '@aztec/protocol-contracts';
+import { protocolContractsHash } from '@aztec/protocol-contracts';
 import { type CircuitSimulator, NativeACVMSimulator, WASMSimulatorWithBlobs } from '@aztec/simulator/server';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { GasFees } from '@aztec/stdlib/gas';
-import type { MerkleTreeWriteOperations } from '@aztec/stdlib/interfaces/server';
 import { CheckpointConstantData } from '@aztec/stdlib/rollup';
-import { MerkleTreeId } from '@aztec/stdlib/trees';
-import type { ProcessedTx } from '@aztec/stdlib/tx';
 import { GlobalVariables } from '@aztec/stdlib/tx';
 
 import { promises as fs } from 'fs';
@@ -35,7 +32,7 @@ export const getEnvironmentConfig = async (logger: Logger) => {
   try {
     const expectedBBPath = BB_BINARY_PATH
       ? BB_BINARY_PATH
-      : `${path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../barretenberg/', BB_RELEASE_DIR)}/bb`;
+      : `${path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../barretenberg/', BB_RELEASE_DIR)}/bb-avm`;
     await fs.access(expectedBBPath, fs.constants.R_OK);
     const tempWorkingDirectory = `${TEMP_DIR}/${randomBytes(4).toString('hex')}`;
     const bbWorkingDirectory = BB_WORKING_DIRECTORY ? BB_WORKING_DIRECTORY : `${tempWorkingDirectory}/bb`;
@@ -87,49 +84,39 @@ export async function getSimulator(
   return new WASMSimulatorWithBlobs();
 }
 
-// Updates the expectedDb trees based on the new note hashes, contracts, and nullifiers from these txs
-export const updateExpectedTreesFromTxs = async (db: MerkleTreeWriteOperations, txs: ProcessedTx[]) => {
-  await db.appendLeaves(
-    MerkleTreeId.NOTE_HASH_TREE,
-    txs.flatMap(tx => padArrayEnd(tx.txEffect.noteHashes, Fr.zero(), MAX_NOTE_HASHES_PER_TX)),
-  );
-  await db.batchInsert(
-    MerkleTreeId.NULLIFIER_TREE,
-    txs.flatMap(tx => padArrayEnd(tx.txEffect.nullifiers, Fr.zero(), MAX_NULLIFIERS_PER_TX).map(x => x.toBuffer())),
-    NULLIFIER_TREE_HEIGHT,
-  );
-  for (const tx of txs) {
-    await db.sequentialInsert(
-      MerkleTreeId.PUBLIC_DATA_TREE,
-      tx.txEffect.publicDataWrites.map(write => write.toBuffer()),
-    );
-  }
+export const makeGlobals = (
+  blockNumber: number,
+  slotNumber = blockNumber,
+  overrides: Partial<FieldsOf<GlobalVariables> & FieldsOf<CheckpointConstantData>> = {},
+) => {
+  const checkpointConstants = makeCheckpointConstants(slotNumber, overrides);
+  return GlobalVariables.from({
+    chainId: checkpointConstants.chainId,
+    version: checkpointConstants.version,
+    blockNumber: BlockNumber(blockNumber) /** block number */,
+    slotNumber: SlotNumber(slotNumber) /** slot number */,
+    timestamp: BigInt(blockNumber * 123) /** block number * 123 as pseudo-timestamp for testing */,
+    coinbase: checkpointConstants.coinbase,
+    feeRecipient: checkpointConstants.feeRecipient,
+    gasFees: checkpointConstants.gasFees,
+    ...overrides,
+  });
 };
 
-export const makeGlobals = (blockNumber: number, slotNumber = blockNumber) => {
-  const checkpointConstants = makeCheckpointConstants(slotNumber);
-  return new GlobalVariables(
-    checkpointConstants.chainId,
-    checkpointConstants.version,
-    blockNumber /** block number */,
-    new Fr(slotNumber) /** slot number */,
-    BigInt(blockNumber) /** block number as pseudo-timestamp for testing */,
-    checkpointConstants.coinbase,
-    checkpointConstants.feeRecipient,
-    checkpointConstants.gasFees,
-  );
-};
-
-export const makeCheckpointConstants = (slotNumber: number) => {
+export const makeCheckpointConstants = (
+  slotNumber: number,
+  overrides: Partial<FieldsOf<CheckpointConstantData>> = {},
+) => {
   return CheckpointConstantData.from({
     chainId: Fr.ZERO,
     version: Fr.ZERO,
     vkTreeRoot: getVKTreeRoot(),
-    protocolContractTreeRoot,
+    protocolContractsHash,
     proverId: Fr.ZERO,
-    slotNumber: new Fr(slotNumber),
+    slotNumber: SlotNumber(slotNumber),
     coinbase: EthAddress.ZERO,
     feeRecipient: AztecAddress.ZERO,
     gasFees: GasFees.empty(),
+    ...overrides,
   });
 };

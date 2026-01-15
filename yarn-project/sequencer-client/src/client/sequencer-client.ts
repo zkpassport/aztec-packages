@@ -1,13 +1,10 @@
 import type { BlobSinkClientInterface } from '@aztec/blob-sink/client';
 import { EpochCache } from '@aztec/epoch-cache';
-import {
-  GovernanceProposerContract,
-  PublisherManager,
-  RollupContract,
-  getPublicClient,
-  isAnvilTestChain,
-} from '@aztec/ethereum';
+import { isAnvilTestChain } from '@aztec/ethereum/chain';
+import { getPublicClient } from '@aztec/ethereum/client';
+import { GovernanceProposerContract, RollupContract } from '@aztec/ethereum/contracts';
 import { L1TxUtilsWithBlobs } from '@aztec/ethereum/l1-tx-utils-with-blobs';
+import { PublisherManager } from '@aztec/ethereum/publisher-manager';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import { createLogger } from '@aztec/foundation/log';
 import type { DateProvider } from '@aztec/foundation/timer';
@@ -84,7 +81,7 @@ export class SequencerClient {
       telemetry: telemetryClient,
     } = deps;
     const { l1RpcUrls: rpcUrls, l1ChainId: chainId } = config;
-    const log = createLogger('sequencer-client');
+    const log = createLogger('sequencer');
     const publicClient = getPublicClient(config);
     const l1TxUtils = deps.l1TxUtils;
     const l1Metrics = new L1Metrics(
@@ -92,7 +89,7 @@ export class SequencerClient {
       publicClient,
       l1TxUtils.map(x => x.getSenderAddress()),
     );
-    const publisherManager = new PublisherManager(l1TxUtils);
+    const publisherManager = new PublisherManager(l1TxUtils, config);
     const rollupContract = new RollupContract(publicClient, config.l1Contracts.rollupAddress.toString());
     const [l1GenesisTime, slotDuration] = await Promise.all([
       rollupContract.getL1GenesisTime(),
@@ -133,6 +130,7 @@ export class SequencerClient {
         dateProvider: deps.dateProvider,
         publisherManager,
         nodeKeyStore: NodeKeystoreAdapter.fromKeyStoreManager(deps.nodeKeyStore),
+        logger: log,
       });
     const globalsBuilder = new GlobalVariableBuilder(config);
 
@@ -153,8 +151,8 @@ export class SequencerClient {
     // In theory, the L1 slot has an initial 4s phase where the block is propagated, so we could
     // make it with a propagation time into slot equal to 4s. However, we prefer being conservative.
     // See https://www.blocknative.com/blog/anatomy-of-a-slot#7 for more info.
-    const maxL1TxInclusionTimeIntoSlot =
-      (config.maxL1TxInclusionTimeIntoSlot ?? isAnvilTestChain(config.l1ChainId)) ? ethereumSlotDuration - 1 : 0;
+    const maxInclusionBasedOnChain = isAnvilTestChain(config.l1ChainId) ? ethereumSlotDuration - 1 : 0;
+    const maxL1TxInclusionTimeIntoSlot = config.maxL1TxInclusionTimeIntoSlot ?? maxInclusionBasedOnChain;
 
     const l1Constants = {
       l1GenesisTime,
@@ -178,6 +176,7 @@ export class SequencerClient {
       rollupContract,
       { ...config, maxL1TxInclusionTimeIntoSlot, maxL2BlockGas: sequencerManaLimit },
       telemetryClient,
+      log,
     );
 
     await sequencer.init();
@@ -200,6 +199,7 @@ export class SequencerClient {
     await this.validatorClient?.start();
     this.sequencer.start();
     this.l1Metrics?.start();
+    await this.publisherManager.loadState();
   }
 
   /**

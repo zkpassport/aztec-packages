@@ -1,8 +1,8 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { TestDateProvider } from '@aztec/foundation/timer';
 import { TokenContractArtifact } from '@aztec/noir-contracts.js/Token';
 import { AvmTestContractArtifact } from '@aztec/noir-test-contracts.js/AvmTest';
-import { RevertCode } from '@aztec/stdlib/avm';
+import { PublicSimulatorConfig, RevertCode } from '@aztec/stdlib/avm';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { GasFees } from '@aztec/stdlib/gas';
 import { GlobalVariables } from '@aztec/stdlib/tx';
@@ -13,14 +13,19 @@ import { PublicContractsDB } from '../../../server.js';
 import { createContractClassAndInstance } from '../../avm/fixtures/utils.js';
 import { PublicTxSimulationTester, SimpleContractDataSource } from '../../fixtures/index.js';
 import { addNewContractClassToTx, addNewContractInstanceToTx, createTxForPrivateOnly } from '../../fixtures/utils.js';
-import { PublicTxSimulator } from '../../public_tx_simulator/public_tx_simulator.js';
+import { CppPublicTxSimulator } from '../../public_tx_simulator/cpp_public_tx_simulator.js';
+import { CppVsTsPublicTxSimulator } from '../../public_tx_simulator/cpp_vs_ts_public_tx_simulator.js';
 import { GuardedMerkleTreeOperations } from '../guarded_merkle_tree.js';
 import { PublicProcessor } from '../public_processor.js';
 
-describe('Public processor contract registration/deployment tests', () => {
+describe.each([
+  { useCppSimulator: false, simulatorName: 'TS Simulator' },
+  { useCppSimulator: true, simulatorName: 'Cpp Simulator' },
+])('Public processor contract registration/deployment tests ($simulatorName)', ({ useCppSimulator }) => {
   const admin = AztecAddress.fromNumber(42);
   const sender = AztecAddress.fromNumber(111);
 
+  let worldStateService: NativeWorldStateService;
   let contractsDB: PublicContractsDB;
   let tester: PublicTxSimulationTester;
   let processor: PublicProcessor;
@@ -31,10 +36,22 @@ describe('Public processor contract registration/deployment tests', () => {
     globals.gasFees = new GasFees(2, 3);
 
     const contractDataSource = new SimpleContractDataSource();
-    const merkleTrees = await (await NativeWorldStateService.tmp()).fork();
+    worldStateService = await NativeWorldStateService.tmp();
+    const merkleTrees = await worldStateService.fork();
     const guardedMerkleTrees = new GuardedMerkleTreeOperations(merkleTrees);
     contractsDB = new PublicContractsDB(contractDataSource);
-    const simulator = new PublicTxSimulator(guardedMerkleTrees, contractsDB, globals, /*doMerkleOperations=*/ true);
+    const config = PublicSimulatorConfig.from({
+      skipFeeEnforcement: false,
+      collectDebugLogs: true,
+      collectHints: false,
+      collectStatistics: false,
+      collectCallMetadata: true,
+    });
+    // TS mode: use CppVsTs to compare TS and C++ results
+    // C++ mode: use only C++ (pure Cpp simulator)
+    const simulator = useCppSimulator
+      ? new CppPublicTxSimulator(guardedMerkleTrees, contractsDB, globals, config)
+      : new CppVsTsPublicTxSimulator(guardedMerkleTrees, contractsDB, globals, config);
 
     processor = new PublicProcessor(
       globals,
@@ -50,6 +67,10 @@ describe('Public processor contract registration/deployment tests', () => {
     // make sure tx senders have fee balance
     await tester.setFeePayerBalance(admin);
     await tester.setFeePayerBalance(sender);
+  });
+
+  afterEach(async () => {
+    await worldStateService.close();
   });
 
   it('can deploy in a private-only tx and call a public function later in the block', async () => {

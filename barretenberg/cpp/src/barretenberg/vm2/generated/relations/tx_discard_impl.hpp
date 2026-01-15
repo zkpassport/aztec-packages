@@ -15,8 +15,6 @@ void tx_discardImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
 {
     using C = ColumnAndShifts;
 
-    BB_BENCH_NAME("accumulate/tx_discard");
-
     const auto tx_LAST_ROW_OF_SETUP = (FF(1) - in.get(C::tx_is_revertible)) * in.get(C::tx_is_revertible_shift);
     const auto tx_PROPAGATE_DISCARD = (FF(1) - tx_LAST_ROW_OF_SETUP) * (FF(1) - in.get(C::tx_reverted));
 
@@ -30,7 +28,7 @@ void tx_discardImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
         auto tmp = static_cast<View>(in.get(C::tx_discard)) * (FF(1) - static_cast<View>(in.get(C::tx_is_revertible)));
         std::get<1>(evals) += (tmp * scaling_factor);
     }
-    { // FAILURE_MUST_DISCARD
+    { // REVERTED_MUST_DISCARD
         using View = typename std::tuple_element_t<2, ContainerOverSubrelations>::View;
         auto tmp = static_cast<View>(in.get(C::tx_reverted)) * (FF(1) - static_cast<View>(in.get(C::tx_discard)));
         std::get<2>(evals) += (tmp * scaling_factor);

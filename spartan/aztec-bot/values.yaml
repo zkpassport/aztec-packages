@@ -28,6 +28,51 @@ bot:
 
   replicaCount: 1
 
+  initContainers:
+    - name: wait-for-block-production
+      image: curlimages/curl:latest
+      command:
+        - /bin/sh
+        - -c
+        - |
+          AZTEC_NODE_URL="${AZTEC_NODE_URL}"
+          if [ -z "$AZTEC_NODE_URL" ]; then
+            echo "AZTEC_NODE_URL not set, skipping block production wait"
+            exit 0
+          fi
+
+          echo "Waiting for Aztec Node to be available at ${AZTEC_NODE_URL}..."
+          until curl -s ${AZTEC_NODE_URL}/status > /dev/null; do
+            echo "Waiting for aztec-node..."
+            sleep 2
+          done
+          echo "Aztec Node is ready"
+
+          echo "Waiting for block production to start..."
+          TIMEOUT=4200
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            BLOCK_NUMBER=$(curl -s -X POST -H 'Content-Type: application/json' \
+              -d '{"jsonrpc":"2.0","method":"node_getBlockNumber","params":[],"id":1}' \
+              ${AZTEC_NODE_URL} | grep -o '"result":[0-9]*' | cut -d':' -f2)
+
+            if [ ! -z "$BLOCK_NUMBER" ] && [ "$BLOCK_NUMBER" -gt 0 ]; then
+              echo "Block production has started. Current block number: $BLOCK_NUMBER"
+              exit 0
+            fi
+
+            echo "Block number is still 0 or not available, waiting... (${ELAPSED}s/${TIMEOUT}s)"
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+
+          echo "WARNING: Timed out waiting for block production to start after ${TIMEOUT}s"
+          echo "Proceeding anyway..."
+          exit 0
+      envFrom:
+        - configMapRef:
+            name: "{{ .Release.Name }}-env"
+
   node:
     configMap:
       envEnabled: true
@@ -43,21 +88,11 @@ bot:
       # be sure to set it to a persistent volume
       export CIRCUIT_RECORD_DIR=""
 
-      # a crude way to avoid a race condition that could arise if more than one bot is started:
-      # the bots need to register contract classes, if they all start at the same time (or close to it) then multiple of them might try to register the same class leading to failed txs due to duplicate nullifiers
-      # instead lets allow the first bot to start immediately giving it the responsibility to register the classes
-      # every other bot after that will sleep at least a slot before starting up
-      if [[ "$BOT_ACCOUNT_SALT" != "1" ]]; then
-        sleep_duration=$(({{ .Values.aztec.slotDuration }} + ($RANDOM % 10)))
-        echo "Sleeping for $sleep_duration seconds"
-        sleep $sleep_duration
-      fi
-
     startCmd:
       - --bot
       - --pxe
 
-    hostNetwork: true
+    hostNetwork: false
 
     # give the bot 5 minutes to start
     startupProbe:

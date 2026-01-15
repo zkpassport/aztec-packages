@@ -1,11 +1,12 @@
 import { type BlobSinkConfig, blobSinkConfigMapping } from '@aztec/blob-sink/client';
+import { type L1ReaderConfig, l1ReaderConfigMappings } from '@aztec/ethereum/l1-reader';
+import { type L1TxUtilsConfig, l1TxUtilsConfigMappings } from '@aztec/ethereum/l1-tx-utils';
 import {
-  type L1ReaderConfig,
-  type L1TxUtilsConfig,
-  l1ReaderConfigMappings,
-  l1TxUtilsConfigMappings,
-} from '@aztec/ethereum';
-import { type ConfigMappingsType, SecretValue, getConfigFromMappings } from '@aztec/foundation/config';
+  type ConfigMappingsType,
+  SecretValue,
+  booleanConfigHelper,
+  getConfigFromMappings,
+} from '@aztec/foundation/config';
 import { EthAddress } from '@aztec/foundation/eth-address';
 
 /**
@@ -28,10 +29,12 @@ export type TxSenderConfig = L1ReaderConfig & {
  */
 export type PublisherConfig = L1TxUtilsConfig &
   BlobSinkConfig & {
-    /**
-     * The interval to wait between publish retries.
-     */
-    l1PublishRetryIntervalMS: number;
+    /** True to use publishers in invalid states (timed out, cancelled, etc) if no other is available */
+    publisherAllowInvalidStates?: boolean;
+    /** Whether to run in fisherman mode: builds blocks on every slot for validation without publishing to L1 */
+    fishermanMode?: boolean;
+    /** Address of the forwarder contract to wrap all L1 transactions through (for testing purposes only) */
+    publisherForwarderAddress?: EthAddress;
   };
 
 export const getTxSenderConfigMappings: (
@@ -43,7 +46,7 @@ export const getTxSenderConfigMappings: (
     description: 'The private keys to be used by the publisher.',
     parseEnv: (val: string) => val.split(',').map(key => new SecretValue(`0x${key.replace('0x', '')}`)),
     defaultValue: [],
-    fallback: scope === 'PROVER' ? ['PROVER_PUBLISHER_PRIVATE_KEY'] : ['SEQ_PUBLISHER_PRIVATE_KEY'],
+    fallback: [scope === 'PROVER' ? `PROVER_PUBLISHER_PRIVATE_KEY` : `SEQ_PUBLISHER_PRIVATE_KEY`],
   },
   publisherAddresses: {
     env: scope === 'PROVER' ? `PROVER_PUBLISHER_ADDRESSES` : `SEQ_PUBLISHER_ADDRESSES`,
@@ -60,11 +63,21 @@ export function getTxSenderConfigFromEnv(scope: 'PROVER' | 'SEQ'): Omit<TxSender
 export const getPublisherConfigMappings: (
   scope: 'PROVER' | 'SEQ',
 ) => ConfigMappingsType<PublisherConfig & L1TxUtilsConfig> = scope => ({
-  l1PublishRetryIntervalMS: {
-    env: scope === `PROVER` ? `PROVER_PUBLISH_RETRY_INTERVAL_MS` : `SEQ_PUBLISH_RETRY_INTERVAL_MS`,
-    parseEnv: (val: string) => +val,
-    defaultValue: 1000,
-    description: 'The interval to wait between publish retries.',
+  publisherAllowInvalidStates: {
+    description: 'True to use publishers in invalid states (timed out, cancelled, etc) if no other is available',
+    env: scope === `PROVER` ? `PROVER_PUBLISHER_ALLOW_INVALID_STATES` : `SEQ_PUBLISHER_ALLOW_INVALID_STATES`,
+    ...booleanConfigHelper(true),
+  },
+  fishermanMode: {
+    env: 'FISHERMAN_MODE',
+    description:
+      'Whether to run in fisherman mode: builds blocks on every slot for validation without publishing to L1',
+    ...booleanConfigHelper(false),
+  },
+  publisherForwarderAddress: {
+    env: scope === `PROVER` ? `PROVER_PUBLISHER_FORWARDER_ADDRESS` : `SEQ_PUBLISHER_FORWARDER_ADDRESS`,
+    description: 'Address of the forwarder contract to wrap all L1 transactions through (for testing purposes only)',
+    parseEnv: (val: string) => (val ? EthAddress.fromString(val) : undefined),
   },
   ...l1TxUtilsConfigMappings,
   ...blobSinkConfigMapping,

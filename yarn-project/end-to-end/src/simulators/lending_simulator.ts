@@ -1,8 +1,10 @@
 // Convenience struct to hold an account's address and secret that can easily be passed around.
-import { AztecAddress, Fr } from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { Fr } from '@aztec/aztec.js/fields';
 import { CheatCodes } from '@aztec/aztec/testing';
-import type { RollupContract } from '@aztec/ethereum';
-import { pedersenHash } from '@aztec/foundation/crypto';
+import type { RollupContract } from '@aztec/ethereum/contracts';
+import { SlotNumber } from '@aztec/foundation/branded-types';
+import { pedersenHash } from '@aztec/foundation/crypto/pedersen';
 import type { TestDateProvider } from '@aztec/foundation/timer';
 import type { LendingContract } from '@aztec/noir-contracts.js/Lending';
 
@@ -102,7 +104,8 @@ export class LendingSimulator {
     }
 
     const slot = await this.rollup.getSlotAt(BigInt(await this.cc.eth.timestamp()));
-    const ts = Number(await this.rollup.getTimestampForSlot(slot + BigInt(diff)));
+    const targetSlot = SlotNumber(slot + diff);
+    const ts = Number(await this.rollup.getTimestampForSlot(targetSlot));
     const timeDiff = ts - this.time;
     this.time = ts;
 
@@ -111,7 +114,7 @@ export class LendingSimulator {
     if (dateProvider) {
       dateProvider.setTime(this.time * 1000);
     }
-    await this.cc.rollup.markAsProven(await this.rollup.getBlockNumber());
+    await this.cc.rollup.markAsProven(await this.rollup.getCheckpointNumber());
     this.accumulator = muldivDown(this.accumulator, computeMultiplier(this.rate, BigInt(timeDiff)), BASE);
   }
 

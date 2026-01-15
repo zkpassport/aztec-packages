@@ -1,4 +1,5 @@
 **/dest
+**/dist
 **/node_modules
 **/.cache
 .env*
@@ -57,7 +58,7 @@ types/fixtures/*.json
 test-wallet/artifacts
 cli-wallet/test/data
 
-.claude
+.claude/settings.local.json
 .yarn/*
 !.yarn/patches
 !.yarn/plugins

@@ -1,5 +1,6 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { encodeArguments } from '@aztec/stdlib/abi';
+import { PublicSimulatorConfig } from '@aztec/stdlib/avm';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { GasFees } from '@aztec/stdlib/gas';
 import type { MerkleTreeWriteOperations } from '@aztec/stdlib/interfaces/server';
@@ -37,9 +38,11 @@ export class AvmSimulationTester extends BaseAvmSimulationTester {
     super(contractDataSource, merkleTrees);
   }
 
-  static async create(): Promise<AvmSimulationTester> {
+  static async create(
+    worldStateService: NativeWorldStateService, // make sure to close this later
+  ): Promise<AvmSimulationTester> {
     const contractDataSource = new SimpleContractDataSource();
-    const merkleTrees = await (await NativeWorldStateService.tmp()).fork();
+    const merkleTrees = await worldStateService.fork();
     const treesDB = new PublicTreesDB(merkleTrees);
     const contractsDB = new PublicContractsDB(contractDataSource);
     const trace = new SideEffectTrace();
@@ -49,7 +52,6 @@ export class AvmSimulationTester extends BaseAvmSimulationTester {
       treesDB,
       contractsDB,
       trace,
-      /*doMerkleOperations=*/ false,
       firstNullifier,
       DEFAULT_TIMESTAMP,
     );
@@ -79,12 +81,20 @@ export class AvmSimulationTester extends BaseAvmSimulationTester {
     globals.timestamp = DEFAULT_TIMESTAMP;
     globals.gasFees = DEFAULT_GAS_FEES;
 
+    const config = PublicSimulatorConfig.from({
+      skipFeeEnforcement: false,
+      collectDebugLogs: true,
+      collectHints: false,
+      collectStatistics: false,
+      collectCallMetadata: true,
+    });
     const environment = initExecutionEnvironment({
       calldata,
       globals,
       address,
       sender,
       isStaticCall,
+      config,
     });
     const persistableState = await this.stateManager.fork();
     const context = initContext({ env: environment, persistableState });

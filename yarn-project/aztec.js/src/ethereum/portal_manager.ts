@@ -1,8 +1,8 @@
-import type { ExtendedViemWalletClient, ViemContract } from '@aztec/ethereum';
+import type { ExtendedViemWalletClient, ViemContract } from '@aztec/ethereum/types';
 import { extractEvent } from '@aztec/ethereum/utils';
-import { sha256ToField } from '@aztec/foundation/crypto';
+import { sha256ToField } from '@aztec/foundation/crypto/sha256';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import type { Logger } from '@aztec/foundation/log';
 import type { SiblingPath } from '@aztec/foundation/trees';
 import { FeeAssetHandlerAbi } from '@aztec/l1-artifacts/FeeAssetHandlerAbi';
@@ -12,13 +12,11 @@ import { TestERC20Abi } from '@aztec/l1-artifacts/TestERC20Abi';
 import { TokenPortalAbi } from '@aztec/l1-artifacts/TokenPortalAbi';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { computeL2ToL1MessageHash, computeSecretHash } from '@aztec/stdlib/hash';
-import type { PXE } from '@aztec/stdlib/interfaces/client';
+import type { AztecNode } from '@aztec/stdlib/interfaces/client';
 import { getL2ToL1MessageLeafId } from '@aztec/stdlib/messaging';
 
 import { type Hex, getContract, toFunctionSelector } from 'viem';
 
-// docs:start:claim_type
-// docs:start:claim_type_amount
 /** L1 to L2 message info to claim it on L2. */
 export type L2Claim = {
   /** Secret for claiming. */
@@ -30,11 +28,9 @@ export type L2Claim = {
   /** Leaf index in the L1 to L2 message tree. */
   messageLeafIndex: bigint;
 };
-// docs:end:claim_type
 
 /** L1 to L2 message info that corresponds to an amount to claim. */
 export type L2AmountClaim = L2Claim & { /** Amount to claim */ claimAmount: bigint };
-// docs:end:claim_type_amount
 
 /** L1 to L2 message info that corresponds to an amount to claim with associated recipient. */
 export type L2AmountClaimWithRecipient = L2AmountClaim & {
@@ -181,17 +177,32 @@ export class L1FeeJuicePortalManager {
       hash: await this.contract.write.depositToAztecPublic(args),
     });
 
-    this.logger.info('Deposited to Aztec public successfully');
+    this.logger.info('Deposited to Aztec public successfully', { txReceipt });
 
     const log = extractEvent(
       txReceipt.logs,
       this.contract.address,
       this.contract.abi,
       'DepositToAztecPublic',
-      log =>
-        log.args.secretHash === claimSecretHash.toString() &&
-        log.args.amount === amountToBridge &&
-        log.args.to === to.toString(),
+      log => {
+        // Normalize hex strings for comparison (case-insensitive, handle different formats)
+        const normalizeHex = (val: string | bigint | number) => {
+          const hexStr = typeof val === 'string' ? val : `0x${val.toString(16).padStart(64, '0')}`;
+          return hexStr.toLowerCase();
+        };
+
+        const secretHashMatch = normalizeHex(log.args.secretHash) === normalizeHex(claimSecretHash.toString());
+        const amountMatch = log.args.amount === amountToBridge;
+        const toMatch = normalizeHex(log.args.to) === normalizeHex(to.toString());
+
+        this.logger.debug(
+          `Event filter matching: secretHash=${secretHashMatch} (${log.args.secretHash} vs ${claimSecretHash.toString()}), ` +
+            `amount=${amountMatch} (${log.args.amount} vs ${amountToBridge}), ` +
+            `to=${toMatch} (${log.args.to} vs ${to.toString()})`,
+        );
+
+        return secretHashMatch && amountMatch && toMatch;
+      },
       this.logger,
     );
 
@@ -206,18 +217,18 @@ export class L1FeeJuicePortalManager {
 
   /**
    * Creates a new instance
-   * @param pxe - PXE client used for retrieving the L1 contract addresses.
+   * @param node - Aztec node client used for retrieving the L1 contract addresses.
    * @param extendedClient - Wallet client, extended with public actions.
    * @param logger - Logger.
    */
   public static async new(
-    pxe: PXE,
+    node: AztecNode,
     extendedClient: ExtendedViemWalletClient,
     logger: Logger,
   ): Promise<L1FeeJuicePortalManager> {
     const {
       l1ContractAddresses: { feeJuiceAddress, feeJuicePortalAddress, feeAssetHandlerAddress },
-    } = await pxe.getNodeInfo();
+    } = await node.getNodeInfo();
 
     if (feeJuiceAddress.isZero() || feeJuicePortalAddress.isZero()) {
       throw new Error('Portal or token not deployed on L1');
@@ -286,10 +297,19 @@ export class L1ToL2TokenPortalManager {
       this.portal.address,
       this.portal.abi,
       'DepositToAztecPublic',
-      log =>
-        log.args.secretHash === claimSecretHash.toString() &&
-        log.args.amount === amount &&
-        log.args.to === to.toString(),
+      log => {
+        // Normalize hex strings for comparison (case-insensitive, handle different formats)
+        const normalizeHex = (val: string | bigint | number) => {
+          const hexStr = typeof val === 'string' ? val : `0x${val.toString(16).padStart(64, '0')}`;
+          return hexStr.toLowerCase();
+        };
+
+        return (
+          normalizeHex(log.args.secretHash) === normalizeHex(claimSecretHash.toString()) &&
+          log.args.amount === amount &&
+          normalizeHex(log.args.to) === normalizeHex(to.toString())
+        );
+      },
       this.logger,
     );
 
@@ -302,7 +322,6 @@ export class L1ToL2TokenPortalManager {
     };
   }
 
-  // docs:start:bridge_tokens_private
   /**
    * Bridges tokens from L1 to L2 privately. Handles token approvals. Returns once the tx has been mined.
    * @param to - Address to send the tokens to on L2.
@@ -314,7 +333,6 @@ export class L1ToL2TokenPortalManager {
     amount: bigint,
     mint = false,
   ): Promise<L2AmountClaimWithRecipient> {
-    // docs:end:bridge_tokens_private
     const [claimSecret, claimSecretHash] = await this.bridgeSetup(amount, mint);
 
     this.logger.info('Sending L1 tokens to L2 to be claimed privately');
@@ -329,7 +347,18 @@ export class L1ToL2TokenPortalManager {
       this.portal.address,
       this.portal.abi,
       'DepositToAztecPrivate',
-      log => log.args.amount === amount && log.args.secretHashForL2MessageConsumption === claimSecretHash.toString(),
+      log => {
+        // Normalize hex strings for comparison (case-insensitive, handle different formats)
+        const normalizeHex = (val: string | bigint | number) => {
+          const hexStr = typeof val === 'string' ? val : `0x${val.toString(16).padStart(64, '0')}`;
+          return hexStr.toLowerCase();
+        };
+
+        return (
+          log.args.amount === amount &&
+          normalizeHex(log.args.secretHashForL2MessageConsumption) === normalizeHex(claimSecretHash.toString())
+        );
+      },
       this.logger,
     );
 
@@ -400,7 +429,7 @@ export class L1TokenPortalManager extends L1ToL2TokenPortalManager {
     );
 
     const messageLeafId = getL2ToL1MessageLeafId({ leafIndex: messageIndex, siblingPath });
-    const isConsumedBefore = await this.outbox.read.hasMessageBeenConsumedAtBlock([blockNumber, messageLeafId]);
+    const isConsumedBefore = await this.outbox.read.hasMessageBeenConsumedAtCheckpoint([blockNumber, messageLeafId]);
     if (isConsumedBefore) {
       throw new Error(
         `L1 to L2 message at block ${blockNumber} index ${messageIndex} height ${siblingPath.pathSize} has already been consumed`,
@@ -421,7 +450,7 @@ export class L1TokenPortalManager extends L1ToL2TokenPortalManager {
       hash: await this.extendedClient.writeContract(withdrawRequest),
     });
 
-    const isConsumedAfter = await this.outbox.read.hasMessageBeenConsumedAtBlock([blockNumber, messageLeafId]);
+    const isConsumedAfter = await this.outbox.read.hasMessageBeenConsumedAtCheckpoint([blockNumber, messageLeafId]);
     if (!isConsumedAfter) {
       throw new Error(
         `L1 to L2 message at block ${blockNumber} index ${messageIndex} height ${siblingPath.pathSize} not consumed after withdrawal`,

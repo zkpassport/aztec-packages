@@ -1,21 +1,30 @@
 // CREATE_CHAOS_MESH should be set to true to run this test
-import { type PXE, sleep } from '@aztec/aztec.js';
+import type { AztecNode } from '@aztec/aztec.js/node';
 import { RollupCheatCodes } from '@aztec/aztec/testing';
 import { EthCheatCodesWithState } from '@aztec/ethereum/test';
 import { createLogger } from '@aztec/foundation/log';
+import { sleep } from '@aztec/foundation/sleep';
+import { DateProvider } from '@aztec/foundation/timer';
+import { TestWallet } from '@aztec/test-wallet/server';
 
 import { expect, jest } from '@jest/globals';
 import type { ChildProcess } from 'child_process';
 
 import {
   type TestAccounts,
-  deploySponsoredTestAccounts,
+  createWalletAndAztecNodeClient,
+  deploySponsoredTestAccountsWithTokens,
   performTransfers,
-  startCompatiblePXE,
 } from './setup_test_wallets.js';
-import { applyProverFailure, setupEnvironment, startPortForwardForEthereum, startPortForwardForRPC } from './utils.js';
+import {
+  applyProverFailure,
+  getGitProjectRoot,
+  setupEnvironment,
+  startPortForwardForEthereum,
+  startPortForwardForRPC,
+} from './utils.js';
 
-const config = { ...setupEnvironment(process.env), REAL_VERIFIER: true }; // todo: remove REAL_VERIFIER condition, currently false produces invalid proofs
+const config = { ...setupEnvironment(process.env) };
 const debugLogger = createLogger('e2e:spartan-test:reorg');
 
 async function checkBalances(testAccounts: TestAccounts, mintAmount: bigint, totalAmountTransferred: bigint) {
@@ -43,9 +52,11 @@ describe('reorg test', () => {
   let ETHEREUM_HOSTS: string[];
   const forwardProcesses: ChildProcess[] = [];
   let rpcUrl: string;
+  let wallet: TestWallet;
+  let spartanDir: string;
 
   let testAccounts: TestAccounts;
-  let pxe: PXE;
+  let aztecNode: AztecNode;
   let cleanup: undefined | (() => Promise<void>);
 
   afterAll(async () => {
@@ -61,19 +72,21 @@ describe('reorg test', () => {
 
     rpcUrl = `http://127.0.0.1:${aztecRpcPort}`;
     ETHEREUM_HOSTS = [`http://127.0.0.1:${ethPort}`];
+    spartanDir = `${getGitProjectRoot()}/spartan`;
 
-    ({ pxe, cleanup } = await startCompatiblePXE(rpcUrl, config.REAL_VERIFIER, debugLogger));
-    testAccounts = await deploySponsoredTestAccounts(pxe, MINT_AMOUNT, debugLogger);
+    ({ wallet, aztecNode, cleanup } = await createWalletAndAztecNodeClient(rpcUrl, config.REAL_VERIFIER, debugLogger));
+    testAccounts = await deploySponsoredTestAccountsWithTokens(wallet, aztecNode, MINT_AMOUNT, debugLogger);
   });
 
   it('survives a reorg', async () => {
     const rollupCheatCodes = new RollupCheatCodes(
-      new EthCheatCodesWithState(ETHEREUM_HOSTS),
-      await pxe.getNodeInfo().then(n => n.l1ContractAddresses),
+      new EthCheatCodesWithState(ETHEREUM_HOSTS, new DateProvider()),
+      await testAccounts.aztecNode.getNodeInfo().then(n => n.l1ContractAddresses),
     );
     const { epochDuration, slotDuration } = await rollupCheatCodes.getConfig();
 
     await performTransfers({
+      wallet,
       testAccounts,
       rounds: Number(epochDuration) * SETUP_EPOCHS,
       transferAmount: TRANSFER_AMOUNT,
@@ -87,8 +100,8 @@ describe('reorg test', () => {
     // kill the provers
     const stdout = await applyProverFailure({
       namespace: config.NAMESPACE,
-      spartanDir: `/workspaces/aztec-packages/spartan`,
-      durationSeconds: Number(epochDuration * slotDuration) * 2,
+      spartanDir,
+      durationSeconds: Number(BigInt(epochDuration) * BigInt(slotDuration)) * 2,
       logger: debugLogger,
     });
     debugLogger.info(stdout);
@@ -96,7 +109,7 @@ describe('reorg test', () => {
     // We only need 2 epochs for a reorg to be triggered, but 3 gives time for the bot to be restarted and the chain to re-stabilize
     // TODO(#9613): why do we need to wait for 3 epochs?
     debugLogger.info(`Waiting for 3 epochs to pass`);
-    await sleep(Number(epochDuration * slotDuration) * 3 * 1000);
+    await sleep(Number(BigInt(epochDuration) * BigInt(slotDuration)) * 3 * 1000);
 
     // TODO(#9327): begin delete
     // The bot must be restarted because the PXE does not handle reorgs without a restart.
@@ -105,12 +118,14 @@ describe('reorg test', () => {
     await sleep(30 * 1000);
 
     // Restart the PXE
-    ({ pxe, cleanup } = await startCompatiblePXE(rpcUrl, config.REAL_VERIFIER, debugLogger));
+    ({ wallet, aztecNode, cleanup } = await createWalletAndAztecNodeClient(rpcUrl, config.REAL_VERIFIER, debugLogger));
+
     await sleep(30 * 1000);
-    testAccounts = await deploySponsoredTestAccounts(pxe, MINT_AMOUNT, debugLogger);
+    testAccounts = await deploySponsoredTestAccountsWithTokens(wallet, aztecNode, MINT_AMOUNT, debugLogger);
     // TODO(#9327): end delete
 
     await performTransfers({
+      wallet,
       testAccounts,
       rounds: Number(epochDuration) * SETUP_EPOCHS,
       transferAmount: TRANSFER_AMOUNT,

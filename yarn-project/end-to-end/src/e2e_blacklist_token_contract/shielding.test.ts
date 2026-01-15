@@ -1,4 +1,5 @@
-import { Fr, computeSecretHash } from '@aztec/aztec.js';
+import { computeSecretHash } from '@aztec/aztec.js/crypto';
+import { Fr } from '@aztec/aztec.js/fields';
 
 import { U128_UNDERFLOW_ERROR } from '../fixtures/index.js';
 import { BlacklistTokenContractTest } from './blacklist_token_contract_test.js';
@@ -59,7 +60,7 @@ describe('e2e_blacklist_token_contract shield + redeem_shield', () => {
       { caller: otherAddress, action },
       true,
     );
-    await validateActionInteraction.send({ from: adminAddress }).wait();
+    await validateActionInteraction.send().wait();
 
     const receipt = await action.send({ from: otherAddress }).wait();
 
@@ -113,7 +114,7 @@ describe('e2e_blacklist_token_contract shield + redeem_shield', () => {
         { caller: otherAddress, action },
         true,
       );
-      await validateActionInteraction.send({ from: adminAddress }).wait();
+      await validateActionInteraction.send().wait();
 
       await expect(action.simulate({ from: otherAddress })).rejects.toThrow(U128_UNDERFLOW_ERROR);
     });
@@ -131,7 +132,7 @@ describe('e2e_blacklist_token_contract shield + redeem_shield', () => {
         { caller: otherAddress, action },
         true,
       );
-      await validateActionInteraction.send({ from: adminAddress }).wait();
+      await validateActionInteraction.send().wait();
 
       await expect(action.simulate({ from: blacklistedAddress })).rejects.toThrow(/unauthorized/);
     });

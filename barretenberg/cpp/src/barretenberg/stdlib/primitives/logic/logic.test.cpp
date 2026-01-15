@@ -111,7 +111,7 @@ TYPED_TEST(LogicTest, LargeOperands)
     EXPECT_EQ(uint256_t(xor_result.get_value()), xor_expected);
 
     bool result = CircuitChecker::check(builder);
-    EXPECT_EQ(result, true);
+    EXPECT_EQ(result, false);
 }
 
 // Ensures that malicious witnesses which produce the same result are detected. This potential security issue cannot
@@ -122,7 +122,7 @@ TYPED_TEST(LogicTest, DifferentWitnessSameResult)
 
     STDLIB_TYPE_ALIASES
     auto builder = Builder();
-    if (HasPlookup<Builder>) {
+    if (IsUltraOrMegaBuilder<Builder>) {
         uint256_t a = 3758096391;
         uint256_t b = 2147483649;
         field_ct x = witness_ct(&builder, uint256_t(a));

@@ -20,14 +20,14 @@ pub unconstrained fn setup(
     };
 
     // Deploy token contract
-    let initializer_call_interface = Token::interface().constructor(
+    let initializer_call = Token::interface().constructor(
         owner,
         "TestToken0000000000000000000000",
         "TT00000000000000000000000000000",
         18,
     );
     let token_contract_address =
-        env.deploy("Token").with_public_initializer(owner, initializer_call_interface);
+        env.deploy("Token").with_public_initializer(owner, initializer_call);
     (env, token_contract_address, owner, recipient)
 }
 
@@ -76,7 +76,6 @@ pub unconstrained fn check_public_balance(
     );
 }
 
-// docs:start:txe_test_call_utility
 pub unconstrained fn check_private_balance(
     env: TestEnvironment,
     token_contract_address: AztecAddress,
@@ -88,4 +87,3 @@ pub unconstrained fn check_private_balance(
         address_amount,
     );
 }
-// docs:end:txe_test_call_utility

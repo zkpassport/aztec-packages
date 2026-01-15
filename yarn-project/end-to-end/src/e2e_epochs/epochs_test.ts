@@ -1,24 +1,25 @@
 import { type AztecNodeConfig, AztecNodeService } from '@aztec/aztec-node';
-import {
-  Fr,
-  type Logger,
-  MerkleTreeId,
-  type Wallet,
-  getContractInstanceFromInstantiationParams,
-  getTimestampRangeForEpoch,
-  retryUntil,
-  sleep,
-} from '@aztec/aztec.js';
+import { getTimestampRangeForEpoch } from '@aztec/aztec.js/block';
+import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import { MerkleTreeId } from '@aztec/aztec.js/trees';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import { EpochCache } from '@aztec/epoch-cache';
-import { DefaultL1ContractsConfig, type ExtendedViemWalletClient, createExtendedL1Client } from '@aztec/ethereum';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import { DefaultL1ContractsConfig } from '@aztec/ethereum/config';
 import { RollupContract } from '@aztec/ethereum/contracts';
 import { ChainMonitor, DelayedTxUtils, type Delayer, waitUntilL1Timestamp, withDelayer } from '@aztec/ethereum/test';
+import type { ExtendedViemWalletClient } from '@aztec/ethereum/types';
+import { BlockNumber, CheckpointNumber, EpochNumber } from '@aztec/foundation/branded-types';
 import { SecretValue } from '@aztec/foundation/config';
-import { randomBytes } from '@aztec/foundation/crypto';
+import { randomBytes } from '@aztec/foundation/crypto/random';
 import { withLogNameSuffix } from '@aztec/foundation/log';
+import { retryUntil } from '@aztec/foundation/retry';
+import { sleep } from '@aztec/foundation/sleep';
 import { SpamContract } from '@aztec/noir-test-contracts.js/Spam';
 import { getMockPubSubP2PServiceFactory } from '@aztec/p2p/test-helpers';
-import { ProverNode, ProverNodePublisher } from '@aztec/prover-node';
+import { ProverNode, type ProverNodeConfig, ProverNodePublisher } from '@aztec/prover-node';
 import type { TestProverNode } from '@aztec/prover-node/test';
 import {
   type SequencerClient,
@@ -27,7 +28,7 @@ import {
   SequencerState,
 } from '@aztec/sequencer-client';
 import type { TestSequencerClient } from '@aztec/sequencer-client/test';
-import { EthAddress, type L2BlockNumber } from '@aztec/stdlib/block';
+import { type BlockParameter, EthAddress } from '@aztec/stdlib/block';
 import { type L1RollupConstants, getProofSubmissionDeadlineTimestamp } from '@aztec/stdlib/epoch-helpers';
 import { tryStop } from '@aztec/stdlib/interfaces/server';
 
@@ -128,9 +129,6 @@ export class EpochsTestContext {
       // using the prover's eth address if the proverId is used for something in the rollup contract
       // Use numeric EthAddress for deterministic prover id
       proverId: EthAddress.fromNumber(1),
-      // This must be enough so that the tx from the prover is delayed properly,
-      // but not so much to hang the sequencer and timeout the teardown
-      txPropagationMaxQueryAttempts: opts.txPropagationMaxQueryAttempts ?? 12,
       worldStateBlockHistory: WORLD_STATE_BLOCK_HISTORY,
       exitDelaySeconds: DefaultL1ContractsConfig.exitDelaySeconds,
       slasherFlavor: 'none',
@@ -187,15 +185,20 @@ export class EpochsTestContext {
     await this.context.teardown();
   }
 
-  public async createProverNode() {
+  public async createProverNode(opts: { dontStart?: boolean } & Partial<ProverNodeConfig> = {}) {
     this.logger.warn('Creating and syncing a simulated prover node...');
     const proverNodePrivateKey = this.getNextPrivateKey();
     const suffix = (this.proverNodes.length + 1).toString();
     const proverNode = await withLogNameSuffix(suffix, () =>
       createAndSyncProverNode(
         proverNodePrivateKey,
-        { ...this.context.config, proverId: EthAddress.fromNumber(parseInt(suffix, 10)) },
-        { dataDirectory: join(this.context.config.dataDirectory!, randomBytes(8).toString('hex')) },
+        { ...this.context.config },
+        {
+          dataDirectory: join(this.context.config.dataDirectory!, randomBytes(8).toString('hex')),
+          proverId: EthAddress.fromNumber(parseInt(suffix, 10)),
+          dontStart: opts.dontStart,
+          ...opts,
+        },
         this.context.aztecNode,
         undefined,
         { dateProvider: this.context.dateProvider },
@@ -279,7 +282,7 @@ export class EpochsTestContext {
 
   /** Waits until the epoch begins (ie until the immediately previous L1 block is mined). */
   public async waitUntilEpochStarts(epoch: number) {
-    const [start] = getTimestampRangeForEpoch(BigInt(epoch), this.constants);
+    const [start] = getTimestampRangeForEpoch(EpochNumber(epoch), this.constants);
     this.logger.info(`Waiting until L1 timestamp ${start} is reached as the start of epoch ${epoch}`);
     await waitUntilL1Timestamp(
       this.l1Client,
@@ -290,30 +293,30 @@ export class EpochsTestContext {
     return start;
   }
 
-  /** Waits until the given L2 block number is mined. */
-  public async waitUntilL2BlockNumber(target: number, timeout = 60) {
+  /** Waits until the given checkpoint number is mined. */
+  public async waitUntilCheckpointNumber(target: CheckpointNumber, timeout = 60) {
     await retryUntil(
-      () => Promise.resolve(target <= this.monitor.l2BlockNumber),
-      `Wait until L2 block ${target}`,
+      () => Promise.resolve(target <= this.monitor.checkpointNumber),
+      `Wait until checkpoint ${target}`,
       timeout,
       0.1,
     );
   }
 
-  /** Waits until the given L2 block number is marked as proven. */
-  public async waitUntilProvenL2BlockNumber(t: number, timeout = 60) {
+  /** Waits until the given checkpoint number is marked as proven. */
+  public async waitUntilProvenCheckpointNumber(target: CheckpointNumber, timeout = 60) {
     await retryUntil(
-      () => Promise.resolve(t <= this.monitor.l2ProvenBlockNumber),
-      `Wait proven L2 block ${t}`,
+      () => Promise.resolve(target <= this.monitor.provenCheckpointNumber),
+      `Wait proven checkpoint ${target}`,
       timeout,
       0.1,
     );
-    return this.monitor.l2ProvenBlockNumber;
+    return this.monitor.provenCheckpointNumber;
   }
 
   /** Waits until the last slot of the proof submission window for a given epoch. */
   public async waitUntilLastSlotOfProofSubmissionWindow(epochNumber: number | bigint) {
-    const deadline = getProofSubmissionDeadlineTimestamp(BigInt(epochNumber), this.constants);
+    const deadline = getProofSubmissionDeadlineTimestamp(EpochNumber.fromBigInt(BigInt(epochNumber)), this.constants);
     const oneSlotBefore = deadline - BigInt(this.constants.slotDuration);
     const date = new Date(Number(oneSlotBefore) * 1000);
     this.logger.info(`Waiting until last slot of submission window for epoch ${epochNumber} at ${date}`, {
@@ -323,7 +326,7 @@ export class EpochsTestContext {
   }
 
   /** Waits for the aztec node to sync to the target block number. */
-  public async waitForNodeToSync(blockNumber: number, type: 'proven' | 'finalized' | 'historic') {
+  public async waitForNodeToSync(blockNumber: BlockNumber, type: 'proven' | 'finalized' | 'historic') {
     const waitTime = ARCHIVER_POLL_INTERVAL + WORLD_STATE_BLOCK_CHECK_INTERVAL;
     let synched = false;
     while (!synched) {
@@ -372,7 +375,7 @@ export class EpochsTestContext {
   }
 
   /** Verifies whether the given block number is found on the aztec node. */
-  public async verifyHistoricBlock(blockNumber: L2BlockNumber, expectedSuccess: boolean) {
+  public async verifyHistoricBlock(blockNumber: BlockParameter, expectedSuccess: boolean) {
     // We use `findLeavesIndexes` here, but could use any function that queries the world-state
     // at a particular block, so we know whether that historic block is available or has been
     // pruned. Note that `getBlock` would not work here, since it only hits the archiver.
@@ -427,7 +430,7 @@ export class EpochsTestContext {
         sequencer.getSequencer().on(eventName, (args: Parameters<SequencerEvents[typeof eventName]>[0]) => {
           const evt = makeEvent(i, eventName, args);
           failEvents.push(evt);
-          this.logger.error(`Failed event ${eventName} from sequencer ${sequencerIndex}`, evt);
+          this.logger.error(`Failed event ${eventName} from sequencer ${sequencerIndex}`, undefined, evt);
         });
       });
     });

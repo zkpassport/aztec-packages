@@ -7,10 +7,10 @@
 #include "barretenberg/vm2/constraining/flavor_settings.hpp"
 #include "barretenberg/vm2/constraining/testing/check_relation.hpp"
 #include "barretenberg/vm2/generated/relations/execution.hpp"
-#include "barretenberg/vm2/simulation/concrete_dbs.hpp"
 #include "barretenberg/vm2/simulation/events/public_data_tree_check_event.hpp"
+#include "barretenberg/vm2/simulation/gadgets/concrete_dbs.hpp"
+#include "barretenberg/vm2/simulation/gadgets/public_data_tree_check.hpp"
 #include "barretenberg/vm2/simulation/lib/merkle.hpp"
-#include "barretenberg/vm2/simulation/public_data_tree_check.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_dbs.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_execution_id_manager.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_field_gt.hpp"
@@ -47,11 +47,12 @@ using simulation::PublicDataTreeCheck;
 using simulation::PublicDataTreeCheckEvent;
 
 using testing::NiceMock;
-using testing::ReturnRef;
+using testing::Return;
 
 using FF = AvmFlavorSettings::FF;
 using C = Column;
 using sload = bb::avm2::sload<FF>;
+using execution = bb::avm2::execution<FF>;
 
 TEST(SLoadConstrainingTest, PositiveTest)
 {
@@ -90,7 +91,10 @@ TEST(SLoadConstrainingTest, NegativeSloadSuccess)
           { C::execution_subtrace_operation_id, AVM_EXEC_OP_ID_SLOAD },
           { C::execution_sel_opcode_error, 1 } },
     });
-    EXPECT_THROW_WITH_MESSAGE(check_relation<sload>(trace), "SLOAD_SUCCESS");
+
+    check_relation<sload>(trace);
+    EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_INFALLIBLE_OPCODES_SUCCESS),
+                              "INFALLIBLE_OPCODES_SUCCESS");
 }
 
 TEST(SLoadConstrainingTest, Interactions)
@@ -120,8 +124,8 @@ TEST(SLoadConstrainingTest, Interactions)
                        l1_to_l2_message_tree_check);
 
     TreeSnapshots trees;
-    trees.publicDataTree.root = 42;
-    EXPECT_CALL(low_level_merkle_db, get_tree_roots()).WillRepeatedly(ReturnRef(trees));
+    trees.public_data_tree.root = 42;
+    EXPECT_CALL(low_level_merkle_db, get_tree_roots()).WillRepeatedly(Return(trees));
 
     FF value = merkle_db.storage_read(contract_address, slot);
 
@@ -133,7 +137,7 @@ TEST(SLoadConstrainingTest, Interactions)
           { C::execution_mem_tag_reg_1_, static_cast<uint8_t>(MemoryTag::FF) },
           { C::execution_subtrace_operation_id, AVM_EXEC_OP_ID_SLOAD },
           { C::execution_contract_address, contract_address },
-          { C::execution_prev_public_data_tree_root, trees.publicDataTree.root } },
+          { C::execution_prev_public_data_tree_root, trees.public_data_tree.root } },
     });
 
     PublicDataTreeTraceBuilder public_data_tree_trace_builder;

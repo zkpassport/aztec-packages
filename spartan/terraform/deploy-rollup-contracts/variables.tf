@@ -18,6 +18,7 @@ variable "AZTEC_DOCKER_IMAGE" {
 variable "L1_RPC_URLS" {
   description = "Comma-separated list of L1 RPC URLs"
   type        = string
+  sensitive   = true
 }
 
 variable "PRIVATE_KEY" {
@@ -46,6 +47,11 @@ variable "VALIDATORS" {
 
 variable "SPONSORED_FPC" {
   description = "Enable sponsored FPC"
+  type        = bool
+}
+
+variable "TEST_ACCOUNTS" {
+  description = "Enable test accounts"
   type        = bool
 }
 
@@ -85,8 +91,26 @@ variable "AZTEC_ACTIVATION_THRESHOLD" {
   nullable    = true
 }
 
+variable "AZTEC_LAG_IN_EPOCHS_FOR_VALIDATOR_SET" {
+  description = "Aztec lag in epochs for the validator set size"
+  type        = string
+  nullable    = true
+}
+
+variable "AZTEC_LAG_IN_EPOCHS_FOR_RANDAO" {
+  description = "Aztec lag in epochs for the randao values"
+  type        = string
+  nullable    = true
+}
+
 variable "AZTEC_EJECTION_THRESHOLD" {
   description = "Aztec ejection threshold"
+  type        = string
+  nullable    = true
+}
+
+variable "AZTEC_LOCAL_EJECTION_THRESHOLD" {
+  description = "Aztec local ejection threshold"
   type        = string
   nullable    = true
 }
@@ -211,8 +235,3 @@ variable "NETWORK" {
   nullable    = true
 }
 
-variable "FLUSH_ENTRY_QUEUE" {
-  description = "Flush the entry queue after adding initial validators"
-  type        = bool
-  default     = true
-}

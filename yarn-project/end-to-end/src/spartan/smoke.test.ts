@@ -1,11 +1,14 @@
-import { type PXE, retryUntil } from '@aztec/aztec.js';
-import { RollupContract, type ViemPublicClient, createEthereumChain } from '@aztec/ethereum';
+import { type AztecNode, createAztecNodeClient } from '@aztec/aztec.js/node';
+import { createEthereumChain } from '@aztec/ethereum/chain';
+import { RollupContract } from '@aztec/ethereum/contracts';
+import type { ViemPublicClient } from '@aztec/ethereum/types';
+import { CheckpointNumber } from '@aztec/foundation/branded-types';
 import { createLogger } from '@aztec/foundation/log';
+import { retryUntil } from '@aztec/foundation/retry';
 
 import type { ChildProcess } from 'child_process';
 import { createPublicClient, fallback, http } from 'viem';
 
-import { startCompatiblePXE } from './setup_test_wallets.js';
 import {
   getGitProjectRoot,
   installChaosMeshChart,
@@ -18,13 +21,11 @@ const config = setupEnvironment(process.env);
 
 describe('smoke test', () => {
   const logger = createLogger('e2e:spartan-test:smoke');
-  let pxe: PXE;
+  let aztecNode: AztecNode;
   let ethereumClient: ViemPublicClient;
   const forwardProcesses: ChildProcess[] = [];
-  let cleanup: undefined | (() => Promise<void>);
 
-  afterAll(async () => {
-    await cleanup?.();
+  afterAll(() => {
     forwardProcesses.forEach(p => p.kill());
   });
 
@@ -34,11 +35,10 @@ describe('smoke test', () => {
     const { process: ethereumProcess, port: ethereumPort } = await startPortForwardForEthereum(config.NAMESPACE);
     forwardProcesses.push(aztecRpcProcess);
     forwardProcesses.push(ethereumProcess);
-    const rpcUrl = `http://127.0.0.1:${aztecRpcPort}`;
+    const nodeUrl = `http://127.0.0.1:${aztecRpcPort}`;
 
-    ({ pxe, cleanup } = await startCompatiblePXE(rpcUrl, config.REAL_VERIFIER, logger));
-    // docs:start:get_node_info_pub_client
-    const nodeInfo = await pxe.getNodeInfo();
+    aztecNode = createAztecNodeClient(nodeUrl);
+    const nodeInfo = await aztecNode.getNodeInfo();
 
     const ethereumUrl = `http://127.0.0.1:${ethereumPort}`;
     const chain = createEthereumChain([ethereumUrl], nodeInfo.l1ChainId);
@@ -46,11 +46,10 @@ describe('smoke test', () => {
       chain: chain.chainInfo,
       transport: fallback([http(ethereumUrl)]),
     });
-    // docs:end:get_node_info_pub_client
   });
 
   it('should be able to get node enr', async () => {
-    const info = await pxe.getNodeInfo();
+    const info = await aztecNode.getNodeInfo();
 
     logger.info(`info: ${JSON.stringify(info)}`);
     expect(info).toBeDefined();
@@ -60,7 +59,7 @@ describe('smoke test', () => {
   it(
     'should have a committee',
     async () => {
-      const nodeInfo = await pxe.getNodeInfo();
+      const nodeInfo = await aztecNode.getNodeInfo();
       const rollup = new RollupContract(ethereumClient, nodeInfo.l1ContractAddresses.rollupAddress);
       const epochDuration = await rollup.getEpochDuration();
       logger.info(`Epoch duration: ${epochDuration}`);
@@ -74,12 +73,27 @@ describe('smoke test', () => {
           return committee !== undefined;
         },
         'committee',
-        60 * 60, // wait up to 1 hour, since if the rollup was just deployed there will be no committee for 2 epochs
+        60 * 60 * 2, // wait up to 2 hours, since if the rollup was just deployed there will be no committee for 2 epochs
         12, // 12 seconds between each check
       );
     },
     60 * 60 * 1000,
   );
+
+  it('should have mined a checkpoint', async () => {
+    const nodeInfo = await aztecNode.getNodeInfo();
+    const rollup = new RollupContract(ethereumClient, nodeInfo.l1ContractAddresses.rollupAddress);
+    logger.info('Waiting for the first checkpoint to mine');
+    await retryUntil(
+      async () => {
+        const checkpointNumber = await rollup.getCheckpointNumber();
+        return checkpointNumber >= CheckpointNumber(1);
+      },
+      'get checkpoint number',
+      60 * 60, // This should be quick since the committee is already formed (see test case above)
+      12,
+    );
+  });
 
   it('can add chaos', async () => {
     const chaosValuesFile = process.env.CHAOS_SCENARIO_VALUES || 'prover-kill.yaml';

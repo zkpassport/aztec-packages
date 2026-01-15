@@ -5,7 +5,7 @@ const childProcess = require("child_process");
 const { preprocessIncludeCode } = require("./include_code");
 const { preprocessIncludeVersion } = require("./include_version");
 
-const { generateInstructionSet } = require("./InstructionSet/genMarkdown");
+// const { generateInstructionSet } = require("./InstructionSet/genMarkdown"); // Removed with protocol-specs
 
 async function processMarkdownFilesInDir(rootDir, docsDir, regex) {
   const files = fs.readdirSync(docsDir);
@@ -119,16 +119,35 @@ async function writeProcessedFiles(docsDir, destDir, cachedDestDir, content) {
 }
 
 async function run() {
-  await generateInstructionSet();
+  // await generateInstructionSet(); // Removed with protocol-specs
 
   const rootDir = path.join(__dirname, "../../../");
-  const docsDir = path.join(rootDir, "docs", "docs");
-  const destDir = path.join(rootDir, "docs", "processed-docs");
-  const cachedDestDir = path.join(rootDir, "docs", "processed-docs-cache");
+  const baseDestDir = path.join(rootDir, "docs", "processed-docs");
+  const baseCachedDestDir = path.join(rootDir, "docs", "processed-docs-cache");
 
-  const content = await processMarkdownFilesInDir(rootDir, docsDir);
+  // Process all docs directories that may contain macros
+  const docsDirs = [
+    path.join(rootDir, "docs", "docs"),
+    path.join(rootDir, "docs", "docs-developers"),
+    path.join(rootDir, "docs", "docs-network"),
+  ];
 
-  await writeProcessedFiles(docsDir, destDir, cachedDestDir, content);
+  for (const docsDir of docsDirs) {
+    if (!fs.existsSync(docsDir)) {
+      console.log(`Skipping ${docsDir} (does not exist)`);
+      continue;
+    }
+
+    const dirName = path.basename(docsDir);
+    console.log(`Processing ${dirName}...`);
+
+    // Maintain directory separation: processed-docs/docs/, processed-docs/docs-developers/, etc.
+    const destDir = path.join(baseDestDir, dirName);
+    const cachedDestDir = path.join(baseCachedDestDir, dirName);
+
+    const content = await processMarkdownFilesInDir(rootDir, docsDir);
+    await writeProcessedFiles(docsDir, destDir, cachedDestDir, content);
+  }
 
   console.log("Preprocessing complete.");
 }

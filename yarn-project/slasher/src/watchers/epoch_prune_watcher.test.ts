@@ -1,7 +1,9 @@
 import type { EpochCache } from '@aztec/epoch-cache';
+import { BlockNumber, EpochNumber } from '@aztec/foundation/branded-types';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import { sleep } from '@aztec/foundation/sleep';
 import { L2Block, type L2BlockSourceEventEmitter, L2BlockSourceEvents } from '@aztec/stdlib/block';
+import type { L1RollupConstants } from '@aztec/stdlib/epoch-helpers';
 import type {
   BuildBlockResult,
   IFullNodeBlockBuilder,
@@ -28,6 +30,10 @@ describe('EpochPruneWatcher', () => {
   let txProvider: MockProxy<Pick<ITxProvider, 'getAvailableTxs'>>;
   let blockBuilder: MockProxy<IFullNodeBlockBuilder>;
   let fork: MockProxy<MerkleTreeWriteOperations>;
+
+  let ts: bigint;
+  let l1Constants: L1RollupConstants;
+
   const validEpochPrunedPenalty = BigInt(1000000000000000000n);
   const dataWithholdingPenalty = BigInt(2000000000000000000n);
 
@@ -40,6 +46,18 @@ describe('EpochPruneWatcher', () => {
     blockBuilder = mock<IFullNodeBlockBuilder>();
     fork = mock<MerkleTreeWriteOperations>();
     blockBuilder.getFork.mockResolvedValue(fork);
+
+    ts = BigInt(Math.ceil(Date.now() / 1000));
+    l1Constants = {
+      l1StartBlock: 1n,
+      l1GenesisTime: ts,
+      slotDuration: 24,
+      epochDuration: 8,
+      ethereumSlotDuration: 12,
+      proofSubmissionEpochs: 1,
+    };
+
+    epochCache.getL1Constants.mockReturnValue(l1Constants);
 
     watcher = new EpochPruneWatcher(l2BlockSource, l1ToL2MessageSource, epochCache, txProvider, blockBuilder, {
       slashPrunePenalty: validEpochPrunedPenalty,
@@ -54,9 +72,10 @@ describe('EpochPruneWatcher', () => {
 
   it('should emit WANT_TO_SLASH_EVENT when a validator is in a pruned epoch when data is unavailable', async () => {
     const emitSpy = jest.spyOn(watcher, 'emit');
+    const epochNumber = EpochNumber(1);
 
     const block = await L2Block.random(
-      1, // block number
+      BlockNumber(12), // block number
       4, // txs per block
     );
     txProvider.getAvailableTxs.mockResolvedValue({ txs: [], missingTxs: [block.body.txEffects[0].txHash] });
@@ -68,11 +87,11 @@ describe('EpochPruneWatcher', () => {
     epochCache.getCommitteeForEpoch.mockResolvedValue({
       committee: committee.map(EthAddress.fromString),
       seed: 0n,
-      epoch: 1n,
+      epoch: epochNumber,
     });
 
     l2BlockSource.emit(L2BlockSourceEvents.L2PruneDetected, {
-      epochNumber: 1n,
+      epochNumber: EpochNumber(1),
       blocks: [block],
       type: L2BlockSourceEvents.L2PruneDetected,
     });
@@ -85,13 +104,13 @@ describe('EpochPruneWatcher', () => {
         validator: EthAddress.fromString(committee[0]),
         amount: dataWithholdingPenalty,
         offenseType: OffenseType.DATA_WITHHOLDING,
-        epochOrSlot: 1n,
+        epochOrSlot: BigInt(epochNumber),
       },
       {
         validator: EthAddress.fromString(committee[1]),
         amount: dataWithholdingPenalty,
         offenseType: OffenseType.DATA_WITHHOLDING,
-        epochOrSlot: 1n,
+        epochOrSlot: BigInt(epochNumber),
       },
     ] satisfies WantToSlashArgs[]);
   });
@@ -100,7 +119,7 @@ describe('EpochPruneWatcher', () => {
     const emitSpy = jest.spyOn(watcher, 'emit');
 
     const block = await L2Block.random(
-      1, // block number
+      BlockNumber(12), // block number
       4, // txs per block
     );
     const tx = Tx.random();
@@ -118,11 +137,11 @@ describe('EpochPruneWatcher', () => {
     epochCache.getCommitteeForEpoch.mockResolvedValue({
       committee: committee.map(EthAddress.fromString),
       seed: 0n,
-      epoch: 1n,
+      epoch: EpochNumber(1),
     });
 
     l2BlockSource.emit(L2BlockSourceEvents.L2PruneDetected, {
-      epochNumber: 1n,
+      epochNumber: EpochNumber(1),
       blocks: [block],
       type: L2BlockSourceEvents.L2PruneDetected,
     });
@@ -152,11 +171,11 @@ describe('EpochPruneWatcher', () => {
     const emitSpy = jest.spyOn(watcher, 'emit');
 
     const blockFromL1 = await L2Block.random(
-      1, // block number
+      BlockNumber(12), // block number
       1, // txs per block
     );
     const blockFromBuilder = await L2Block.random(
-      2, // block number
+      BlockNumber(13), // block number
       1, // txs per block
     );
     const tx = Tx.random();
@@ -174,11 +193,11 @@ describe('EpochPruneWatcher', () => {
     epochCache.getCommitteeForEpoch.mockResolvedValue({
       committee: committee.map(EthAddress.fromString),
       seed: 0n,
-      epoch: 1n,
+      epoch: EpochNumber(1),
     });
 
     l2BlockSource.emit(L2BlockSourceEvents.L2PruneDetected, {
-      epochNumber: 1n,
+      epochNumber: EpochNumber(1),
       blocks: [blockFromL1],
       type: L2BlockSourceEvents.L2PruneDetected,
     });

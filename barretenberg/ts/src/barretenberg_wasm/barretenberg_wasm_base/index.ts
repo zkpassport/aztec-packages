@@ -1,4 +1,3 @@
-import { createDebugLogger } from '../../log/index.js';
 import { randomBytes } from '../../random/index.js';
 
 /**
@@ -9,7 +8,7 @@ export class BarretenbergWasmBase {
   protected memStore: { [key: string]: Uint8Array } = {};
   protected memory!: WebAssembly.Memory;
   protected instance!: WebAssembly.Instance;
-  protected logger: (msg: string) => void = createDebugLogger('bb_wasm_base');
+  protected logger: (msg: string) => void = () => {};
 
   protected getImportObj(memory: WebAssembly.Memory) {
     /* eslint-disable camelcase */
@@ -121,11 +120,11 @@ export class BarretenbergWasmBase {
     mem.set(arr, offset);
   }
 
-  // PRIVATE METHODS
-
-  private getMemory() {
+  public getMemory() {
     return new Uint8Array(this.memory.buffer);
   }
+
+  // PRIVATE METHODS
 
   private stringFromAddress(addr: number) {
     addr = addr >>> 0;

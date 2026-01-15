@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <numeric>
 
 #include "barretenberg/commitment_schemes/shplonk/shplemini.hpp"
 #include "barretenberg/honk/proof_system/types/proof.hpp"
@@ -135,7 +136,7 @@ AvmRecursiveVerifier::PairingPoints AvmRecursiveVerifier::verify_proof(
         comm = transcript->template receive_from_prover<Commitment>(label);
     }
 
-    auto [beta, gamma] = transcript->template get_challenges<FF>("beta", "gamma");
+    auto [beta, gamma] = transcript->template get_challenges<FF>(std::array<std::string, 2>{ "beta", "gamma" });
     relation_parameters.beta = beta;
     relation_parameters.gamma = gamma;
 
@@ -156,37 +157,82 @@ AvmRecursiveVerifier::PairingPoints AvmRecursiveVerifier::verify_proof(
     SumcheckVerifier<Flavor> sumcheck(transcript, alpha, key->log_fixed_circuit_size);
 
     std::vector<FF> gate_challenges =
-        transcript->template get_powers_of_challenge<FF>("Sumcheck:gate_challenge", key->log_fixed_circuit_size);
+        transcript->template get_dyadic_powers_of_challenge<FF>("Sumcheck:gate_challenge", key->log_fixed_circuit_size);
 
     // No need to constrain that sumcheck_verified is true as this is guaranteed by the implementation of
     // when called over a "circuit field" types.
     SumcheckOutput<Flavor> output = sumcheck.verify(relation_parameters, gate_challenges, padding_indicator_array);
     vinfo("verified sumcheck: ", (output.verified));
 
+    using C = ColumnAndShifts;
     std::array<FF, AVM_NUM_PUBLIC_INPUT_COLUMNS> claimed_evaluations = {
-        output.claimed_evaluations.public_inputs_cols_0_,
-        output.claimed_evaluations.public_inputs_cols_1_,
-        output.claimed_evaluations.public_inputs_cols_2_,
-        output.claimed_evaluations.public_inputs_cols_3_,
+        output.claimed_evaluations.get(C::public_inputs_cols_0_),
+        output.claimed_evaluations.get(C::public_inputs_cols_1_),
+        output.claimed_evaluations.get(C::public_inputs_cols_2_),
+        output.claimed_evaluations.get(C::public_inputs_cols_3_),
     };
 
     // TODO(#14234)[Unconditional PIs validation]: Inside of loop, replace pi_validation.must_imply() by
     // public_input_evaluation.assert_equal(claimed_evaluations[i]
     for (size_t i = 0; i < AVM_NUM_PUBLIC_INPUT_COLUMNS; i++) {
         FF public_input_evaluation = evaluate_public_input_column(public_inputs[i], output.challenge);
-        vinfo("public_input_evaluation failed, public inputs col ", i);
-        pi_validation.must_imply(public_input_evaluation == claimed_evaluations[i], "public_input_evaluation failed");
+        pi_validation.must_imply(public_input_evaluation == claimed_evaluations[i],
+                                 format("public_input_evaluation failed at column ", i));
     }
 
-    // Execute Shplemini rounds.
-    ClaimBatcher claim_batcher{
-        .unshifted = ClaimBatch{ commitments.get_unshifted(), output.claimed_evaluations.get_unshifted() },
-        .shifted = ClaimBatch{ commitments.get_to_be_shifted(), output.claimed_evaluations.get_shifted() }
-    };
-    const BatchOpeningClaim<Curve> opening_claim = Shplemini::compute_batch_opening_claim(
-        padding_indicator_array, claim_batcher, output.challenge, Commitment::one(&builder), transcript);
+    // Batch commitments and evaluations using short scalars to reduce ECCVM circuit size
+    auto unshifted_comms = commitments.get_unshifted();
+    auto unshifted_evals = output.claimed_evaluations.get_unshifted();
+    auto shifted_comms = commitments.get_to_be_shifted();
+    auto shifted_evals = output.claimed_evaluations.get_shifted();
 
-    auto pairing_points = PCS::reduce_verify_batch_opening_claim(opening_claim, transcript);
+    // Generate batching challenge labels
+    // Note: We get N-1 challenges for N unshifted commitments (first commitment has implicit coefficient 1)
+    std::vector<std::string> unshifted_batching_challenge_labels;
+    unshifted_batching_challenge_labels.reserve(unshifted_comms.size() - 1);
+    for (size_t idx = 0; idx < unshifted_comms.size() - 1; idx++) {
+        unshifted_batching_challenge_labels.push_back("rho_" + std::to_string(idx));
+    }
+    std::vector<std::string> shifted_batching_challenge_labels;
+    shifted_batching_challenge_labels.reserve(shifted_comms.size());
+    for (size_t idx = 0; idx < shifted_comms.size(); idx++) {
+        shifted_batching_challenge_labels.push_back("rho_" + std::to_string(unshifted_comms.size() - 1 + idx));
+    }
+
+    // Get short (128-bit) batching challenges from transcript
+    auto unshifted_challenges = transcript->template get_challenges<FF>(unshifted_batching_challenge_labels);
+    auto shifted_challenges = transcript->template get_challenges<FF>(shifted_batching_challenge_labels);
+
+    // Batch commitments: first commitment has coefficient 1, rest are batched with challenges
+    Commitment squashed_unshifted =
+        unshifted_comms[0] +
+        Commitment::batch_mul(
+            std::vector<Commitment>(unshifted_comms.begin() + 1, unshifted_comms.end()), unshifted_challenges, 128);
+
+    Commitment squashed_shifted = Commitment::batch_mul(
+        std::vector<Commitment>(shifted_comms.begin(), shifted_comms.end()), shifted_challenges, 128);
+
+    // Batch evaluations: compute inner product with first eval as initial value for unshifted
+    FF squashed_unshifted_eval = std::inner_product(
+        unshifted_challenges.begin(), unshifted_challenges.end(), unshifted_evals.begin() + 1, unshifted_evals[0]);
+
+    FF squashed_shifted_eval =
+        std::inner_product(shifted_challenges.begin(), shifted_challenges.end(), shifted_evals.begin(), FF(0));
+
+    // Execute Shplemini rounds with squashed claims
+    ClaimBatcher squashed_claim_batcher{ .unshifted = ClaimBatch{ .commitments = RefVector(squashed_unshifted),
+                                                                  .evaluations = RefVector(squashed_unshifted_eval) },
+                                         .shifted = ClaimBatch{ .commitments = RefVector(squashed_shifted),
+                                                                .evaluations = RefVector(squashed_shifted_eval) } };
+    auto opening_claim = Shplemini::compute_batch_opening_claim(
+        padding_indicator_array, squashed_claim_batcher, output.challenge, Commitment::one(&builder), transcript);
+
+    PairingPoints pairing_points(PCS::reduce_verify_batch_opening_claim(std::move(opening_claim), transcript));
+
+    if (builder.failed()) {
+        info("AVM Recursive verifier builder failed with error: ", builder.err());
+    }
+
     return pairing_points;
 }
 

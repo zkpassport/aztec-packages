@@ -1,4 +1,7 @@
-import { type AztecAddress, Fr, type Logger, type Wallet } from '@aztec/aztec.js';
+import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import { PrivateVotingContract } from '@aztec/noir-contracts.js/PrivateVoting';
 import { TX_ERROR_EXISTING_NULLIFIER } from '@aztec/stdlib/tx';
 
@@ -38,7 +41,7 @@ describe('e2e_voting_contract', () => {
       // We try voting again, but our TX is dropped due to trying to emit duplicate nullifiers
       // first confirm that it fails simulation
       await expect(votingContract.methods.cast_vote(candidate).simulate({ from: owner })).rejects.toThrow(
-        /Nullifier collision/,
+        /Nullifier collision|duplicate.*nullifier/,
       );
       // if we skip simulation, tx fails
       await expect(votingContract.methods.cast_vote(candidate).send({ from: owner }).wait()).rejects.toThrow(

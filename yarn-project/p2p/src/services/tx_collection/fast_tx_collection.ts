@@ -1,3 +1,4 @@
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { times } from '@aztec/foundation/collection';
 import { AbortError, TimeoutError } from '@aztec/foundation/error';
 import { type Logger, createLogger } from '@aztec/foundation/log';
@@ -55,7 +56,9 @@ export class FastTxCollection {
     }
 
     const blockInfo: L2BlockInfo =
-      input.type === 'proposal' ? input.blockProposal.toBlockInfo() : input.block.toBlockInfo();
+      input.type === 'proposal'
+        ? { ...input.blockProposal.toBlockInfo(), blockNumber: input.blockNumber }
+        : { ...input.block.toBlockInfo() };
 
     // This promise is used to await for the collection to finish during the main collectFast method.
     // It gets resolved in `foundTxs` when all txs have been collected, or rejected if the request is aborted or hits the deadline.
@@ -314,7 +317,7 @@ export class FastTxCollection {
    * Stop collecting all txs for blocks less than or requal to the block number specified.
    * To be called when we no longer care about gathering txs up to a certain block, eg when they become proven or finalized.
    */
-  public stopCollectingForBlocksUpTo(blockNumber: number): void {
+  public stopCollectingForBlocksUpTo(blockNumber: BlockNumber): void {
     for (const request of this.requests) {
       if (request.blockInfo.blockNumber <= blockNumber) {
         request.promise.reject(new AbortError(`Stopped collecting txs up to block ${blockNumber}`));
@@ -327,7 +330,7 @@ export class FastTxCollection {
    * Stop collecting all txs for blocks greater than the block number specified.
    * To be called when there is a chain prune and previously mined txs are no longer relevant.
    */
-  public stopCollectingForBlocksAfter(blockNumber: number): void {
+  public stopCollectingForBlocksAfter(blockNumber: BlockNumber): void {
     for (const request of this.requests) {
       if (request.blockInfo.blockNumber > blockNumber) {
         request.promise.reject(new AbortError(`Stopped collecting txs after block ${blockNumber}`));

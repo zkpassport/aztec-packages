@@ -15,8 +15,6 @@ void sloadImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
 {
     using C = ColumnAndShifts;
 
-    BB_BENCH_NAME("accumulate/sload");
-
     const auto constants_MEM_TAG_FF = FF(0);
 
     { // SLOAD_FF_OUTPUT_TAG
@@ -24,12 +22,6 @@ void sloadImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
         auto tmp = static_cast<View>(in.get(C::execution_sel_execute_sload)) *
                    (CView(constants_MEM_TAG_FF) - static_cast<View>(in.get(C::execution_mem_tag_reg_1_)));
         std::get<0>(evals) += (tmp * scaling_factor);
-    }
-    { // SLOAD_SUCCESS
-        using View = typename std::tuple_element_t<1, ContainerOverSubrelations>::View;
-        auto tmp = static_cast<View>(in.get(C::execution_sel_execute_sload)) *
-                   static_cast<View>(in.get(C::execution_sel_opcode_error));
-        std::get<1>(evals) += (tmp * scaling_factor);
     }
 }
 

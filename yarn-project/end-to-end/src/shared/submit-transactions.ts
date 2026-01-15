@@ -1,6 +1,10 @@
-import { AztecAddress, Fr, GrumpkinScalar, type Logger, type SentTx, TxStatus } from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import type { SentTx } from '@aztec/aztec.js/contracts';
+import { Fr, GrumpkinScalar } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import { TxStatus } from '@aztec/aztec.js/tx';
 import { times } from '@aztec/foundation/collection';
-import type { TestWallet } from '@aztec/test-wallet';
+import type { TestWallet } from '@aztec/test-wallet/server';
 
 // submits a set of transactions to the provided Wallet
 export const submitTxsTo = async (
@@ -13,7 +17,8 @@ export const submitTxsTo = async (
   await Promise.all(
     times(numTxs, async () => {
       const accountManager = await wallet.createSchnorrAccount(Fr.random(), Fr.random(), GrumpkinScalar.random());
-      const tx = accountManager.deploy({ deployAccount: submitter });
+      const deployMethod = await accountManager.getDeployMethod();
+      const tx = deployMethod.send({ from: submitter });
       const txHash = await tx.getTxHash();
 
       logger.info(`Tx sent with hash ${txHash}`);

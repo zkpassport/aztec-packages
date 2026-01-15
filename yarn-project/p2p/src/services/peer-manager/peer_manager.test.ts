@@ -1,9 +1,11 @@
 import type { EpochCache } from '@aztec/epoch-cache';
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { Buffer32 } from '@aztec/foundation/buffer';
 import { times } from '@aztec/foundation/collection';
-import { Secp256k1Signer, randomBytes } from '@aztec/foundation/crypto';
+import { randomBytes } from '@aztec/foundation/crypto/random';
+import { Secp256k1Signer } from '@aztec/foundation/crypto/secp256k1-signer';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import { createLogger } from '@aztec/foundation/log';
 import { sleep } from '@aztec/foundation/sleep';
 import type {
@@ -14,12 +16,12 @@ import type {
 import { PeerErrorSeverity } from '@aztec/stdlib/p2p';
 import { Attributes, getTelemetryClient } from '@aztec/telemetry-client';
 
-import { type ENR, SignableENR } from '@chainsafe/enr';
 import { jest } from '@jest/globals';
 import type { PeerId } from '@libp2p/interface';
 import { peerIdFromString } from '@libp2p/peer-id';
 import { createSecp256k1PeerId } from '@libp2p/peer-id-factory';
 import { multiaddr } from '@multiformats/multiaddr';
+import { type ENR, SignableENR } from '@nethermindeth/enr';
 import { type MockProxy, mock } from 'jest-mock-extended';
 import { generatePrivateKey } from 'viem/accounts';
 
@@ -893,7 +895,8 @@ describe('PeerManager', () => {
   });
 
   describe('authentication', () => {
-    const mockStatusMessage = () => new StatusMessage('Test Version', 4, randomBytes(32).toString('hex'), 2);
+    const mockStatusMessage = () =>
+      new StatusMessage('Test Version', BlockNumber(4), randomBytes(32).toString('hex'), BlockNumber(2));
 
     it('should fail to construct with disabled status handshake and validators only', () => {
       expect(() =>

@@ -1,13 +1,14 @@
 import type { AztecNodeConfig } from '@aztec/aztec-node';
-import type { AccountManager, EthAddress, Fr } from '@aztec/aztec.js';
-import type { ViemClient } from '@aztec/ethereum';
+import { EthAddress } from '@aztec/aztec.js/addresses';
+import { Fr } from '@aztec/aztec.js/fields';
+import { AccountManager } from '@aztec/aztec.js/wallet';
+import type { ViemClient } from '@aztec/ethereum/types';
 import type { ConfigMappingsType } from '@aztec/foundation/config';
 import { type LogFn, createLogger } from '@aztec/foundation/log';
 import type { SharedNodeConfig } from '@aztec/node-lib/config';
-import type { PXEService } from '@aztec/pxe/server';
 import type { ProverConfig } from '@aztec/stdlib/interfaces/server';
-import { UpdateChecker } from '@aztec/stdlib/update-checker';
-import { getTelemetryClient } from '@aztec/telemetry-client';
+import { getTelemetryClient } from '@aztec/telemetry-client/start';
+import type { TestWallet } from '@aztec/test-wallet/server';
 
 import chalk from 'chalk';
 import type { Command } from 'commander';
@@ -67,7 +68,7 @@ export const installSignalHandlers = (logFn: LogFn, cb?: Array<() => Promise<voi
 /**
  * Creates logs for the initial accounts
  * @param accounts - The initial accounts
- * @param pxe - A PXE instance to get the registered accounts
+ * @param wallet - A TestWallet instance to get the registered accounts
  * @returns A string array containing the initial accounts details
  */
 export async function createAccountLogs(
@@ -81,13 +82,13 @@ export async function createAccountLogs(
      */
     secretKey: Fr;
   }[],
-  pxe: PXEService,
+  wallet: TestWallet,
 ) {
-  const registeredAccounts = await pxe.getRegisteredAccounts();
+  const registeredAccounts = await wallet.getAccounts();
   const accountLogStrings = [`Initial Accounts:\n\n`];
   for (const accountWithSecretKey of accountsWithSecretKeys) {
     const completeAddress = await accountWithSecretKey.account.getCompleteAddress();
-    if (registeredAccounts.find(a => a.equals(completeAddress))) {
+    if (registeredAccounts.find(a => a.item.equals(completeAddress.address))) {
       accountLogStrings.push(` Address: ${completeAddress.address.toString()}\n`);
       accountLogStrings.push(` Partial Address: ${completeAddress.partialAddress.toString()}\n`);
       accountLogStrings.push(` Secret Key: ${accountWithSecretKey.secretKey.toString()}\n`);
@@ -271,7 +272,7 @@ export const extractRelevantOptions = <T>(
 };
 
 /**
- * Downloads just enough points to be able to verify ClientIVC proofs.
+ * Downloads just enough points to be able to verify Chonk proofs.
  * @param opts - Whether proof are to be verifier
  * @param log - Logging function
  */
@@ -310,6 +311,7 @@ export async function setupUpdateMonitor(
   updateNodeConfig?: (config: object) => Promise<void>,
 ) {
   const logger = createLogger('update-check');
+  const { UpdateChecker } = await import('@aztec/stdlib/update-checker');
   const checker = await UpdateChecker.new({
     baseURL: updatesLocation,
     publicClient,

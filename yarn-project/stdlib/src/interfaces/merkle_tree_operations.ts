@@ -1,4 +1,5 @@
-import type { Fr } from '@aztec/foundation/fields';
+import type { BlockNumber } from '@aztec/foundation/branded-types';
+import type { Fr } from '@aztec/foundation/curves/bn254';
 import { createLogger } from '@aztec/foundation/log';
 import { type IndexedTreeLeafPreimage, SiblingPath } from '@aztec/foundation/trees';
 
@@ -7,6 +8,7 @@ import type { NullifierLeaf } from '../trees/nullifier_leaf.js';
 import type { PublicDataTreeLeaf } from '../trees/public_data_leaf.js';
 import type { BlockHeader } from '../tx/block_header.js';
 import type { StateReference } from '../tx/state_reference.js';
+import type { WorldStateRevision, WorldStateRevisionWithHandle } from '../world-state/world_state_revision.js';
 
 /**
  * Type alias for the nullifier tree ID.
@@ -133,6 +135,11 @@ export interface MerkleTreeReadOperations {
   getInitialHeader(): BlockHeader;
 
   /**
+   * Gets the current revision.
+   */
+  getRevision(): WorldStateRevision | WorldStateRevisionWithHandle;
+
+  /**
    * Gets sibling path for a leaf.
    * @param treeId - The tree to be queried for a sibling path.
    * @param index - The index of the leaf for which a sibling path should be returned.
@@ -214,7 +221,7 @@ export interface MerkleTreeReadOperations {
   getBlockNumbersForLeafIndices<ID extends MerkleTreeId>(
     treeId: ID,
     leafIndices: bigint[],
-  ): Promise<(bigint | undefined)[]>;
+  ): Promise<(BlockNumber | undefined)[]>;
 }
 
 export interface MerkleTreeCheckpointOperations {

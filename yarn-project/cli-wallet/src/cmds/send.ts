@@ -1,14 +1,18 @@
-import { AuthWitness, type AztecAddress, Contract, Fr, type SendMethodOptions, type Wallet } from '@aztec/aztec.js';
+import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { AuthWitness } from '@aztec/aztec.js/authorization';
+import { Contract, type SendInteractionOptions } from '@aztec/aztec.js/contracts';
+import type { AztecNode } from '@aztec/aztec.js/node';
 import { prepTx } from '@aztec/cli/utils';
 import type { LogFn } from '@aztec/foundation/log';
-import { GasSettings } from '@aztec/stdlib/gas';
 
+import { DEFAULT_TX_TIMEOUT_S } from '../utils/cli_wallet_and_node_wrapper.js';
 import { CLIFeeArgs } from '../utils/options/fees.js';
 import { printProfileResult } from '../utils/profiling.js';
-import { DEFAULT_TX_TIMEOUT_S } from '../utils/pxe_wrapper.js';
+import type { CLIWallet } from '../utils/wallet.js';
 
 export async function send(
-  wallet: Wallet,
+  wallet: CLIWallet,
+  node: AztecNode,
   from: AztecAddress,
   functionName: string,
   functionArgsIn: any[],
@@ -23,30 +27,30 @@ export async function send(
 ) {
   const { functionArgs, contractArtifact } = await prepTx(contractArtifactPath, functionName, functionArgsIn, log);
 
-  const contract = await Contract.at(contractAddress, contractArtifact, wallet);
+  const contract = Contract.at(contractAddress, contractArtifact, wallet);
   const call = contract.methods[functionName](...functionArgs);
 
-  const txNonce = Fr.random();
-
-  const userFeeOptions = await feeOpts.toUserFeeOptions(wallet, from);
-  const sendOptions: SendMethodOptions = {
-    fee: userFeeOptions,
+  const { paymentMethod, gasSettings } = await feeOpts.toUserFeeOptions(node, wallet, from);
+  const sendOptions: SendInteractionOptions = {
+    fee: { paymentMethod, gasSettings },
     from,
     authWitnesses,
   };
 
-  const gasLimits = await call.estimateGas(sendOptions);
+  const { estimatedGas, stats } = await call.simulate({
+    ...sendOptions,
+    fee: { ...sendOptions.fee, estimateGas: true },
+  });
 
   if (feeOpts.estimateOnly) {
     return;
   }
 
-  const provenTx = await call.prove(sendOptions);
+  const tx = call.send({ ...sendOptions, fee: { ...sendOptions.fee, gasSettings: estimatedGas } });
   if (verbose) {
-    printProfileResult(provenTx.stats!, log);
+    printProfileResult(stats!, log);
   }
 
-  const tx = provenTx.send();
   const txHash = await tx.getTxHash();
   log(`\nTransaction hash: ${txHash.toString()}`);
   if (wait) {
@@ -66,14 +70,7 @@ export async function send(
   } else {
     log('Transaction pending. Check status with check-tx');
   }
-  const gasSettings = GasSettings.from({
-    ...provenTx.data.constants.txContext.gasSettings,
-    ...gasLimits,
-  });
   return {
     txHash,
-    txNonce,
-    cancellable,
-    gasSettings,
   };
 }

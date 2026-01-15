@@ -1,9 +1,14 @@
-import { SchnorrAccountContract } from '@aztec/accounts/schnorr';
-import { type AztecAddress, type AztecNode, type Logger, type PXE, createLogger, sleep } from '@aztec/aztec.js';
+import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { type Logger, createLogger } from '@aztec/aztec.js/log';
+import type { AztecNode } from '@aztec/aztec.js/node';
 import { CheatCodes } from '@aztec/aztec/testing';
-import { type DeployL1ContractsArgs, RollupContract, createExtendedL1Client } from '@aztec/ethereum';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import { RollupContract } from '@aztec/ethereum/contracts';
+import type { DeployL1ContractsArgs } from '@aztec/ethereum/deploy-l1-contracts';
 import { ChainMonitor } from '@aztec/ethereum/test';
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { EthAddress } from '@aztec/foundation/eth-address';
+import { sleep } from '@aztec/foundation/sleep';
 import { TestERC20Abi } from '@aztec/l1-artifacts';
 import { AppSubscriptionContract } from '@aztec/noir-contracts.js/AppSubscription';
 import { FPCContract } from '@aztec/noir-contracts.js/FPC';
@@ -14,7 +19,7 @@ import { CounterContract } from '@aztec/noir-test-contracts.js/Counter';
 import { ProtocolContractAddress } from '@aztec/protocol-contracts';
 import { getCanonicalFeeJuice } from '@aztec/protocol-contracts/fee-juice';
 import { GasSettings } from '@aztec/stdlib/gas';
-import { TestWallet } from '@aztec/test-wallet';
+import { TestWallet } from '@aztec/test-wallet/server';
 
 import { getContract } from 'viem';
 
@@ -52,7 +57,6 @@ export class FeesTest {
   private accounts: AztecAddress[] = [];
 
   public logger: Logger;
-  public pxe!: PXE;
   public aztecNode!: AztecNode;
   public cheatCodes!: CheatCodes;
 
@@ -84,7 +88,7 @@ export class FeesTest {
   public getGasBalanceFn!: BalancesFn;
   public getBananaPublicBalanceFn!: BalancesFn;
   public getBananaPrivateBalanceFn!: BalancesFn;
-  public getProverFee!: (blockNumber: number) => Promise<bigint>;
+  public getProverFee!: (blockNumber: BlockNumber) => Promise<bigint>;
 
   public readonly ALICE_INITIAL_BANANAS = BigInt(1e22);
   public readonly SUBSCRIPTION_AMOUNT = BigInt(1e19);
@@ -135,7 +139,7 @@ export class FeesTest {
   }
 
   async getBlockRewards() {
-    const blockReward = await this.rollupContract.getBlockReward();
+    const blockReward = await this.rollupContract.getCheckpointReward();
     const rewardConfig = await this.rollupContract.getRewardConfig();
 
     const balance = await this.feeJuiceBridgeTestHarness.getL1FeeJuiceBalance(
@@ -183,32 +187,20 @@ export class FeesTest {
     await this.snapshotManager.snapshot(
       'initial_accounts',
       deployAccounts(this.numberOfAccounts, this.logger),
-      async ({ deployedAccounts }, { wallet, pxe, aztecNode, aztecNodeConfig }) => {
-        this.pxe = pxe;
+      async ({ deployedAccounts }, { wallet, aztecNode, cheatCodes }) => {
         this.wallet = wallet;
         this.aztecNode = aztecNode;
         this.gasSettings = GasSettings.default({ maxFeesPerGas: (await this.aztecNode.getCurrentBaseFees()).mul(2) });
-        this.cheatCodes = await CheatCodes.create(aztecNodeConfig.l1RpcUrls, pxe, aztecNode);
+        this.cheatCodes = cheatCodes;
         this.accounts = deployedAccounts.map(a => a.address);
         this.accounts.forEach((a, i) => this.logger.verbose(`Account ${i} address: ${a}`));
         [this.aliceAddress, this.bobAddress, this.sequencerAddress] = this.accounts.slice(0, 3);
-        await Promise.all(
-          deployedAccounts.map(async acc => {
-            const accountData = {
-              secret: acc.secret,
-              salt: acc.salt,
-              contract: new SchnorrAccountContract(acc.signingKey),
-            };
-            const accountManager = await this.wallet.createAccount(accountData);
-            return accountManager.register();
-          }),
-        );
 
         // We set Alice as the FPC admin to avoid the need for deployment of another account.
         this.fpcAdmin = this.aliceAddress;
 
         const canonicalFeeJuice = await getCanonicalFeeJuice();
-        this.feeJuiceContract = await FeeJuiceContract.at(canonicalFeeJuice.address, this.wallet);
+        this.feeJuiceContract = FeeJuiceContract.at(canonicalFeeJuice.address, this.wallet);
       },
     );
   }
@@ -226,7 +218,7 @@ export class FeesTest {
       async (_data, context) => {
         this.context = context;
 
-        this.feeJuiceContract = await FeeJuiceContract.at(ProtocolContractAddress.FeeJuice, this.wallet);
+        this.feeJuiceContract = FeeJuiceContract.at(ProtocolContractAddress.FeeJuice, this.wallet);
 
         this.getGasBalanceFn = getBalancesFn(
           '⛽',
@@ -238,7 +230,6 @@ export class FeesTest {
         this.feeJuiceBridgeTestHarness = await FeeJuicePortalTestingHarnessFactory.create({
           aztecNode: context.aztecNode,
           aztecNodeAdmin: context.aztecNode,
-          pxeService: context.pxe,
           l1Client: context.deployL1ContractsValues.l1Client,
           wallet: this.wallet,
           logger: this.logger,
@@ -257,8 +248,8 @@ export class FeesTest {
         this.logger.info(`BananaCoin deployed at ${bananaCoin.address}`);
         return { bananaCoinAddress: bananaCoin.address };
       },
-      async ({ bananaCoinAddress }) => {
-        this.bananaCoin = await BananaCoin.at(bananaCoinAddress, this.wallet);
+      ({ bananaCoinAddress }) => {
+        this.bananaCoin = BananaCoin.at(bananaCoinAddress, this.wallet);
         const logger = this.logger;
         this.getBananaPublicBalanceFn = getBalancesFn(
           '🍌.public',
@@ -272,6 +263,7 @@ export class FeesTest {
           this.aliceAddress,
           logger,
         );
+        return Promise.resolve();
       },
     );
   }
@@ -281,7 +273,7 @@ export class FeesTest {
       'fpc_setup',
       async context => {
         const feeJuiceContract = this.feeJuiceBridgeTestHarness.feeJuice;
-        expect((await context.pxe.getContractMetadata(feeJuiceContract.address)).isContractPublished).toBe(true);
+        expect((await context.wallet.getContractMetadata(feeJuiceContract.address)).isContractPublished).toBe(true);
 
         const bananaCoin = this.bananaCoin;
         const bananaFPC = await FPCContract.deploy(this.wallet, bananaCoin.address, this.fpcAdmin)
@@ -299,8 +291,8 @@ export class FeesTest {
           rollupAddress: context.deployL1ContractsValues.l1ContractAddresses.rollupAddress,
         };
       },
-      async (data, context) => {
-        const bananaFPC = await FPCContract.at(data.bananaFPCAddress, this.wallet);
+      (data, context) => {
+        const bananaFPC = FPCContract.at(data.bananaFPCAddress, this.wallet);
         this.bananaFPC = bananaFPC;
 
         this.getCoinbaseBalance = async () => {
@@ -317,7 +309,7 @@ export class FeesTest {
           return await this.rollupContract.getSequencerRewards(this.coinbase);
         };
 
-        this.getProverFee = async (blockNumber: number) => {
+        this.getProverFee = async (blockNumber: BlockNumber) => {
           const block = await this.aztecNode.getBlock(blockNumber);
 
           // @todo @lherskind As we deal with #13601
@@ -340,6 +332,7 @@ export class FeesTest {
           const mana = block!.header.totalManaUsed.toBigInt();
           return mulDiv(mana * proverCost, price, 10n ** 9n);
         };
+        return Promise.resolve();
       },
     );
   }
@@ -349,17 +342,18 @@ export class FeesTest {
       'sponsored_fpc_setup',
       async context => {
         const feeJuiceContract = this.feeJuiceBridgeTestHarness.feeJuice;
-        expect((await context.pxe.getContractMetadata(feeJuiceContract.address)).isContractPublished).toBe(true);
+        expect((await context.wallet.getContractMetadata(feeJuiceContract.address)).isContractPublished).toBe(true);
 
-        const sponsoredFPC = await setupSponsoredFPC(context.pxe);
+        const sponsoredFPC = await setupSponsoredFPC(this.wallet);
         this.logger.info(`SponsoredFPC at ${sponsoredFPC.address}`);
 
         return {
           sponsoredFPCAddress: sponsoredFPC.address,
         };
       },
-      async data => {
-        this.sponsoredFPC = await SponsoredFPCContract.at(data.sponsoredFPCAddress, this.wallet);
+      data => {
+        this.sponsoredFPC = SponsoredFPCContract.at(data.sponsoredFPCAddress, this.wallet);
+        return Promise.resolve();
       },
     );
   }

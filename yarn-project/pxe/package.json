@@ -7,16 +7,14 @@
     "./client/lazy": "./dest/entrypoints/client/lazy/index.js",
     "./client/bundle": "./dest/entrypoints/client/bundle/index.js",
     "./simulator": "./dest/contract_function_simulator/index.js",
-    "./config": "./dest/config/index.js",
-    "./testing": "./dest/test/pxe_test_suite.js"
+    "./config": "./dest/config/index.js"
   },
   "bin": "./dest/bin/index.js",
   "scripts": {
-    "build": "yarn clean && yarn generate && tsc -b",
-    "build:dev": "tsc -b --watch",
+    "build": "yarn clean && yarn generate && tsgo -b",
+    "build:dev": "../scripts/tsc.sh --watch",
     "clean": "rm -rf ./dest .tsbuildinfo ./src/config/package_info.ts",
     "test": "NODE_NO_WARNINGS=1 node --experimental-vm-modules ../node_modules/.bin/jest --passWithNoTests --maxWorkers=${JEST_MAX_WORKERS:-8}",
-    "start": "LOG_LEVEL=${LOG_LEVEL:-debug} && node ./dest/bin/index.js",
     "generate": "node ./scripts/generate_package_info.js",
     "check_oracle_version": "node ./dest/bin/check_oracle_version.js"
   },
@@ -77,11 +75,11 @@
     "@aztec/simulator": "workspace:^",
     "@aztec/stdlib": "workspace:^",
     "koa": "^2.16.1",
-    "koa-router": "^12.0.0",
+    "koa-router": "^13.1.1",
     "lodash.omit": "^4.5.0",
     "sha3": "^2.1.4",
     "tslib": "^2.4.0",
-    "viem": "2.23.7"
+    "viem": "npm:@aztec/viem@2.38.2"
   },
   "devDependencies": {
     "@aztec/merkle-tree": "workspace:^",
@@ -91,6 +89,7 @@
     "@types/lodash.omit": "^4.5.7",
     "@types/lodash.times": "^4.3.9",
     "@types/node": "^22.15.17",
+    "@typescript/native-preview": "7.0.0-dev.20251126.1",
     "jest": "^30.0.0",
     "jest-mock-extended": "^4.0.0",
     "lodash.times": "^4.3.2",

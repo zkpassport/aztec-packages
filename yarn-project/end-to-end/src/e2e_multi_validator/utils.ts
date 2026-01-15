@@ -1,5 +1,5 @@
-import type { AztecAddress } from '@aztec/aztec.js';
-import { getAddressFromPrivateKey } from '@aztec/ethereum';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { getAddressFromPrivateKey } from '@aztec/ethereum/account';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import type { EthPrivateKey } from '@aztec/node-keystore';
 
@@ -157,9 +157,7 @@ export async function createKeyFile3(
     schemaVersion: 1,
     validators: [
       {
-        attester: {
-          address: validatorAddress.toChecksumString(),
-        },
+        attester: validatorAddress.toChecksumString(),
         coinbase: coinbase.toChecksumString(),
         publisher: [publisher1Key, publisher2Key],
         feeRecipient: feeRecipient.toString(),
@@ -193,9 +191,7 @@ export async function createKeyFile4(
     },
     validators: [
       {
-        attester: {
-          address: validator1Address.toChecksumString(),
-        },
+        attester: validator1Address.toChecksumString(),
         coinbase: coinbase1.toChecksumString(),
         publisher: {
           mnemonic: mnemonic,
@@ -206,9 +202,7 @@ export async function createKeyFile4(
         feeRecipient: feeRecipient1.toString(),
       },
       {
-        attester: {
-          address: validator2Address.toChecksumString(),
-        },
+        attester: validator2Address.toChecksumString(),
         coinbase: coinbase2.toChecksumString(),
         publisher: [publisher2Key, publisher3Key],
         feeRecipient: feeRecipient2.toString(),

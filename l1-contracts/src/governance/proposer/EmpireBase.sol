@@ -57,12 +57,12 @@ struct CompressedRoundAccounting {
  *
  * **Instances**: Refers to an instance of the rollup contract, which in this case is exposed via a simplified IEmperor
  * interface.
- * This contract only needs the instance to determine the current slot (to compute the round), and the current block
- * proposer.
+ * This contract only needs the instance to determine the current slot (to compute the round), and the current
+ * checkpoint proposer.
  *
  * **Signalers**: Each slot has a designated signaler (determined by IEmperor).
  * Only the current slot's signaler can signal support, either directly or via signature.
- * In the current implementation, the entity that may propose a block (i.e. the "proposer") is the signaler.
+ * In the current implementation, the entity that may propose a checkpoint (i.e. the "proposer") is the signaler.
  *
  * **Signaling**
  * - One signal per slot (enforced by tracking lastSignalSlot)
@@ -80,6 +80,8 @@ struct CompressedRoundAccounting {
  * - QUORUM_SIZE: Minimum signals needed for submission
  * - ROUND_SIZE: Slots per round
  * - Constraint: QUORUM_SIZE > ROUND_SIZE/2 and QUORUM_SIZE ≤ ROUND_SIZE
+ * Note that it it possible to have QUORUM_SIZE = 1 for ROUND_SIZE = 1, which effectively give all the
+ * power to the first signal.
  *
  * @dev SIGNALING METHODS:
  * 1. Direct signal: Current signaler calls `signal()`
@@ -140,7 +142,7 @@ abstract contract EmpireBase is EIP712, IEmpire {
   }
 
   /**
-   * @notice	Signal support for a payload
+   * @notice Signal support for a payload
    *
    * @dev this only works if msg.sender is the current signaler
    *
@@ -153,7 +155,7 @@ abstract contract EmpireBase is EIP712, IEmpire {
   }
 
   /**
-   * @notice	Signal support for a payload with a signature from the current signaler
+   * @notice Signal support for a payload with a signature from the current signaler
    *
    * @param _payload - The payload to signal support for
    * @param _sig - A signature from the signaler

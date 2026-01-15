@@ -1,17 +1,25 @@
-import { type PXE, SponsoredFeePaymentMethod, readFieldCompressedString } from '@aztec/aztec.js';
+import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import { readFieldCompressedString } from '@aztec/aztec.js/utils';
 import { RollupCheatCodes } from '@aztec/aztec/testing';
-import { getL1ContractsConfigEnvVars } from '@aztec/ethereum';
+import { getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
 import { EthCheatCodesWithState } from '@aztec/ethereum/test';
 import { createLogger } from '@aztec/foundation/log';
+import { DateProvider } from '@aztec/foundation/timer';
+import { TestWallet, proveInteraction } from '@aztec/test-wallet/server';
 
 import { jest } from '@jest/globals';
 import type { ChildProcess } from 'child_process';
 
 import { getSponsoredFPCAddress } from '../fixtures/utils.js';
-import { type TestAccounts, deploySponsoredTestAccounts, startCompatiblePXE } from './setup_test_wallets.js';
+import {
+  type TestAccounts,
+  createWalletAndAztecNodeClient,
+  deploySponsoredTestAccountsWithTokens,
+} from './setup_test_wallets.js';
 import { setupEnvironment, startPortForwardForEthereum, startPortForwardForRPC } from './utils.js';
 
-const config = { ...setupEnvironment(process.env), REAL_VERIFIER: true }; // TODO: remove REAL_VERIFIER: true
+const config = { ...setupEnvironment(process.env) };
 
 describe('token transfer test', () => {
   jest.setTimeout(10 * 60 * 4000); // 40 minutes
@@ -28,7 +36,8 @@ describe('token transfer test', () => {
   let testAccounts: TestAccounts;
   let ETHEREUM_HOSTS: string[];
   const forwardProcesses: ChildProcess[] = [];
-  let pxe: PXE;
+  let wallet: TestWallet;
+  let aztecNode: AztecNode;
   let cleanup: undefined | (() => Promise<void>);
 
   afterAll(async () => {
@@ -46,10 +55,10 @@ describe('token transfer test', () => {
     const rpcUrl = `http://127.0.0.1:${aztecRpcPort}`;
     ETHEREUM_HOSTS = [`http://127.0.0.1:${ethereumPort}`];
 
-    ({ pxe, cleanup } = await startCompatiblePXE(rpcUrl, config.REAL_VERIFIER, logger));
+    ({ wallet, aztecNode, cleanup } = await createWalletAndAztecNodeClient(rpcUrl, config.REAL_VERIFIER, logger));
 
     // Setup wallets
-    testAccounts = await deploySponsoredTestAccounts(pxe, MINT_AMOUNT, logger);
+    testAccounts = await deploySponsoredTestAccountsWithTokens(wallet, aztecNode, MINT_AMOUNT, logger);
 
     expect(ROUNDS).toBeLessThanOrEqual(MINT_AMOUNT);
     logger.info(`Tested wallets setup: ${ROUNDS} < ${MINT_AMOUNT}`);
@@ -64,8 +73,8 @@ describe('token transfer test', () => {
   });
 
   it('transfer tokens for 4 epochs', async () => {
-    const ethCheatCodes = new EthCheatCodesWithState(ETHEREUM_HOSTS);
-    const l1ContractAddresses = await testAccounts.pxe.getNodeInfo().then(n => n.l1ContractAddresses);
+    const ethCheatCodes = new EthCheatCodesWithState(ETHEREUM_HOSTS, new DateProvider());
+    const l1ContractAddresses = await testAccounts.aztecNode.getNodeInfo().then(n => n.l1ContractAddresses);
     // Get 4 epochs
     const rollupCheatCodes = new RollupCheatCodes(ethCheatCodes, l1ContractAddresses);
     logger.info(`Deployed L1 contract addresses: ${JSON.stringify(l1ContractAddresses)}`);
@@ -91,13 +100,18 @@ describe('token transfer test', () => {
     // For each round, make both private and public transfers
     const startSlot = await rollupCheatCodes.getSlot();
     for (let i = 1n; i <= ROUNDS; i++) {
-      const txs = testAccounts.accounts.map(
-        async acc =>
-          await testAccounts.tokenContract.methods.transfer_in_public(acc, recipient, transferAmount, 0).prove({
+      const txs = testAccounts.accounts.map(async acc => {
+        return proveInteraction(
+          wallet,
+          testAccounts.tokenContract.methods.transfer_in_public(acc, recipient, transferAmount, 0),
+          {
             from: acc,
-            fee: { paymentMethod: new SponsoredFeePaymentMethod(await getSponsoredFPCAddress()) },
-          }),
-      );
+            fee: {
+              paymentMethod: new SponsoredFeePaymentMethod(await getSponsoredFPCAddress()),
+            },
+          },
+        );
+      });
 
       const provenTxs = await Promise.all(txs);
 
@@ -105,7 +119,7 @@ describe('token transfer test', () => {
 
       await Promise.all(provenTxs.map(t => t.send().wait({ timeout: 600 })));
       const currentSlot = await rollupCheatCodes.getSlot();
-      expect(currentSlot).toBeLessThanOrEqual(startSlot + i + MAX_MISSED_SLOTS);
+      expect(BigInt(currentSlot)).toBeLessThanOrEqual(BigInt(startSlot) + i + MAX_MISSED_SLOTS);
       const startEpoch = await rollupCheatCodes.getEpoch();
       logger.debug(
         `Successfully reached slot ${currentSlot} (iteration ${

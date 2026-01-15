@@ -1,25 +1,30 @@
-import { Fr, ProtocolContractAddress, computeSecretHash, fileURLToPath } from '@aztec/aztec.js';
+import { computeSecretHash } from '@aztec/aztec.js/crypto';
+import { Fr } from '@aztec/aztec.js/fields';
+import { createAztecNodeClient } from '@aztec/aztec.js/node';
+import { ProtocolContractAddress } from '@aztec/aztec.js/protocol';
+import { BackendType, Barretenberg } from '@aztec/bb.js';
 import { LOCALHOST } from '@aztec/cli/cli-utils';
 import { type LogFn, createConsoleLogger, createLogger } from '@aztec/foundation/log';
 import { openStoreAt } from '@aztec/kv-store/lmdb-v2';
-import type { PXEServiceConfig } from '@aztec/pxe/config';
+import type { PXEConfig } from '@aztec/pxe/config';
 import { getPackageVersion } from '@aztec/stdlib/update-checker';
 
 import { Argument, Command, Option } from 'commander';
-import { mkdirSync } from 'fs';
 import { homedir } from 'os';
-import { dirname, join, resolve } from 'path';
+import { join } from 'path';
 
 import { injectCommands } from '../cmds/index.js';
 import { Aliases, WalletDB } from '../storage/wallet_db.js';
+import { CliWalletAndNodeWrapper } from '../utils/cli_wallet_and_node_wrapper.js';
 import { createAliasOption } from '../utils/options/index.js';
-import { PXEWrapper } from '../utils/pxe_wrapper.js';
+import { CLIWallet } from '../utils/wallet.js';
 
 const userLog = createConsoleLogger();
 const debugLogger = createLogger('wallet');
 
 const { WALLET_DATA_DIRECTORY = join(homedir(), '.aztec/wallet') } = process.env;
 
+// TODO: This function is only used in 1 place so we could just inline this
 function injectInternalCommands(program: Command, log: LogFn, db: WalletDB) {
   program
     .command('alias')
@@ -70,7 +75,7 @@ async function main() {
   const walletVersion = getPackageVersion() ?? '0.0.0';
 
   const db = WalletDB.getInstance();
-  const pxeWrapper = new PXEWrapper();
+  const walletAndNodeWrapper = new CliWalletAndNodeWrapper();
 
   const program = new Command('wallet');
   program
@@ -78,16 +83,10 @@ async function main() {
     .version(walletVersion)
     .option('-d, --data-dir <string>', 'Storage directory for wallet data', WALLET_DATA_DIRECTORY)
     .addOption(
-      new Option('-p, --prover <string>', 'The type of prover the wallet uses (only applies if not using a remote PXE)')
+      new Option('-p, --prover <string>', 'The type of prover the wallet uses')
         .choices(['wasm', 'native', 'none'])
         .env('PXE_PROVER')
         .default('native'),
-    )
-    .addOption(
-      new Option('--remote-pxe', 'Connect to an external PXE RPC server instead of the local one')
-        .env('REMOTE_PXE')
-        .default(false)
-        .conflicts('rpc-url'),
     )
     .addOption(
       new Option('-n, --node-url <string>', 'URL of the Aztec node to connect to')
@@ -95,28 +94,34 @@ async function main() {
         .default(`http://${LOCALHOST}:8080`),
     )
     .hook('preSubcommand', async command => {
-      const { dataDir, remotePxe, nodeUrl, prover } = command.optsWithGlobals();
-
-      if (!remotePxe) {
-        debugLogger.info('Using local PXE service');
-
-        const proverEnabled = prover !== 'none';
-
-        const bbBinaryPath =
-          prover === 'native'
-            ? resolve(dirname(fileURLToPath(import.meta.url)), '../../../../barretenberg/cpp/build/bin/bb')
-            : undefined;
-        const bbWorkingDirectory = dataDir + '/bb';
-        mkdirSync(bbWorkingDirectory, { recursive: true });
-
-        const overridePXEConfig: Partial<PXEServiceConfig> = {
-          proverEnabled,
-          bbBinaryPath: prover === 'native' ? bbBinaryPath : undefined,
-          bbWorkingDirectory: prover === 'native' ? bbWorkingDirectory : undefined,
-        };
-
-        pxeWrapper.prepare(nodeUrl, join(dataDir, 'pxe'), overridePXEConfig);
+      // Skip initialization if user is just requesting help
+      if (command.args.includes('--help') || command.args.includes('-h')) {
+        return;
       }
+
+      const { dataDir, nodeUrl, prover } = command.optsWithGlobals();
+
+      const proverEnabled = prover !== 'none';
+
+      switch (prover) {
+        case 'native':
+          await Barretenberg.initSingleton({ backend: BackendType.NativeUnixSocket });
+          break;
+        case 'wasm':
+          await Barretenberg.initSingleton({ backend: BackendType.Wasm });
+          break;
+      }
+
+      const overridePXEConfig: Partial<PXEConfig> = {
+        proverEnabled,
+        dataDirectory: join(dataDir, 'pxe'),
+      };
+
+      const node = createAztecNodeClient(nodeUrl);
+      const wallet = await CLIWallet.create(node, userLog, db, overridePXEConfig);
+
+      walletAndNodeWrapper.setNodeAndWallet(node, wallet);
+
       await db.init(await openStoreAt(dataDir));
       let protocolContractsRegistered;
       try {
@@ -137,9 +142,11 @@ async function main() {
       }
     });
 
-  injectCommands(program, userLog, debugLogger, db, pxeWrapper);
+  injectCommands(program, userLog, debugLogger, walletAndNodeWrapper, db);
   injectInternalCommands(program, userLog, db);
   await program.parseAsync(process.argv);
+
+  await Barretenberg.destroySingleton();
 }
 
 main().catch(err => {

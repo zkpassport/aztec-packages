@@ -1,18 +1,18 @@
-import DialogTitle from '@mui/material/DialogTitle';
-import Dialog from '@mui/material/Dialog';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
 import {
   type ContractInstanceWithAddress,
-  PublicKeys,
+  type DeployOptions,
   DeployMethod,
   getContractInstanceFromInstantiationParams,
   Contract,
-  type DeployOptions,
-  AztecAddress,
-  type Wallet,
-  Fr,
-} from '@aztec/aztec.js';
+} from '@aztec/aztec.js/contracts';
+import { Fr } from '@aztec/aztec.js/fields';
+import { PublicKeys } from '@aztec/aztec.js/keys';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
 import FormControl from '@mui/material/FormControl';
 import FormGroup from '@mui/material/FormGroup';
 import TextField from '@mui/material/TextField';
@@ -113,8 +113,8 @@ export function CreateContractDialog({
       let deployMethod: DeployMethod;
       let opts: DeployOptions;
       if (publiclyDeploy) {
-        const postDeployCtor = (address: AztecAddress, wallet: Wallet) =>
-          Contract.at(address, contractArtifact, wallet);
+        const postDeployCtor = (instance: ContractInstanceWithAddress, wallet: Wallet) =>
+          Contract.at(instance.address, contractArtifact, wallet);
         deployMethod = new DeployMethod(
           contract.publicKeys,
           wallet,
@@ -252,10 +252,7 @@ export function CreateContractDialog({
                 Register
               </Button>
             ) : (
-              <Button
-                disabled={alias === '' || (publiclyDeploy && !feePaymentMethod) || isRegistering}
-                onClick={createContract}
-              >
+              <Button disabled={alias === '' || isRegistering} onClick={createContract}>
                 {publiclyDeploy ? 'Create and deploy' : 'Create'}
               </Button>
             )

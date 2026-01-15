@@ -1,18 +1,24 @@
-import { Fr } from '@aztec/foundation/fields';
+import { type BlockBlobData, encodeBlockBlobData, encodeCheckpointBlobDataFromBlocks } from '@aztec/blob-lib/encoding';
+import { BlockNumber, CheckpointNumber, SlotNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { BufferReader, serializeToBuffer } from '@aztec/foundation/serialize';
 import { bufferToHex, hexToBuffer } from '@aztec/foundation/string';
 
 import { z } from 'zod';
 
+import { Checkpoint } from '../checkpoint/checkpoint.js';
 import { AppendOnlyTreeSnapshot } from '../trees/append_only_tree_snapshot.js';
 import type { BlockHeader } from '../tx/block_header.js';
 import { Body } from './body.js';
 import { makeAppendOnlyTreeSnapshot, makeL2BlockHeader } from './l2_block_code_to_purge.js';
 import { L2BlockHeader } from './l2_block_header.js';
 import type { L2BlockInfo } from './l2_block_info.js';
+import { L2BlockNew } from './l2_block_new.js';
 
 /**
  * The data that makes up the rollup proof, with encoder decoder functions.
+ *
+ * @deprecated Use `L2BlockNew` instead.
  */
 export class L2Block {
   constructor(
@@ -83,7 +89,7 @@ export class L2Block {
    * @returns The L2 block.
    */
   static async random(
-    l2BlockNum: number,
+    l2BlockNum: BlockNumber,
     txsPerBlock = 4,
     numPublicCallsPerTx = 3,
     numPublicLogsPerCall = 1,
@@ -91,7 +97,7 @@ export class L2Block {
     slotNumber: number | undefined = undefined,
     maxEffects: number | undefined = undefined,
   ): Promise<L2Block> {
-    const body = await Body.random(txsPerBlock, numPublicCallsPerTx, numPublicLogsPerCall, maxEffects);
+    const body = await Body.random({ txsPerBlock, numPublicCallsPerTx, numPublicLogsPerCall, maxEffects });
 
     return new L2Block(
       makeAppendOnlyTreeSnapshot(l2BlockNum + 1),
@@ -108,11 +114,11 @@ export class L2Block {
     return new L2Block(AppendOnlyTreeSnapshot.empty(), L2BlockHeader.empty(), Body.empty());
   }
 
-  get number(): number {
+  get number(): BlockNumber {
     return this.header.getBlockNumber();
   }
 
-  get slot(): bigint {
+  get slot(): SlotNumber {
     return this.header.getSlot();
   }
 
@@ -131,6 +137,11 @@ export class L2Block {
     return this.blockHash;
   }
 
+  /**
+   * @deprecated
+   * This only works when there's one block per checkpoint.
+   * TODO(#17027): Remove this method from L2Block and create a dedicated Checkpoint class.
+   */
   public getCheckpointHeader() {
     return this.header.toCheckpointHeader();
   }
@@ -138,6 +149,81 @@ export class L2Block {
   // Temporary helper to get the actual block header.
   public getBlockHeader(): BlockHeader {
     return this.header.toBlockHeader();
+  }
+
+  public toL2Block() {
+    return new L2BlockNew(
+      this.archive,
+      this.getBlockHeader(),
+      this.body,
+      CheckpointNumber.fromBlockNumber(this.number),
+      0, // indexWithinCheckpoint
+    );
+  }
+
+  public toCheckpoint() {
+    return new Checkpoint(
+      this.archive,
+      this.getCheckpointHeader(),
+      [this.toL2Block()],
+      CheckpointNumber.fromBlockNumber(this.number),
+    );
+  }
+
+  static fromCheckpoint(checkpoint: Checkpoint) {
+    const checkpointHeader = checkpoint.header;
+    const block = checkpoint.blocks.at(-1)!;
+    const header = new L2BlockHeader(
+      new AppendOnlyTreeSnapshot(checkpointHeader.lastArchiveRoot, block.number),
+      checkpointHeader.contentCommitment,
+      block.header.state,
+      block.header.globalVariables,
+      block.header.totalFees,
+      checkpointHeader.totalManaUsed,
+      block.header.spongeBlobHash,
+      checkpointHeader.blockHeadersHash,
+    );
+    return new L2Block(checkpoint.archive, header, block.body);
+  }
+
+  /**
+   * @deprecated
+   * This only works when there's one block per checkpoint.
+   * TODO(#17027): Remove this method from L2Block and create a dedicated Checkpoint class.
+   */
+  public getCheckpointBlobFields() {
+    const blockBlobData = this.toBlockBlobData();
+    return encodeCheckpointBlobDataFromBlocks([blockBlobData]);
+  }
+
+  public toBlobFields(): Fr[] {
+    const blockBlobData = this.toBlockBlobData();
+    return encodeBlockBlobData(blockBlobData);
+  }
+
+  public toBlockBlobData(): BlockBlobData {
+    // There's only one L2Block per checkpoint, so it's always the first block in the checkpoint.
+    const isFirstBlock = true;
+    return {
+      blockEndMarker: {
+        numTxs: this.body.txEffects.length,
+        timestamp: this.header.globalVariables.timestamp,
+        blockNumber: this.number,
+      },
+      blockEndStateField: {
+        l1ToL2MessageNextAvailableLeafIndex: this.header.state.l1ToL2MessageTree.nextAvailableLeafIndex,
+        noteHashNextAvailableLeafIndex: this.header.state.partial.noteHashTree.nextAvailableLeafIndex,
+        nullifierNextAvailableLeafIndex: this.header.state.partial.nullifierTree.nextAvailableLeafIndex,
+        publicDataNextAvailableLeafIndex: this.header.state.partial.publicDataTree.nextAvailableLeafIndex,
+        totalManaUsed: this.header.totalManaUsed.toBigInt(),
+      },
+      lastArchiveRoot: this.header.lastArchive.root,
+      noteHashRoot: this.header.state.partial.noteHashTree.root,
+      nullifierRoot: this.header.state.partial.nullifierTree.root,
+      publicDataRoot: this.header.state.partial.publicDataTree.root,
+      l1ToL2MessageRoot: isFirstBlock ? this.header.state.l1ToL2MessageTree.root : undefined,
+      txs: this.body.toTxBlobData(),
+    };
   }
 
   /**
@@ -173,7 +259,7 @@ export class L2Block {
       archive: this.archive.root,
       lastArchive: this.header.lastArchive.root,
       blockNumber: this.number,
-      slotNumber: Number(this.header.getSlot()),
+      slotNumber: this.header.getSlot(),
       txCount: this.body.txEffects.length,
       timestamp: this.header.globalVariables.timestamp,
     };

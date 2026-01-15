@@ -1,18 +1,16 @@
-import {
-  type AztecAddress,
-  EthAddress,
-  Fr,
-  FunctionSelector,
-  PrivateFeePaymentMethod,
-  PublicFeePaymentMethod,
-  TxStatus,
-  type Wallet,
-} from '@aztec/aztec.js';
-import { ExecutionPayload } from '@aztec/entrypoints/payload';
+import { FunctionSelector } from '@aztec/aztec.js/abi';
+import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { EthAddress } from '@aztec/aztec.js/addresses';
+import { SetPublicAuthwitContractInteraction } from '@aztec/aztec.js/authorization';
+import { PrivateFeePaymentMethod, PublicFeePaymentMethod } from '@aztec/aztec.js/fee';
+import { Fr } from '@aztec/aztec.js/fields';
+import { TxStatus } from '@aztec/aztec.js/tx';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import type { FPCContract } from '@aztec/noir-contracts.js/FPC';
 import type { TokenContract as BananaCoin } from '@aztec/noir-contracts.js/Token';
 import { FunctionType } from '@aztec/stdlib/abi';
 import { Gas, GasSettings } from '@aztec/stdlib/gas';
+import { ExecutionPayload } from '@aztec/stdlib/tx';
 
 import { U128_UNDERFLOW_ERROR } from '../fixtures/fixtures.js';
 import { expectMapping } from '../fixtures/utils.js';
@@ -66,7 +64,7 @@ describe('e2e_fees failures', () => {
           from: aliceAddress,
           fee: {
             gasSettings,
-            paymentMethod: new PrivateFeePaymentMethod(bananaFPC.address, aliceAddress, wallet),
+            paymentMethod: new PrivateFeePaymentMethod(bananaFPC.address, aliceAddress, wallet, gasSettings),
           },
         }),
     ).rejects.toThrow(U128_UNDERFLOW_ERROR);
@@ -91,8 +89,7 @@ describe('e2e_fees failures', () => {
       .send({
         from: aliceAddress,
         fee: {
-          gasSettings,
-          paymentMethod: new PrivateFeePaymentMethod(bananaFPC.address, aliceAddress, wallet),
+          paymentMethod: new PrivateFeePaymentMethod(bananaFPC.address, aliceAddress, wallet, gasSettings),
         },
       })
       .wait({ dontThrowOnRevert: true });
@@ -170,8 +167,7 @@ describe('e2e_fees failures', () => {
         .simulate({
           from: aliceAddress,
           fee: {
-            gasSettings,
-            paymentMethod: new PublicFeePaymentMethod(bananaFPC.address, aliceAddress, wallet),
+            paymentMethod: new PublicFeePaymentMethod(bananaFPC.address, aliceAddress, wallet, gasSettings),
           },
         }),
     ).rejects.toThrow(U128_UNDERFLOW_ERROR);
@@ -199,8 +195,7 @@ describe('e2e_fees failures', () => {
       .send({
         from: aliceAddress,
         fee: {
-          gasSettings,
-          paymentMethod: new PublicFeePaymentMethod(bananaFPC.address, aliceAddress, wallet),
+          paymentMethod: new PublicFeePaymentMethod(bananaFPC.address, aliceAddress, wallet, gasSettings),
         },
       })
       .wait({ dontThrowOnRevert: true });
@@ -236,11 +231,10 @@ describe('e2e_fees failures', () => {
         .simulate({
           from: aliceAddress,
           fee: {
-            gasSettings,
-            paymentMethod: new BuggedSetupFeePaymentMethod(bananaFPC.address, aliceAddress, wallet),
+            paymentMethod: new BuggedSetupFeePaymentMethod(bananaFPC.address, aliceAddress, wallet, gasSettings),
           },
         }),
-    ).rejects.toThrow(/Setup phase reverted/);
+    ).rejects.toThrow(/\[SETUP\] UNRECOVERABLE ERROR/);
 
     // so does the sequencer
     await expect(
@@ -249,8 +243,7 @@ describe('e2e_fees failures', () => {
         .send({
           from: aliceAddress,
           fee: {
-            gasSettings,
-            paymentMethod: new BuggedSetupFeePaymentMethod(bananaFPC.address, aliceAddress, wallet),
+            paymentMethod: new BuggedSetupFeePaymentMethod(bananaFPC.address, aliceAddress, wallet, gasSettings),
           },
         })
         .wait(),
@@ -294,8 +287,7 @@ describe('e2e_fees failures', () => {
         .simulate({
           from: aliceAddress,
           fee: {
-            gasSettings: badGas,
-            paymentMethod: new PublicFeePaymentMethod(bananaFPC.address, aliceAddress, wallet),
+            paymentMethod: new PublicFeePaymentMethod(bananaFPC.address, aliceAddress, wallet, badGas),
           },
         }),
     ).rejects.toThrow();
@@ -305,8 +297,7 @@ describe('e2e_fees failures', () => {
       .send({
         from: aliceAddress,
         fee: {
-          gasSettings: badGas,
-          paymentMethod: new PublicFeePaymentMethod(bananaFPC.address, aliceAddress, wallet),
+          paymentMethod: new PublicFeePaymentMethod(bananaFPC.address, aliceAddress, wallet, badGas),
         },
       })
       .wait({
@@ -339,23 +330,25 @@ describe('e2e_fees failures', () => {
 });
 
 class BuggedSetupFeePaymentMethod extends PublicFeePaymentMethod {
-  override async getExecutionPayload(gasSettings: GasSettings): Promise<ExecutionPayload> {
-    const maxFee = gasSettings.getFeeLimit();
+  override async getExecutionPayload(): Promise<ExecutionPayload> {
+    const maxFee = this.gasSettings.getFeeLimit();
     const authwitNonce = Fr.random();
 
     const tooMuchFee = new Fr(maxFee.toBigInt() * 2n);
 
     const asset = await this.getAsset();
 
-    const setPublicAuthWitInteraction = await this.wallet.setPublicAuthWit(
+    const setPublicAuthWitInteraction = await SetPublicAuthwitContractInteraction.create(
+      this.wallet,
       this.sender,
       {
         caller: this.paymentContract,
-        action: {
+        call: {
           name: 'transfer_in_public',
           args: [this.sender.toField(), this.paymentContract.toField(), maxFee, authwitNonce],
           selector: await FunctionSelector.fromSignature('transfer_in_public((Field),(Field),u128,Field)'),
           type: FunctionType.PUBLIC,
+          hideMsgSender: false /** the target function performs an authwit, so msg_sender is needed */,
           isStatic: false,
           to: asset,
           returnTypes: [],
@@ -372,6 +365,7 @@ class BuggedSetupFeePaymentMethod extends PublicFeePaymentMethod {
           to: this.paymentContract,
           selector: await FunctionSelector.fromSignature('fee_entrypoint_public(u128,Field)'),
           type: FunctionType.PRIVATE,
+          hideMsgSender: false,
           isStatic: false,
           args: [tooMuchFee, authwitNonce],
           returnTypes: [],
@@ -379,6 +373,8 @@ class BuggedSetupFeePaymentMethod extends PublicFeePaymentMethod {
       ],
       [],
       [],
+      [],
+      this.paymentContract, // feePayer
     );
   }
 }

@@ -1,19 +1,18 @@
 import { CONTRACT_INSTANCE_REGISTRY_CONTRACT_ADDRESS } from '@aztec/constants';
-import {
-  Grumpkin,
-  keccak256,
-  keccakf1600,
-  pedersenCommit,
-  pedersenHash,
-  poseidon2Hash,
-  sha256,
-} from '@aztec/foundation/crypto';
-import { Fq, Fr, Point } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Grumpkin } from '@aztec/foundation/crypto/grumpkin';
+import { keccak256, keccakf1600 } from '@aztec/foundation/crypto/keccak';
+import { pedersenCommit, pedersenHash } from '@aztec/foundation/crypto/pedersen';
+import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
+import { sha256 } from '@aztec/foundation/crypto/sha256';
+import { Fq, Fr } from '@aztec/foundation/curves/bn254';
+import { Point } from '@aztec/foundation/curves/grumpkin';
 import type { Fieldable } from '@aztec/foundation/serialize';
 import { AvmGadgetsTestContract } from '@aztec/noir-test-contracts.js/AvmGadgetsTest';
 import { AvmTestContract } from '@aztec/noir-test-contracts.js/AvmTest';
 import { NoteGetterContract } from '@aztec/noir-test-contracts.js/NoteGetter';
 import { type FunctionArtifact, FunctionSelector } from '@aztec/stdlib/abi';
+import { PublicSimulatorConfig } from '@aztec/stdlib/avm';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { SerializableContractInstance, computePublicBytecodeCommitment } from '@aztec/stdlib/contract';
 import { GasFees } from '@aztec/stdlib/gas';
@@ -28,6 +27,7 @@ import { PublicKeys } from '@aztec/stdlib/keys';
 import { makeContractClassPublic, makeContractInstanceFromClassId } from '@aztec/stdlib/testing';
 import { NativeWorldStateService } from '@aztec/world-state';
 
+import { jest } from '@jest/globals';
 import { strict as assert } from 'assert';
 import { randomInt } from 'crypto';
 import { mock } from 'jest-mock-extended';
@@ -63,12 +63,14 @@ import {
   EmitNoteHash,
   EmitNullifier,
   EmitUnencryptedLog,
-  type Instruction,
+  Instruction,
   Jump,
   Return,
   SStore,
   SendL2ToL1Message,
   Set,
+  Shl,
+  Shr,
 } from './opcodes/index.js';
 import { encodeToBytecode } from './serialization/bytecode_serialization.js';
 import { Opcode } from './serialization/instruction_serialization.js';
@@ -77,9 +79,9 @@ import {
   mockGetBytecodeCommitment,
   mockGetContractClass,
   mockGetContractInstance,
-  mockL1ToL2MessageExists,
+  mockGetL1ToL2LeafValue,
+  mockGetNoteHash,
   mockNoteHashCount,
-  mockNoteHashExists,
   mockStorageRead,
   mockStorageReadWithMap,
   mockTraceFork,
@@ -213,7 +215,7 @@ describe('AVM simulator: transpiled Noir contracts', () => {
   });
 
   it('Should handle calldata oracle', async () => {
-    const calldata: Fr[] = [new Fr(1), new Fr(2), new Fr(3)];
+    const calldata: Fr[] = [new Fr(1), new Fr(2), new Fr(3), /* with_selector: */ new Fr(0)];
     const context = initContext({ env: initExecutionEnvironment({ calldata }) });
 
     const bytecode = getAvmTestContractBytecode('assert_calldata_copy');
@@ -268,8 +270,7 @@ describe('AVM simulator: transpiled Noir contracts', () => {
     const results = await new AvmSimulator(context).executeBytecode(bytecode);
 
     expect(results.reverted).toBe(false);
-    const grumpkin = new Grumpkin();
-    const g3 = await grumpkin.mul(grumpkin.generator(), new Fq(3));
+    const g3 = await Grumpkin.mul(Grumpkin.generator, new Fq(3));
     expect(results.output).toEqual([g3.x, g3.y, Fr.ZERO]);
   });
 
@@ -287,10 +288,9 @@ describe('AVM simulator: transpiled Noir contracts', () => {
       const results = await new AvmSimulator(context).executeBytecode(bytecode);
 
       expect(results.reverted).toBe(false);
-      const grumpkin = new Grumpkin();
-      const g3 = await grumpkin.mul(grumpkin.generator(), new Fq(3));
-      const g20 = await grumpkin.mul(grumpkin.generator(), new Fq(20));
-      const expectedResult = await grumpkin.add(g3, g20);
+      const g3 = await Grumpkin.mul(Grumpkin.generator, new Fq(3));
+      const g20 = await Grumpkin.mul(Grumpkin.generator, new Fq(20));
+      const expectedResult = await Grumpkin.add(g3, g20);
       expect(results.output).toEqual([expectedResult.x, expectedResult.y, Fr.ZERO]);
     });
 
@@ -307,8 +307,7 @@ describe('AVM simulator: transpiled Noir contracts', () => {
       const results = await new AvmSimulator(context).executeBytecode(bytecode);
 
       expect(results.reverted).toBe(false);
-      const grumpkin = new Grumpkin();
-      const expectedResult = await grumpkin.mul(grumpkin.generator(), new Fq(3));
+      const expectedResult = await Grumpkin.mul(Grumpkin.generator, new Fq(3));
       expect(results.output).toEqual([expectedResult.x, expectedResult.y, Fr.ZERO]);
     });
 
@@ -331,10 +330,9 @@ describe('AVM simulator: transpiled Noir contracts', () => {
       const results = await new AvmSimulator(context).executeBytecode(bytecode);
 
       expect(results.reverted).toBe(false);
-      const grumpkin = new Grumpkin();
-      const g1 = await grumpkin.mul(grumpkin.generator(), scalar);
-      const g2 = await grumpkin.mul(grumpkin.generator(), scalar2);
-      const expectedResult = await grumpkin.add(g1, g2);
+      const g1 = await Grumpkin.mul(Grumpkin.generator, scalar);
+      const g2 = await Grumpkin.mul(Grumpkin.generator, scalar2);
+      const expectedResult = await Grumpkin.add(g1, g2);
       expect(results.output).toEqual([expectedResult.x, expectedResult.y, Fr.ZERO]);
     });
   });
@@ -398,15 +396,6 @@ describe('AVM simulator: transpiled Noir contracts', () => {
         resolveAvmTestContractAssertionMessage('u128_addition_overflow', results.revertReason!, results.output),
       ).toMatch('attempt to add with overflow');
     });
-  });
-
-  it('Logging', async () => {
-    const context = initContext();
-    const bytecode = getAvmTestContractBytecode('debug_logging');
-    const results = await new AvmSimulator(context).executeBytecode(bytecode);
-
-    expect(results.reverted).toBe(false);
-    expect(results.output).toEqual([]);
   });
 
   it('Assertion message', async () => {
@@ -496,7 +485,7 @@ describe('AVM simulator: transpiled Noir contracts', () => {
     const transactionFee = Fr.random();
     const chainId = Fr.random();
     const version = Fr.random();
-    const blockNumber = randomInt(20000);
+    const blockNumber = BlockNumber(randomInt(20000));
     const timestamp = BigInt(randomInt(100000)); // timestamp as UInt64
     const gasFees = GasFees.random();
 
@@ -545,17 +534,39 @@ describe('AVM simulator: transpiled Noir contracts', () => {
     });
   });
 
-  // TODO(#16099): Re-enable this test
-  // it('conversions', async () => {
-  //   const calldata: Fr[] = [new Fr(0b1011101010100)];
-  //   const context = initContext({ env: initExecutionEnvironment({ calldata }) });
+  describe('conversions', () => {
+    it('to le bytes', async () => {
+      const calldata: Fr[] = [new Fr(0x11223344556677)];
+      const context = initContext({ env: initExecutionEnvironment({ calldata }) });
 
-  //   const bytecode = getAvmTestContractBytecode('to_radix_le');
-  //   const results = await new AvmSimulator(context).executeBytecode(bytecode);
+      const bytecode = getAvmTestContractBytecode('to_le_bytes');
+      const results = await new AvmSimulator(context).executeBytecode(bytecode);
 
-  //   expect(results.reverted).toBe(false);
-  //   expect(results.output.map(f => f.toNumber().toString()).join('')).toEqual('0010101011');
-  // });
+      expect(results.reverted).toBe(false);
+      expect(
+        results.output
+          .reverse()
+          .map(f => f.toNumber().toString(16).padStart(2, '0'))
+          .join(''),
+      ).toEqual('00000011223344556677');
+    });
+
+    it('to le bits', async () => {
+      const calldata: Fr[] = [new Fr(0b1011101010100)];
+      const context = initContext({ env: initExecutionEnvironment({ calldata }) });
+
+      const bytecode = getAvmTestContractBytecode('to_le_bits');
+      const results = await new AvmSimulator(context).executeBytecode(bytecode);
+
+      expect(results.reverted).toBe(false);
+      expect(
+        results.output
+          .reverse()
+          .map(f => f.toNumber().toString())
+          .join(''),
+      ).toEqual('0001011101010100');
+    });
+  });
 
   describe('Side effects, world state, nested calls', () => {
     const address = AztecAddress.fromNumber(1);
@@ -610,7 +621,10 @@ describe('AVM simulator: transpiled Noir contracts', () => {
         const context = createContext(calldata);
         const bytecode = getAvmTestContractBytecode('note_hash_exists');
         if (mockAtLeafIndex !== undefined) {
-          mockNoteHashExists(treesDB, mockAtLeafIndex, value0);
+          mockGetNoteHash(treesDB, mockAtLeafIndex, value0);
+        } else {
+          // We still need to mock a response for the state manager to handle:
+          mockGetNoteHash(treesDB, leafIndex);
         }
 
         const results = await new AvmSimulator(context).executeBytecode(bytecode);
@@ -652,7 +666,10 @@ describe('AVM simulator: transpiled Noir contracts', () => {
         const context = createContext(calldata);
         const bytecode = getAvmTestContractBytecode('l1_to_l2_msg_exists');
         if (mockAtLeafIndex !== undefined) {
-          mockL1ToL2MessageExists(treesDB, mockAtLeafIndex, value0, /*valueAtOtherIndices=*/ value1);
+          mockGetL1ToL2LeafValue(treesDB, mockAtLeafIndex, value0);
+        } else {
+          // We still need to mock a response for the state manager to handle:
+          mockGetL1ToL2LeafValue(treesDB, leafIndex);
         }
 
         const results = await new AvmSimulator(context).executeBytecode(bytecode);
@@ -736,11 +753,13 @@ describe('AVM simulator: transpiled Noir contracts', () => {
           '\0A long time ago, in a galaxy fa',
           '\0r far away...\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',
         ].map(s => new Fr(Buffer.from(s)));
+        const expectedLargeLog = Array.from({ length: 42 }, (_, i) => new Fr(i + 1));
 
-        expect(trace.tracePublicLog).toHaveBeenCalledTimes(3);
+        expect(trace.tracePublicLog).toHaveBeenCalledTimes(4);
         expect(trace.tracePublicLog).toHaveBeenCalledWith(address, expectedFields);
         expect(trace.tracePublicLog).toHaveBeenCalledWith(address, expectedString);
         expect(trace.tracePublicLog).toHaveBeenCalledWith(address, expectedCompressedString);
+        expect(trace.tracePublicLog).toHaveBeenCalledWith(address, expectedLargeLog);
       });
     });
 
@@ -1061,7 +1080,7 @@ describe('AVM simulator: transpiled Noir contracts', () => {
         ['Public storage writes', () => new SStore(/*indirect=*/ 0, /*srcOffset=*/ 0, /*slotOffset=*/ 0)],
         ['New note hashes', () => new EmitNoteHash(/*indirect=*/ 0, /*noteHashOffset=*/ 0)],
         ['New nullifiers', () => new EmitNullifier(/*indirect=*/ 0, /*noteHashOffset=*/ 0)],
-        ['New unencrypted logs', () => new EmitUnencryptedLog(/*indirect=*/ 0, /*logOffset=*/ 0, /*logSizeOffest=*/ 1)],
+        ['New unencrypted logs', () => new EmitUnencryptedLog(/*indirect=*/ 0, /*logSizeOffest=*/ 1, /*logOffset=*/ 0)],
         [
           'New L1 to L2 messages',
           () => new SendL2ToL1Message(/*indirect=*/ 0, /*recipientOffset=*/ 0, /*contentOffest=*/ 0),
@@ -1090,6 +1109,50 @@ describe('AVM simulator: transpiled Noir contracts', () => {
         expect(results.revertReason?.message).toMatch('Reached the limit');
       });
     });
+
+    it('Logging', async () => {
+      const context = initContext({
+        persistableState,
+        env: initExecutionEnvironment({
+          address,
+          sender,
+          calldata: [],
+          config: PublicSimulatorConfig.from({ collectDebugLogs: true }),
+        }),
+      });
+      const bytecode = getAvmTestContractBytecode('debug_logging');
+      const results = await new AvmSimulator(context).executeBytecode(bytecode);
+
+      expect(results.reverted).toBe(false);
+      expect(results.output).toEqual([]);
+      expect(trace.traceDebugLog).toHaveBeenCalledTimes(6);
+      expect(trace.traceDebugLog).toHaveBeenCalledWith(address, 'debug', 'just text', []);
+      expect(trace.traceDebugLog).toHaveBeenCalledWith(address, 'debug', 'second: {1}', [
+        new Fr(1),
+        new Fr(2),
+        new Fr(3),
+        new Fr(4),
+      ]);
+      expect(trace.traceDebugLog).toHaveBeenCalledWith(address, 'debug', 'whole array: {}', [
+        new Fr(1),
+        new Fr(2),
+        new Fr(3),
+        new Fr(4),
+      ]);
+      expect(trace.traceDebugLog).toHaveBeenCalledWith(
+        address,
+        'debug',
+        'tabs and newlines\n\t- first\n\t- second',
+        [],
+      );
+      expect(trace.traceDebugLog).toHaveBeenCalledWith(address, 'fatal', 'fatal error', []);
+      expect(trace.traceDebugLog).toHaveBeenCalledWith(address, 'trace', 'trace format: {}', [
+        new Fr(1),
+        new Fr(3),
+        new Fr(3),
+        new Fr(7),
+      ]);
+    });
   });
 
   describe('Side effects including merkle checks', () => {
@@ -1107,6 +1170,7 @@ describe('AVM simulator: transpiled Noir contracts', () => {
     let siloedNullifier0: Fr;
     let uniqueNoteHash0: Fr;
 
+    let worldStateService: NativeWorldStateService;
     let treesDB: PublicTreesDB;
     let contractsDB: PublicContractsDB;
     let trace: PublicSideEffectTraceInterface;
@@ -1124,7 +1188,8 @@ describe('AVM simulator: transpiled Noir contracts', () => {
       mockNoteHashCount(trace, noteHashIndexInTx);
 
       const contractDataSource = new SimpleContractDataSource();
-      const merkleTrees = await (await NativeWorldStateService.tmp()).fork();
+      worldStateService = await NativeWorldStateService.tmp();
+      const merkleTrees = await worldStateService.fork();
       treesDB = new PublicTreesDB(merkleTrees);
       contractsDB = new PublicContractsDB(contractDataSource);
 
@@ -1132,9 +1197,12 @@ describe('AVM simulator: transpiled Noir contracts', () => {
         treesDB,
         contractsDB,
         trace,
-        doMerkleOperations: true,
         firstNullifier,
       });
+    });
+
+    afterEach(async () => {
+      await worldStateService.close();
     });
 
     const createContext = (calldata: Fr[] = []) => {
@@ -1285,6 +1353,165 @@ describe('AVM simulator: transpiled Noir contracts', () => {
         NoteGetterContract.artifact,
       ),
     ).toMatch('No public functions');
+  });
+});
+
+describe('AVM simulator: shift operations with huge amounts', () => {
+  let context: AvmContext;
+
+  beforeEach(() => {
+    context = initContext();
+  });
+
+  describe('SHL (Shift Left)', () => {
+    it('Should handle shift amount greater than bit size (Uint32)', async () => {
+      const bytecode = encodeToBytecode([
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 0, /*inTag=*/ TypeTag.UINT32, /*value=*/ (1n << 32n) - 1n).as(
+          Opcode.SET_128,
+          Set.wireFormat128,
+        ),
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 1, /*inTag=*/ TypeTag.UINT32, /*value=*/ (1n << 32n) - 1n).as(
+          Opcode.SET_128,
+          Set.wireFormat128,
+        ),
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 2, /*inTag=*/ TypeTag.UINT32, /*value=*/ 1).as(
+          Opcode.SET_8,
+          Set.wireFormat8,
+        ), // set a constant specifying the "returnSize" (1) to be used by Return
+        new Shl(/*indirect=*/ 0, /*aOffset=*/ 0, /*bOffset=*/ 1, /*dstOffset=*/ 3).as(Opcode.SHL_8, Shl.wireFormat8),
+        new Return(/*indirect=*/ 0, /*returnSizeOffset=*/ 2, /*returnOffset=*/ 3),
+      ]);
+
+      const results = await new AvmSimulator(context).executeBytecode(bytecode);
+
+      expect(results.reverted).toBe(false);
+      expect(results.output).toEqual([new Fr(0)]);
+    });
+
+    it('Should handle shift amount equal to bit size (Uint128)', async () => {
+      const bytecode = encodeToBytecode([
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 0, /*inTag=*/ TypeTag.UINT128, /*value=*/ (1n << 127n) - 1n).as(
+          Opcode.SET_128,
+          Set.wireFormat128,
+        ),
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 1, /*inTag=*/ TypeTag.UINT128, /*value=*/ 128n).as(
+          Opcode.SET_128,
+          Set.wireFormat128,
+        ),
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 2, /*inTag=*/ TypeTag.UINT32, /*value=*/ 1).as(
+          Opcode.SET_8,
+          Set.wireFormat8,
+        ), // set a constant specifying the "returnSize" (1) to be used by Return
+        new Shl(/*indirect=*/ 0, /*aOffset=*/ 0, /*bOffset=*/ 1, /*dstOffset=*/ 3).as(Opcode.SHL_8, Shl.wireFormat8),
+        new Return(/*indirect=*/ 0, /*returnSizeOffset=*/ 2, /*returnOffset=*/ 3),
+      ]);
+
+      const results = await new AvmSimulator(context).executeBytecode(bytecode);
+
+      expect(results.reverted).toBe(false);
+      expect(results.output).toEqual([new Fr(0)]);
+    });
+  });
+
+  describe('SHR (Shift Right)', () => {
+    it('Should handle shift amount greater than bit size (Uint32)', async () => {
+      const bytecode = encodeToBytecode([
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 0, /*inTag=*/ TypeTag.UINT32, /*value=*/ (1n << 32n) - 1n).as(
+          Opcode.SET_128,
+          Set.wireFormat128,
+        ),
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 1, /*inTag=*/ TypeTag.UINT32, /*value=*/ (1n << 32n) - 1n).as(
+          Opcode.SET_128,
+          Set.wireFormat128,
+        ),
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 2, /*inTag=*/ TypeTag.UINT32, /*value=*/ 1).as(
+          Opcode.SET_8,
+          Set.wireFormat8,
+        ), // set a constant specifying the "returnSize" (1) to be used by Return
+        new Shr(/*indirect=*/ 0, /*aOffset=*/ 0, /*bOffset=*/ 1, /*dstOffset=*/ 3).as(Opcode.SHR_8, Shr.wireFormat8),
+        new Return(/*indirect=*/ 0, /*returnSizeOffset=*/ 2, /*returnOffset=*/ 3),
+      ]);
+
+      const results = await new AvmSimulator(context).executeBytecode(bytecode);
+
+      expect(results.reverted).toBe(false);
+      expect(results.output).toEqual([new Fr(0)]);
+    });
+
+    it('Should handle shift amount equal to bit size (Uint128)', async () => {
+      const bytecode = encodeToBytecode([
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 0, /*inTag=*/ TypeTag.UINT128, /*value=*/ (1n << 127n) - 1n).as(
+          Opcode.SET_128,
+          Set.wireFormat128,
+        ),
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 1, /*inTag=*/ TypeTag.UINT128, /*value=*/ 128n).as(
+          Opcode.SET_128,
+          Set.wireFormat128,
+        ),
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 2, /*inTag=*/ TypeTag.UINT32, /*value=*/ 1).as(
+          Opcode.SET_8,
+          Set.wireFormat8,
+        ), // set a constant specifying the "returnSize" (1) to be used by Return
+        new Shr(/*indirect=*/ 0, /*aOffset=*/ 0, /*bOffset=*/ 1, /*dstOffset=*/ 3).as(Opcode.SHR_8, Shr.wireFormat8),
+        new Return(/*indirect=*/ 0, /*returnSizeOffset=*/ 2, /*returnOffset=*/ 3),
+      ]);
+
+      const results = await new AvmSimulator(context).executeBytecode(bytecode);
+
+      expect(results.reverted).toBe(false);
+      expect(results.output).toEqual([new Fr(0)]);
+    });
+
+    it('Should handle shift amount equal to bit size (Uint32)', async () => {
+      const bytecode = encodeToBytecode([
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 0, /*inTag=*/ TypeTag.UINT32, /*value=*/ (1n << 32n) - 1n).as(
+          Opcode.SET_128,
+          Set.wireFormat128,
+        ),
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 1, /*inTag=*/ TypeTag.UINT32, /*value=*/ 32).as(
+          Opcode.SET_32,
+          Set.wireFormat32,
+        ),
+        new Set(/*indirect=*/ 0, /*dstOffset=*/ 2, /*inTag=*/ TypeTag.UINT32, /*value=*/ 1).as(
+          Opcode.SET_8,
+          Set.wireFormat8,
+        ), // set a constant specifying the "returnSize" (1) to be used by Return
+        new Shr(/*indirect=*/ 0, /*aOffset=*/ 0, /*bOffset=*/ 1, /*dstOffset=*/ 3).as(Opcode.SHR_8, Shr.wireFormat8),
+        new Return(/*indirect=*/ 0, /*returnSizeOffset=*/ 2, /*returnOffset=*/ 3),
+      ]);
+
+      const results = await new AvmSimulator(context).executeBytecode(bytecode);
+
+      expect(results.reverted).toBe(false);
+      expect(results.output).toEqual([new Fr(0)]);
+    });
+  });
+});
+
+describe('AVM simulator: "unchecked" errors should NOT be caught', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('Unchecked error during instruction execution NOT be caught', async () => {
+    const context = initContext();
+    const instruction = new Add(/*indirect=*/ 0, /*aOffset=*/ 0, /*bOffset=*/ 1, /*dstOffset=*/ 2).as(
+      Opcode.ADD_8,
+      Add.wireFormat8,
+    );
+
+    const msg = 'This is an unchecked error during instruction execution';
+    jest.spyOn(Add.prototype, 'execute').mockRejectedValue(new Error(msg));
+    const bytecode = encodeToBytecode([instruction]);
+
+    await expect(new AvmSimulator(context).executeBytecode(bytecode)).rejects.toThrow(msg);
+  });
+
+  it('Unchecked error during getBytecode NOT be caught', async () => {
+    const context = initContext();
+    const msg = 'This is an unchecked error during getBytecode';
+    jest.spyOn(context.persistableState, 'getBytecode').mockRejectedValue(new Error(msg));
+    await expect(new AvmSimulator(context).execute()).rejects.toThrow(msg);
   });
 });
 

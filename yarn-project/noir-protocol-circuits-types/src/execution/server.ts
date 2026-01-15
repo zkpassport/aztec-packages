@@ -1,7 +1,6 @@
 import { pushTestData } from '@aztec/foundation/testing';
 import type { WitnessMap } from '@aztec/noir-acvm_js';
 import { abiDecode, abiEncode } from '@aztec/noir-noirc_abi';
-import type { PrivateToPublicKernelCircuitPublicInputs } from '@aztec/stdlib/kernel';
 import type { ParityBasePrivateInputs, ParityPublicInputs, ParityRootPrivateInputs } from '@aztec/stdlib/parity';
 import type {
   BlockMergeRollupPrivateInputs,
@@ -17,7 +16,8 @@ import type {
   CheckpointRootRollupPrivateInputs,
   CheckpointRootSingleBlockRollupPrivateInputs,
   PrivateTxBaseRollupPrivateInputs,
-  PublicTubePrivateInputs,
+  PublicChonkVerifierPrivateInputs,
+  PublicChonkVerifierPublicInputs,
   PublicTxBaseRollupPrivateInputs,
   RootRollupPrivateInputs,
   RootRollupPublicInputs,
@@ -42,9 +42,9 @@ import {
   mapParityBasePrivateInputsToNoir,
   mapParityPublicInputsFromNoir,
   mapParityRootPrivateInputsToNoir,
-  mapPrivateToPublicKernelCircuitPublicInputsFromNoir,
   mapPrivateTxBaseRollupPrivateInputsToNoir,
-  mapPublicTubePrivateInputsToNoir,
+  mapPublicChonkVerifierPrivateInputsToNoir,
+  mapPublicChonkVerifierPublicInputsFromNoir,
   mapPublicTxBaseRollupPrivateInputsToNoir,
   mapRootRollupPrivateInputsToNoir,
   mapRootRollupPublicInputsFromNoir,
@@ -52,6 +52,7 @@ import {
   mapTxRollupPublicInputsFromNoir,
 } from '../conversion/server.js';
 import type {
+  ChonkVerifierPublicReturnType,
   ParityBaseReturnType,
   ParityRootReturnType,
   RollupBlockMergeReturnType,
@@ -67,7 +68,6 @@ import type {
   RollupTxBasePrivateReturnType,
   RollupTxBasePublicReturnType,
   RollupTxMergeReturnType,
-  TubePublicReturnType,
 } from '../types/index.js';
 import type { DecodedInputs } from '../utils/decoded_inputs.js';
 
@@ -97,11 +97,15 @@ export function convertParityRootPrivateInputsToWitnessMap(
   return convertPrivateInputsToWitnessMap('ParityRootArtifact', mapParityRootPrivateInputsToNoir(inputs), simulated);
 }
 
-export function convertPublicTubePrivateInputsToWitnessMap(
-  inputs: PublicTubePrivateInputs,
+export function convertPublicChonkVerifierPrivateInputsToWitnessMap(
+  inputs: PublicChonkVerifierPrivateInputs,
   simulated = false,
 ): WitnessMap {
-  return convertPrivateInputsToWitnessMap('PublicTube', mapPublicTubePrivateInputsToNoir(inputs), simulated);
+  return convertPrivateInputsToWitnessMap(
+    'PublicChonkVerifier',
+    mapPublicChonkVerifierPrivateInputsToNoir(inputs),
+    simulated,
+  );
 }
 
 export function convertPrivateTxBaseRollupPrivateInputsToWitnessMap(
@@ -258,12 +262,16 @@ export function convertRootRollupPrivateInputsToWitnessMap(inputs: RootRollupPri
   return convertPrivateInputsToWitnessMap('RootRollupArtifact', mapRootRollupPrivateInputsToNoir(inputs));
 }
 
-export function convertPublicTubeOutputsFromWitnessMap(
+export function convertPublicChonkVerifierOutputsFromWitnessMap(
   outputs: WitnessMap,
   simulated = false,
-): PrivateToPublicKernelCircuitPublicInputs {
-  const publicInputs = convertOutputsFromWitnessMap<TubePublicReturnType>('PublicTube', outputs, simulated);
-  return mapPrivateToPublicKernelCircuitPublicInputsFromNoir(publicInputs);
+): PublicChonkVerifierPublicInputs {
+  const publicInputs = convertOutputsFromWitnessMap<ChonkVerifierPublicReturnType>(
+    'PublicChonkVerifier',
+    outputs,
+    simulated,
+  );
+  return mapPublicChonkVerifierPublicInputsFromNoir(publicInputs);
 }
 
 export function convertPrivateTxBaseRollupOutputsFromWitnessMap(

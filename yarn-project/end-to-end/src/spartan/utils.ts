@@ -1,9 +1,13 @@
-import { createLogger, sleep } from '@aztec/aztec.js';
+import { createLogger } from '@aztec/aztec.js/log';
 import type { RollupCheatCodes } from '@aztec/aztec/testing';
-import type { L1ContractAddresses, ViemPublicClient } from '@aztec/ethereum';
+import type { L1ContractAddresses } from '@aztec/ethereum/l1-contract-addresses';
+import type { ViemPublicClient } from '@aztec/ethereum/types';
+import type { CheckpointNumber } from '@aztec/foundation/branded-types';
 import type { Logger } from '@aztec/foundation/log';
+import { promiseWithResolvers } from '@aztec/foundation/promise';
 import { makeBackoff, retry } from '@aztec/foundation/retry';
 import { schemas } from '@aztec/foundation/schemas';
+import { sleep } from '@aztec/foundation/sleep';
 import {
   type AztecNodeAdmin,
   type AztecNodeAdminConfig,
@@ -26,6 +30,9 @@ const testConfigSchema = z.object({
   REAL_VERIFIER: schemas.Boolean.optional().default(true),
   CREATE_ETH_DEVNET: schemas.Boolean.optional().default(false),
   L1_RPC_URLS_JSON: z.string().optional(),
+  L1_ACCOUNT_MNEMONIC: z.string().optional(),
+  AZTEC_SLOT_DURATION: z.coerce.number().optional().default(24),
+  AZTEC_PROOF_SUBMISSION_WINDOW: z.coerce.number().optional().default(5),
 });
 
 export type TestConfig = z.infer<typeof testConfigSchema>;
@@ -156,9 +163,42 @@ export async function startPortForward({
   return { process, port };
 }
 
-export function startPortForwardForRPC(namespace: string) {
+export function getExternalIP(namespace: string, serviceName: string): Promise<string> {
+  const { promise, resolve, reject } = promiseWithResolvers<string>();
+  const process = spawn(
+    'kubectl',
+    [
+      'get',
+      'service',
+      '-n',
+      namespace,
+      `${namespace}-${serviceName}`,
+      '--output',
+      "jsonpath='{.status.loadBalancer.ingress[0].ip}'",
+    ],
+    {
+      stdio: 'pipe',
+    },
+  );
+
+  let ip = '';
+  process.stdout.on('data', data => {
+    ip += data;
+  });
+  process.on('error', err => {
+    reject(err);
+  });
+  process.on('exit', () => {
+    // kubectl prints JSON. Remove the quotes
+    resolve(ip.replace(/"|'/g, ''));
+  });
+
+  return promise;
+}
+
+export function startPortForwardForRPC(namespace: string, index = 0) {
   return startPortForward({
-    resource: `services/${namespace}-rpc-aztec-node`,
+    resource: `pod/${namespace}-rpc-aztec-node-${index}`,
     namespace,
     containerPort: 8080,
   });
@@ -204,6 +244,16 @@ export async function deleteResourceByLabel({
   timeout?: string;
   force?: boolean;
 }) {
+  // Check if the resource type exists before attempting to delete
+  try {
+    await execAsync(
+      `kubectl api-resources --api-group="" --no-headers -o name | grep -q "^${resource}$" || kubectl api-resources --no-headers -o name | grep -q "^${resource}$"`,
+    );
+  } catch (error) {
+    logger.warn(`Resource type '${resource}' not found in cluster, skipping deletion ${error}`);
+    return '';
+  }
+
   const command = `kubectl delete ${resource} -l ${label} -n ${namespace} --ignore-not-found=true --wait=true --timeout=${timeout} ${
     force ? '--force' : ''
   }`;
@@ -235,9 +285,18 @@ export function getChartDir(spartanDir: string, chartName: string) {
   return path.join(spartanDir.trim(), chartName);
 }
 
-function valuesToArgs(values: Record<string, string | number>) {
+function shellQuote(value: string) {
+  // Single-quote safe shell escaping: ' -> '\''
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function valuesToArgs(values: Record<string, string | number | boolean>) {
   return Object.entries(values)
-    .map(([key, value]) => `--set ${key}=${value}`)
+    .map(([key, value]) =>
+      typeof value === 'number' || typeof value === 'boolean'
+        ? `--set ${key}=${value}`
+        : `--set-string ${key}=${shellQuote(String(value))}`,
+    )
     .join(' ');
 }
 
@@ -255,7 +314,7 @@ function createHelmCommand({
   namespace: string;
   valuesFile: string | undefined;
   timeout: string;
-  values: Record<string, string | number>;
+  values: Record<string, string | number | boolean>;
   reuseValues?: boolean;
 }) {
   const valuesFileArgs = valuesFile ? `--values ${helmChartDir}/values/${valuesFile}` : '';
@@ -270,6 +329,32 @@ async function execHelmCommand(args: Parameters<typeof createHelmCommand>[0]) {
   logger.info(`helm command: ${helmCommand}`);
   const { stdout } = await execAsync(helmCommand);
   return stdout;
+}
+
+export async function uninstallChaosMesh(instanceName: string, namespace: string, logger: Logger) {
+  // uninstall the helm chart if it exists
+  logger.info(`Uninstalling helm chart ${instanceName}`);
+  await execAsync(`helm uninstall ${instanceName} --namespace ${namespace} --wait --ignore-not-found`);
+  // and delete the chaos-mesh resources created by this release
+  const deleteByLabel = async (resource: string) => {
+    const args = {
+      resource,
+      namespace: namespace,
+      label: `app.kubernetes.io/instance=${instanceName}`,
+    } as const;
+    logger.info(`Deleting ${resource} resources for release ${instanceName}`);
+    await deleteResourceByLabel(args).catch(e => {
+      logger.error(`Error deleting ${resource}: ${e}`);
+      logger.info(`Force deleting ${resource}`);
+      return deleteResourceByLabel({ ...args, force: true });
+    });
+  };
+
+  await deleteByLabel('podchaos');
+  await deleteByLabel('networkchaos');
+  await deleteByLabel('podnetworkchaos');
+  await deleteByLabel('workflows');
+  await deleteByLabel('workflownodes');
 }
 
 /**
@@ -294,8 +379,7 @@ export async function installChaosMeshChart({
   targetNamespace,
   valuesFile,
   helmChartDir,
-  chaosMeshNamespace = 'chaos-mesh',
-  timeout = '5m',
+  timeout = '10m',
   clean = true,
   values = {},
   logger,
@@ -311,27 +395,13 @@ export async function installChaosMeshChart({
   logger: Logger;
 }) {
   if (clean) {
-    // uninstall the helm chart if it exists
-    logger.info(`Uninstalling helm chart ${instanceName}`);
-    await execAsync(`helm uninstall ${instanceName} --namespace ${chaosMeshNamespace} --wait --ignore-not-found`);
-    // and delete the podchaos resource
-    const deleteArgs = {
-      resource: 'podchaos',
-      namespace: chaosMeshNamespace,
-      label: `app.kubernetes.io/instance=${instanceName}`,
-    };
-    logger.info(`Deleting podchaos resource`);
-    await deleteResourceByLabel(deleteArgs).catch(e => {
-      logger.error(`Error deleting podchaos resource: ${e}`);
-      logger.info(`Force deleting podchaos resource`);
-      return deleteResourceByLabel({ ...deleteArgs, force: true });
-    });
+    await uninstallChaosMesh(instanceName, targetNamespace, logger);
   }
 
   return execHelmCommand({
     instanceName,
     helmChartDir,
-    namespace: chaosMeshNamespace,
+    namespace: targetNamespace,
     valuesFile,
     timeout,
     values: { ...values, 'global.targetNamespace': targetNamespace },
@@ -463,33 +533,255 @@ export function applyNetworkShaping({
   });
 }
 
-export async function awaitL2BlockNumber(
+export async function awaitCheckpointNumber(
   rollupCheatCodes: RollupCheatCodes,
-  blockNumber: bigint,
+  checkpointNumber: CheckpointNumber,
   timeoutSeconds: number,
   logger: Logger,
 ) {
-  logger.info(`Waiting for L2 Block ${blockNumber}`);
+  logger.info(`Waiting for checkpoint ${checkpointNumber}`);
   let tips = await rollupCheatCodes.getTips();
   const endTime = Date.now() + timeoutSeconds * 1000;
-  while (tips.pending < blockNumber && Date.now() < endTime) {
-    logger.info(`At L2 Block ${tips.pending}`);
+  while (tips.pending < checkpointNumber && Date.now() < endTime) {
+    logger.info(`At checkpoint ${tips.pending}`);
     await sleep(1000);
     tips = await rollupCheatCodes.getTips();
   }
-  if (tips.pending < blockNumber) {
-    throw new Error(`Timeout waiting for L2 Block ${blockNumber}, only reached ${tips.pending}`);
+  if (tips.pending < checkpointNumber) {
+    throw new Error(`Timeout waiting for checkpoint ${checkpointNumber}, only reached ${tips.pending}`);
   } else {
-    logger.info(`Reached L2 Block ${tips.pending}`);
+    logger.info(`Reached checkpoint ${tips.pending}`);
   }
 }
 
 export async function restartBot(namespace: string, logger: Logger) {
   logger.info(`Restarting bot`);
-  await deleteResourceByLabel({ resource: 'pods', namespace, label: 'app=bot' });
+  await deleteResourceByLabel({ resource: 'pods', namespace, label: 'app.kubernetes.io/name=bot' });
   await sleep(10 * 1000);
-  await waitForResourceByLabel({ resource: 'pods', namespace, label: 'app=bot' });
+  // Some bot images may take time to report Ready due to heavy boot-time proving.
+  // Waiting for PodReadyToStartContainers ensures the pod is scheduled and starting without blocking on full readiness.
+  await waitForResourceByLabel({
+    resource: 'pods',
+    namespace,
+    label: 'app.kubernetes.io/name=bot',
+    condition: 'PodReadyToStartContainers',
+  });
   logger.info(`Bot restarted`);
+}
+
+/**
+ * Installs or upgrades the transfer bot Helm release for the given namespace.
+ * Intended for test setup to enable L2 traffic generation only when needed.
+ */
+export async function installTransferBot({
+  namespace,
+  spartanDir,
+  logger,
+  replicas = 1,
+  txIntervalSeconds = 10,
+  followChain = 'PENDING',
+  mnemonic = process.env.LABS_INFRA_MNEMONIC ?? 'test test test test test test test test test test test junk',
+  mnemonicStartIndex,
+  botPrivateKey = process.env.BOT_TRANSFERS_L2_PRIVATE_KEY ?? '0xcafe01',
+  nodeUrl,
+  timeout = '15m',
+  reuseValues = true,
+  aztecSlotDuration = Number(process.env.AZTEC_SLOT_DURATION ?? 12),
+}: {
+  namespace: string;
+  spartanDir: string;
+  logger: Logger;
+  replicas?: number;
+  txIntervalSeconds?: number;
+  followChain?: string;
+  mnemonic?: string;
+  mnemonicStartIndex?: number | string;
+  botPrivateKey?: string;
+  nodeUrl?: string;
+  timeout?: string;
+  reuseValues?: boolean;
+  aztecSlotDuration?: number;
+}) {
+  const instanceName = `${namespace}-bot-transfers`;
+  const helmChartDir = getChartDir(spartanDir, 'aztec-bot');
+  const resolvedNodeUrl = nodeUrl ?? `http://${namespace}-rpc-aztec-node.${namespace}.svc.cluster.local:8080`;
+
+  logger.info(`Installing/upgrading transfer bot: replicas=${replicas}, followChain=${followChain}`);
+
+  const values: Record<string, string | number | boolean> = {
+    'bot.replicaCount': replicas,
+    'bot.txIntervalSeconds': txIntervalSeconds,
+    'bot.followChain': followChain,
+    'bot.botPrivateKey': botPrivateKey,
+    'bot.nodeUrl': resolvedNodeUrl,
+    'bot.mnemonic': mnemonic,
+    'bot.feePaymentMethod': 'fee_juice',
+    'aztec.slotDuration': aztecSlotDuration,
+    // Ensure bot can reach its own PXE started in-process (default rpc.port is 8080)
+    // Note: since aztec-bot depends on aztec-node with alias `bot`, env vars go under `bot.node.env`.
+    'bot.node.env.BOT_PXE_URL': 'http://127.0.0.1:8080',
+    // Provide L1 execution RPC for bridging fee juice
+    'bot.node.env.ETHEREUM_HOSTS': `http://${namespace}-eth-execution.${namespace}.svc.cluster.local:8545`,
+    // Provide L1 mnemonic for bridging (falls back to labs mnemonic)
+    'bot.node.env.BOT_L1_MNEMONIC': mnemonic,
+  };
+  // Ensure we derive a funded L1 key (index 0 is funded on anvil default mnemonic)
+  if (mnemonicStartIndex === undefined) {
+    values['bot.mnemonicStartIndex'] = 0;
+  }
+  // Also pass a funded private key directly if available
+  if (process.env.FUNDING_PRIVATE_KEY) {
+    values['bot.node.env.BOT_L1_PRIVATE_KEY'] = process.env.FUNDING_PRIVATE_KEY;
+  }
+  // Align bot image with the running network image: prefer env var, else detect from a validator pod
+  let repositoryFromEnv: string | undefined;
+  let tagFromEnv: string | undefined;
+  const aztecDockerImage = process.env.AZTEC_DOCKER_IMAGE;
+  if (aztecDockerImage && aztecDockerImage.includes(':')) {
+    const lastColon = aztecDockerImage.lastIndexOf(':');
+    repositoryFromEnv = aztecDockerImage.slice(0, lastColon);
+    tagFromEnv = aztecDockerImage.slice(lastColon + 1);
+  }
+
+  let repository = repositoryFromEnv;
+  let tag = tagFromEnv;
+  if (!repository || !tag) {
+    try {
+      const { stdout } = await execAsync(
+        `kubectl get pods -l app.kubernetes.io/component=validator -n ${namespace} -o jsonpath='{.items[0].spec.containers[?(@.name=="aztec")].image}' | cat`,
+      );
+      const image = stdout.trim().replace(/^'|'$/g, '');
+      if (image && image.includes(':')) {
+        const lastColon = image.lastIndexOf(':');
+        repository = image.slice(0, lastColon);
+        tag = image.slice(lastColon + 1);
+      }
+    } catch (err) {
+      logger.warn(`Could not detect aztec image from validator pod: ${String(err)}`);
+    }
+  }
+  if (repository && tag) {
+    values['global.aztecImage.repository'] = repository;
+    values['global.aztecImage.tag'] = tag;
+  }
+  if (mnemonicStartIndex !== undefined) {
+    values['bot.mnemonicStartIndex'] =
+      typeof mnemonicStartIndex === 'string' ? mnemonicStartIndex : Number(mnemonicStartIndex);
+  }
+
+  await execHelmCommand({
+    instanceName,
+    helmChartDir,
+    namespace,
+    valuesFile: undefined,
+    timeout,
+    values: values as unknown as Record<string, string | number | boolean>,
+    reuseValues,
+  });
+
+  if (replicas > 0) {
+    await waitForResourceByLabel({
+      resource: 'pods',
+      namespace,
+      label: 'app.kubernetes.io/name=bot',
+      condition: 'PodReadyToStartContainers',
+    });
+  }
+}
+
+/**
+ * Uninstalls the transfer bot Helm release from the given namespace.
+ * Intended for test teardown to clean up bot resources.
+ */
+export async function uninstallTransferBot(namespace: string, logger: Logger) {
+  const instanceName = `${namespace}-bot-transfers`;
+  logger.info(`Uninstalling transfer bot release ${instanceName}`);
+  await execAsync(`helm uninstall ${instanceName} --namespace ${namespace} --wait --ignore-not-found`);
+  // Ensure any leftover pods are removed
+  await deleteResourceByLabel({ resource: 'pods', namespace, label: 'app.kubernetes.io/name=bot' }).catch(
+    () => undefined,
+  );
+}
+
+/**
+ * Enables or disables probabilistic transaction dropping on validators and waits for rollout.
+ * Wired to env vars P2P_DROP_TX and P2P_DROP_TX_CHANCE via Helm values.
+ */
+export async function setValidatorTxDrop({
+  namespace,
+  enabled,
+  probability,
+  logger,
+}: {
+  namespace: string;
+  enabled: boolean;
+  probability: number;
+  logger: Logger;
+}) {
+  const drop = enabled ? 'true' : 'false';
+  const prob = String(probability);
+
+  const selectors = ['app=validator', 'app.kubernetes.io/component=validator'];
+  let updated = false;
+  for (const selector of selectors) {
+    try {
+      const list = await execAsync(`kubectl get statefulset -l ${selector} -n ${namespace} --no-headers -o name | cat`);
+      const names = list.stdout
+        .split('\n')
+        .map(s => s.trim())
+        .filter(Boolean);
+      if (names.length === 0) {
+        continue;
+      }
+      const cmd = `kubectl set env statefulset -l ${selector} -n ${namespace} P2P_DROP_TX=${drop} P2P_DROP_TX_CHANCE=${prob}`;
+      logger.info(`command: ${cmd}`);
+      await execAsync(cmd);
+      updated = true;
+    } catch (e) {
+      logger.warn(`Failed to update validators with selector ${selector}: ${String(e)}`);
+    }
+  }
+
+  if (!updated) {
+    logger.warn(`No validator StatefulSets found in ${namespace}. Skipping tx drop toggle.`);
+    return;
+  }
+
+  // Restart validator pods to ensure env vars take effect and wait for readiness
+  await restartValidators(namespace, logger);
+}
+
+export async function restartValidators(namespace: string, logger: Logger) {
+  const selectors = ['app=validator', 'app.kubernetes.io/component=validator'];
+  let any = false;
+  for (const selector of selectors) {
+    try {
+      const { stdout } = await execAsync(`kubectl get pods -l ${selector} -n ${namespace} --no-headers -o name | cat`);
+      if (!stdout || stdout.trim().length === 0) {
+        continue;
+      }
+      any = true;
+      await deleteResourceByLabel({ resource: 'pods', namespace, label: selector });
+    } catch (e) {
+      logger.warn(`Error restarting validator pods with selector ${selector}: ${String(e)}`);
+    }
+  }
+
+  if (!any) {
+    logger.warn(`No validator pods found to restart in ${namespace}.`);
+    return;
+  }
+
+  // Wait for either label to be Ready
+  for (const selector of selectors) {
+    try {
+      await waitForResourceByLabel({ resource: 'pods', namespace, label: selector });
+      return;
+    } catch {
+      // try next
+    }
+  }
+  logger.warn(`Validator pods did not report Ready; continuing.`);
 }
 
 export async function enableValidatorDynamicBootNode(
@@ -657,4 +949,36 @@ export function getGitProjectRoot(): string {
   } catch (error) {
     throw new Error(`Failed to determine git project root: ${error}`);
   }
+}
+
+/** Returns a client to the RPC of the given sequencer (defaults to first) */
+export async function getNodeClient(
+  env: TestConfig,
+  index: number = 0,
+): Promise<{ node: ReturnType<typeof createAztecNodeClient>; port: number; process: ChildProcess }> {
+  const namespace = env.NAMESPACE;
+  const containerPort = 8080;
+  const sequencers = await getSequencers(namespace);
+  const sequencer = sequencers[index];
+  if (!sequencer) {
+    throw new Error(`No sequencer found at index ${index} in namespace ${namespace}`);
+  }
+
+  const { process, port } = await startPortForward({
+    resource: `pod/${sequencer}`,
+    namespace,
+    containerPort,
+  });
+
+  const url = `http://localhost:${port}`;
+  await retry(
+    () => fetch(`${url}/status`).then(res => res.status === 200),
+    'forward port',
+    makeBackoff([1, 1, 2, 6]),
+    logger,
+    true,
+  );
+
+  const client = createAztecNodeClient(url);
+  return { node: client, port, process };
 }

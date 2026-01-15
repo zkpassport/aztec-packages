@@ -1,62 +1,64 @@
 import type { BBProverConfig } from '@aztec/bb-prover';
-import { SpongeBlob } from '@aztec/blob-lib';
+import { TestCircuitProver } from '@aztec/bb-prover';
 import { NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP } from '@aztec/constants';
-import { padArrayEnd, times, timesParallel } from '@aztec/foundation/collection';
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber, CheckpointNumber } from '@aztec/foundation/branded-types';
+import { padArrayEnd, times, timesAsync } from '@aztec/foundation/collection';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import type { Logger } from '@aztec/foundation/log';
-import { TestDateProvider } from '@aztec/foundation/timer';
+import type { FieldsOf } from '@aztec/foundation/types';
 import { getVKTreeRoot } from '@aztec/noir-protocol-circuits-types/vk-tree';
-import { protocolContractTreeRoot } from '@aztec/protocol-contracts';
+import { ProtocolContractsList } from '@aztec/protocol-contracts';
 import { computeFeePayerBalanceLeafSlot } from '@aztec/protocol-contracts/fee-juice';
-import { SimpleContractDataSource } from '@aztec/simulator/public/fixtures';
-import { PublicProcessorFactory } from '@aztec/simulator/server';
 import { PublicDataWrite } from '@aztec/stdlib/avm';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
-import { EthAddress, getBlockBlobFields } from '@aztec/stdlib/block';
-import type { ServerCircuitProver } from '@aztec/stdlib/interfaces/server';
+import { EthAddress } from '@aztec/stdlib/block';
+import type { Checkpoint } from '@aztec/stdlib/checkpoint';
+import type { MerkleTreeWriteOperations, ServerCircuitProver } from '@aztec/stdlib/interfaces/server';
 import type { CheckpointConstantData } from '@aztec/stdlib/rollup';
-import { makeBloatedProcessedTx } from '@aztec/stdlib/testing';
+import { mockProcessedTx } from '@aztec/stdlib/testing';
 import { MerkleTreeId, PublicDataTreeLeaf } from '@aztec/stdlib/trees';
-import { type BlockHeader, type GlobalVariables, type ProcessedTx, TreeSnapshots, type Tx } from '@aztec/stdlib/tx';
+import {
+  type BlockHeader,
+  type GlobalVariables,
+  type ProcessedTx,
+  StateReference,
+  TreeSnapshots,
+} from '@aztec/stdlib/tx';
 import type { MerkleTreeAdminDatabase } from '@aztec/world-state';
 import { NativeWorldStateService } from '@aztec/world-state/native';
 
 import { promises as fs } from 'fs';
 
-// TODO(#12613) This means of sharing test code is not ideal.
-// eslint-disable-next-line import/no-relative-packages
-import { TestCircuitProver } from '../../../bb-prover/src/test/test_circuit_prover.js';
-import { buildBlockWithCleanDB } from '../block-factory/light.js';
-import { getTreeSnapshot } from '../orchestrator/block-building-helpers.js';
+import { LightweightCheckpointBuilder } from '../light/lightweight_checkpoint_builder.js';
+import {
+  buildFinalBlobChallenges,
+  getTreeSnapshot,
+  insertSideEffects,
+} from '../orchestrator/block-building-helpers.js';
 import type { BlockProvingState } from '../orchestrator/block-proving-state.js';
 import { ProvingOrchestrator } from '../orchestrator/index.js';
 import { BrokerCircuitProverFacade } from '../proving_broker/broker_prover_facade.js';
 import { TestBroker } from '../test/mock_prover.js';
-import {
-  getEnvironmentConfig,
-  getSimulator,
-  makeCheckpointConstants,
-  makeGlobals,
-  updateExpectedTreesFromTxs,
-} from './fixtures.js';
+import { getEnvironmentConfig, getSimulator, makeCheckpointConstants, makeGlobals } from './fixtures.js';
 
 export class TestContext {
   private headers: Map<number, BlockHeader> = new Map();
+  private checkpoints: Checkpoint[] = [];
+  private nextCheckpointIndex = 0;
+  private nextBlockNumber = 1;
+  private epochNumber = 1;
   private feePayerBalance: Fr;
 
   constructor(
     public worldState: MerkleTreeAdminDatabase,
-    public firstCheckpointNumber: Fr,
-    public globalVariables: GlobalVariables,
     public prover: ServerCircuitProver,
     public broker: TestBroker,
     public brokerProverFacade: BrokerCircuitProverFacade,
     public orchestrator: TestProvingOrchestrator,
-    public blockNumber: number,
-    public feePayer: AztecAddress,
+    private feePayer: AztecAddress,
     initialFeePayerBalance: Fr,
-    public directoriesToCleanup: string[],
-    public logger: Logger,
+    private directoriesToCleanup: string[],
+    private logger: Logger,
   ) {
     this.feePayerBalance = initialFeePayerBalance;
   }
@@ -65,27 +67,17 @@ export class TestContext {
     return this.orchestrator;
   }
 
-  public getCheckpointConstants(checkpointIndex = 0): CheckpointConstantData {
-    return makeCheckpointConstants(this.firstCheckpointNumber.toNumber() + checkpointIndex);
-  }
-
   static async new(
     logger: Logger,
     {
       proverCount = 4,
       createProver = async (bbConfig: BBProverConfig) => new TestCircuitProver(await getSimulator(bbConfig, logger)),
-      slotNumber = 1,
-      blockNumber = 1,
     }: {
       proverCount?: number;
       createProver?: (bbConfig: BBProverConfig) => Promise<ServerCircuitProver>;
-      slotNumber?: number;
-      blockNumber?: number;
     } = {},
   ) {
     const directoriesToCleanup: string[] = [];
-    const firstCheckpointNumber = new Fr(slotNumber);
-    const globalVariables = makeGlobals(blockNumber, slotNumber);
 
     const feePayer = AztecAddress.fromNumber(42222);
     const initialFeePayerBalance = new Fr(10n ** 20n);
@@ -129,13 +121,10 @@ export class TestContext {
 
     return new this(
       ws,
-      firstCheckpointNumber,
-      globalVariables,
       localProver,
       broker,
       facade,
       orchestrator,
-      blockNumber,
       feePayer,
       initialFeePayerBalance,
       directoriesToCleanup,
@@ -145,16 +134,6 @@ export class TestContext {
 
   public getFork() {
     return this.worldState.fork();
-  }
-
-  public getBlockHeader(blockNumber: 0): BlockHeader;
-  public getBlockHeader(blockNumber: number): BlockHeader | undefined;
-  public getBlockHeader(blockNumber = 0): BlockHeader | undefined {
-    return blockNumber === 0 ? this.worldState.getCommitted().getInitialHeader() : this.headers.get(blockNumber);
-  }
-
-  public getPreviousBlockHeader(currentBlockNumber = this.blockNumber): BlockHeader {
-    return this.getBlockHeader(currentBlockNumber - 1)!;
   }
 
   async cleanup() {
@@ -169,174 +148,172 @@ export class TestContext {
     }
   }
 
-  async makeProcessedTx(opts?: Parameters<typeof makeBloatedProcessedTx>[0]): Promise<ProcessedTx> {
-    const blockNum = (opts?.globalVariables ?? this.globalVariables).blockNumber;
-    const header = opts?.header ?? this.getBlockHeader(blockNum - 1);
-    const tx = await makeBloatedProcessedTx({
-      header,
-      vkTreeRoot: getVKTreeRoot(),
-      protocolContractTreeRoot,
-      globalVariables: this.globalVariables,
-      feePayer: this.feePayer,
-      ...opts,
-    });
-    this.feePayerBalance = new Fr(this.feePayerBalance.toBigInt() - tx.txEffect.transactionFee.toBigInt());
-    if (opts?.privateOnly) {
-      const feePayerSlot = await computeFeePayerBalanceLeafSlot(this.feePayer);
-      tx.txEffect.publicDataWrites[0] = new PublicDataWrite(feePayerSlot, this.feePayerBalance);
-    }
-    return tx;
+  public startNewEpoch() {
+    this.checkpoints = [];
+    this.nextCheckpointIndex = 0;
+    this.epochNumber++;
   }
 
-  /** Creates a block with the given number of txs and adds it to world-state */
-  public async makePendingBlock(
-    numTxs: number,
-    {
-      checkpointIndex = 0,
-      numL1ToL2Messages = 0,
-      blockNumber = this.blockNumber,
-      makeProcessedTxOpts = () => ({}),
-    }: {
-      checkpointIndex?: number;
-      numL1ToL2Messages?: number;
-      blockNumber?: number;
-      makeProcessedTxOpts?: (index: number) => Partial<Parameters<typeof makeBloatedProcessedTx>[0]>;
-    } = {},
-  ) {
-    const slotNumber = this.firstCheckpointNumber.toNumber() + checkpointIndex;
-    const globalVariables = makeGlobals(blockNumber, slotNumber);
-    const blockNum = globalVariables.blockNumber;
-    const db = await this.worldState.fork();
-    const l1ToL2Messages = times(numL1ToL2Messages, i => new Fr(blockNum * 100 + i));
-    const merkleTrees = await this.worldState.fork();
-    await merkleTrees.appendLeaves(
-      MerkleTreeId.L1_TO_L2_MESSAGE_TREE,
-      padArrayEnd(l1ToL2Messages, Fr.ZERO, NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP),
-    );
-    const newL1ToL2Snapshot = await getTreeSnapshot(MerkleTreeId.L1_TO_L2_MESSAGE_TREE, merkleTrees);
-    const txs = await timesParallel(numTxs, i =>
-      this.makeProcessedTx({
-        seed: i + blockNum * 1000,
-        globalVariables,
-        newL1ToL2Snapshot,
-        ...makeProcessedTxOpts(i),
-      }),
-    );
-    await this.setTreeRoots(txs);
-
-    const block = await buildBlockWithCleanDB(txs, globalVariables, l1ToL2Messages, db);
-    this.headers.set(blockNum, block.getBlockHeader());
-    await this.worldState.handleL2BlockAndMessages(block, l1ToL2Messages);
-    return { block, txs, l1ToL2Messages };
+  // Return blob fields of all checkpoints in the epoch.
+  public getBlobFields() {
+    return this.checkpoints.map(checkpoint => checkpoint.toBlobFields());
   }
 
-  public async makePendingBlocksInCheckpoint(
+  public async getFinalBlobChallenges() {
+    const blobFields = this.getBlobFields();
+    return await buildFinalBlobChallenges(blobFields);
+  }
+
+  public async makeCheckpoint(
     numBlocks: number,
     {
-      checkpointIndex = 0,
-      numTxsPerBlock = 1,
+      numTxsPerBlock = 0,
       numL1ToL2Messages = 0,
-      firstBlockNumber = this.blockNumber + checkpointIndex * numBlocks,
       makeProcessedTxOpts = () => ({}),
+      ...constantOpts
     }: {
-      checkpointIndex?: number;
       numTxsPerBlock?: number | number[];
       numL1ToL2Messages?: number;
-      firstBlockNumber?: number;
-      makeProcessedTxOpts?: (index: number) => Partial<Parameters<typeof makeBloatedProcessedTx>[0]>;
-    } = {},
+      makeProcessedTxOpts?: (
+        blockGlobalVariables: GlobalVariables,
+        txIndex: number,
+      ) => Partial<Parameters<typeof mockProcessedTx>[0]>;
+    } & Partial<FieldsOf<CheckpointConstantData>> = {},
   ) {
-    const slotNumber = this.firstCheckpointNumber.toNumber() + checkpointIndex;
-    const l1ToL2Messages = times(numL1ToL2Messages, i => new Fr(slotNumber * 100 + i));
-    const merkleTrees = await this.worldState.fork();
-    await merkleTrees.appendLeaves(
-      MerkleTreeId.L1_TO_L2_MESSAGE_TREE,
-      padArrayEnd(l1ToL2Messages, Fr.ZERO, NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP),
-    );
-    const newL1ToL2Snapshot = await getTreeSnapshot(MerkleTreeId.L1_TO_L2_MESSAGE_TREE, merkleTrees);
+    if (numBlocks === 0) {
+      throw new Error(
+        'Cannot make a checkpoint with 0 blocks. Crate an empty block (numTxsPerBlock = 0) if there are no txs.',
+      );
+    }
 
-    const blockGlobalVariables = times(numBlocks, i => makeGlobals(firstBlockNumber + i, slotNumber));
+    const checkpointIndex = this.nextCheckpointIndex++;
+    const checkpointNumber = CheckpointNumber(checkpointIndex + 1);
+    const slotNumber = checkpointNumber * 15; // times an arbitrary number to make it different to the checkpoint number
+
+    const constants = makeCheckpointConstants(slotNumber, constantOpts);
+
+    const fork = await this.worldState.fork();
+
+    // Build l1 to l2 messages.
+    const l1ToL2Messages = times(numL1ToL2Messages, i => new Fr(slotNumber * 100 + i));
+    await fork.appendLeaves(
+      MerkleTreeId.L1_TO_L2_MESSAGE_TREE,
+      padArrayEnd<Fr, number>(l1ToL2Messages, Fr.ZERO, NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP),
+    );
+    const newL1ToL2Snapshot = await getTreeSnapshot(MerkleTreeId.L1_TO_L2_MESSAGE_TREE, fork);
+
+    const startBlockNumber = this.nextBlockNumber;
+    const previousBlockHeader = this.getBlockHeader(BlockNumber(startBlockNumber - 1));
+
+    // Build global variables.
+    const blockGlobalVariables = times(numBlocks, i =>
+      makeGlobals(startBlockNumber + i, slotNumber, {
+        coinbase: constants.coinbase,
+        feeRecipient: constants.feeRecipient,
+        gasFees: constants.gasFees,
+      }),
+    );
+    this.nextBlockNumber += numBlocks;
+
+    // Build txs.
     let totalTxs = 0;
-    const blockTxs = await timesParallel(numBlocks, blockIndex => {
+    const blockEndStates: StateReference[] = [];
+    const blockTxs = await timesAsync(numBlocks, async blockIndex => {
       const txIndexOffset = totalTxs;
       const numTxs = typeof numTxsPerBlock === 'number' ? numTxsPerBlock : numTxsPerBlock[blockIndex];
       totalTxs += numTxs;
-      return timesParallel(numTxs, txIndex =>
+      const txs = await timesAsync(numTxs, txIndex =>
         this.makeProcessedTx({
-          seed: (txIndexOffset + txIndex + 1) * 321 + (checkpointIndex + 1) * 123456,
+          seed: (txIndexOffset + txIndex + 1) * 321 + (checkpointIndex + 1) * 123456 + this.epochNumber * 0x99999,
           globalVariables: blockGlobalVariables[blockIndex],
-          header: this.getBlockHeader(firstBlockNumber - 1),
+          anchorBlockHeader: previousBlockHeader,
           newL1ToL2Snapshot,
-          ...makeProcessedTxOpts(txIndexOffset + txIndex),
+          ...makeProcessedTxOpts(blockGlobalVariables[blockIndex], txIndexOffset + txIndex),
         }),
       );
+
+      // Insert side effects into the trees.
+      const endState = await this.updateTrees(txs, fork);
+      blockEndStates.push(endState);
+
+      return txs;
     });
 
-    const blockBlobFields = blockTxs.map(txs => getBlockBlobFields(txs.map(tx => tx.txEffect)));
-    const totalNumBlobFields = blockBlobFields.reduce((acc, curr) => acc + curr.length, 0);
-    const spongeBlobState = SpongeBlob.init(totalNumBlobFields);
+    const cleanFork = await this.worldState.fork();
+    const builder = await LightweightCheckpointBuilder.startNewCheckpoint(
+      checkpointNumber,
+      constants,
+      l1ToL2Messages,
+      cleanFork,
+    );
 
-    const blocks: { header: BlockHeader; txs: ProcessedTx[] }[] = [];
+    // Add tx effects to db and build block headers.
+    const blocks = [];
     for (let i = 0; i < numBlocks; i++) {
-      const isFirstBlock = i === 0;
-      const blockNumber = firstBlockNumber + i;
-      const globalVariables = blockGlobalVariables[i];
       const txs = blockTxs[i];
+      const state = blockEndStates[i];
 
-      await this.setTreeRoots(txs);
+      const block = await builder.addBlock(blockGlobalVariables[i], state, txs);
 
-      const fork = await this.worldState.fork();
-      const blockMsgs = isFirstBlock ? l1ToL2Messages : [];
-      const block = await buildBlockWithCleanDB(txs, globalVariables, blockMsgs, fork, spongeBlobState, isFirstBlock);
+      const header = block.header;
+      this.headers.set(block.number, header);
 
-      const header = block.getBlockHeader();
-      this.headers.set(blockNumber, header);
-
-      await this.worldState.handleL2BlockAndMessages(block, blockMsgs, isFirstBlock);
-
-      await spongeBlobState.absorb(blockBlobFields[i]);
+      const blockMsgs = block.indexWithinCheckpoint === 0 ? l1ToL2Messages : [];
+      await this.worldState.handleL2BlockAndMessages(block, blockMsgs);
 
       blocks.push({ header, txs });
     }
 
-    return { blocks, l1ToL2Messages, blobFields: blockBlobFields.flat() };
+    const checkpoint = await builder.completeCheckpoint();
+    this.checkpoints.push(checkpoint);
+
+    return {
+      constants,
+      header: checkpoint.header,
+      blocks,
+      l1ToL2Messages,
+      previousBlockHeader,
+    };
   }
 
-  public async processPublicFunctions(
-    txs: Tx[],
-    {
-      maxTransactions = txs.length,
-      numL1ToL2Messages = 0,
-      contractDataSource,
-    }: {
-      maxTransactions?: number;
-      numL1ToL2Messages?: number;
-      contractDataSource?: SimpleContractDataSource;
-    } = {},
-  ) {
-    const l1ToL2Messages = times(numL1ToL2Messages, i => new Fr(this.blockNumber * 100 + i));
-    const merkleTrees = await this.worldState.fork();
-    await merkleTrees.appendLeaves(
-      MerkleTreeId.L1_TO_L2_MESSAGE_TREE,
-      padArrayEnd(l1ToL2Messages, Fr.ZERO, NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP),
-    );
+  private async makeProcessedTx(opts: Parameters<typeof mockProcessedTx>[0] = {}): Promise<ProcessedTx> {
+    const tx = await mockProcessedTx({
+      vkTreeRoot: getVKTreeRoot(),
+      protocolContracts: ProtocolContractsList,
+      feePayer: this.feePayer,
+      ...opts,
+    });
 
-    const processorFactory = new PublicProcessorFactory(
-      contractDataSource ?? new SimpleContractDataSource(),
-      new TestDateProvider(),
-    );
-    const publicProcessor = processorFactory.create(merkleTrees, this.globalVariables, /*skipFeeEnforcement=*/ false);
+    this.feePayerBalance = new Fr(this.feePayerBalance.toBigInt() - tx.txEffect.transactionFee.toBigInt());
 
-    return await publicProcessor.process(txs, { maxTransactions });
+    const feePayerSlot = await computeFeePayerBalanceLeafSlot(this.feePayer);
+    const feePaymentPublicDataWrite = new PublicDataWrite(feePayerSlot, this.feePayerBalance);
+    tx.txEffect.publicDataWrites[0] = feePaymentPublicDataWrite;
+    if (tx.avmProvingRequest) {
+      tx.avmProvingRequest.inputs.publicInputs.accumulatedData.publicDataWrites[0] = feePaymentPublicDataWrite;
+    }
+
+    return tx;
   }
 
-  private async setTreeRoots(txs: ProcessedTx[]) {
-    const db = await this.worldState.fork();
+  private getBlockHeader(blockNumber: BlockNumber): BlockHeader {
+    if (Number(blockNumber) > 0 && Number(blockNumber) >= this.nextBlockNumber) {
+      throw new Error(`Block header not built for block number ${blockNumber}.`);
+    }
+    return Number(blockNumber) === 0
+      ? this.worldState.getCommitted().getInitialHeader()
+      : this.headers.get(Number(blockNumber))!;
+  }
+
+  private async updateTrees(txs: ProcessedTx[], fork: MerkleTreeWriteOperations) {
+    let startStateReference = await fork.getStateReference();
+    let endStateReference = startStateReference;
     for (const tx of txs) {
-      const startStateReference = await db.getStateReference();
-      await updateExpectedTreesFromTxs(db, [tx]);
-      const endStateReference = await db.getStateReference();
+      await insertSideEffects(tx, fork);
+      endStateReference = await fork.getStateReference();
+
       if (tx.avmProvingRequest) {
+        // Update the trees in the avm public inputs so that the proof won't fail.
         const l1ToL2MessageTree = tx.avmProvingRequest.inputs.publicInputs.startTreeSnapshots.l1ToL2MessageTree;
         tx.avmProvingRequest.inputs.publicInputs.startTreeSnapshots = new TreeSnapshots(
           l1ToL2MessageTree,
@@ -344,6 +321,7 @@ export class TestContext {
           startStateReference.partial.nullifierTree,
           startStateReference.partial.publicDataTree,
         );
+
         tx.avmProvingRequest.inputs.publicInputs.endTreeSnapshots = new TreeSnapshots(
           l1ToL2MessageTree,
           endStateReference.partial.noteHashTree,
@@ -351,7 +329,11 @@ export class TestContext {
           endStateReference.partial.publicDataTree,
         );
       }
+
+      startStateReference = endStateReference;
     }
+
+    return endStateReference;
   }
 }
 

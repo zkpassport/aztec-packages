@@ -1,90 +1,124 @@
 import type { EpochCache } from '@aztec/epoch-cache';
+import { EpochNumber } from '@aztec/foundation/branded-types';
+import { compactArray } from '@aztec/foundation/collection';
 import type { Logger } from '@aztec/foundation/log';
 import {
-  type PublishedL2Block,
+  type AttestationInfo,
+  type ValidateBlockNegativeResult,
   type ValidateBlockResult,
-  getAttestationsFromPublishedL2Block,
+  getAttestationInfoFromPayload,
 } from '@aztec/stdlib/block';
+import type { PublishedCheckpoint } from '@aztec/stdlib/checkpoint';
 import { type L1RollupConstants, getEpochAtSlot } from '@aztec/stdlib/epoch-helpers';
+import { ConsensusPayload } from '@aztec/stdlib/p2p';
 
 export type { ValidateBlockResult };
 
 /**
- * Validates the attestations submitted for the given block.
+ * Extracts attestation information from a published checkpoint.
+ * Returns info for each attestation, preserving array indices.
+ */
+export function getAttestationInfoFromPublishedCheckpoint({
+  checkpoint,
+  attestations,
+}: PublishedCheckpoint): AttestationInfo[] {
+  const payload = ConsensusPayload.fromCheckpoint(checkpoint);
+  return getAttestationInfoFromPayload(payload, attestations);
+}
+
+/**
+ * Validates the attestations submitted for the given checkpoint.
  * Returns true if the attestations are valid and sufficient, false otherwise.
  */
-export async function validateBlockAttestations(
-  publishedBlock: PublishedL2Block,
+export async function validateCheckpointAttestations(
+  publishedCheckpoint: PublishedCheckpoint,
   epochCache: EpochCache,
   constants: Pick<L1RollupConstants, 'epochDuration'>,
   logger?: Logger,
 ): Promise<ValidateBlockResult> {
-  const attestations = getAttestationsFromPublishedL2Block(publishedBlock);
-  const attestors = attestations.map(a => a.getSender());
-  const { block } = publishedBlock;
-  const blockHash = await block.hash().then(hash => hash.toString());
-  const archiveRoot = block.archive.root.toString();
-  const slot = block.header.getSlot();
-  const epoch = getEpochAtSlot(slot, constants);
+  const attestorInfos = getAttestationInfoFromPublishedCheckpoint(publishedCheckpoint);
+  const attestors = compactArray(attestorInfos.map(info => ('address' in info ? info.address : undefined)));
+  const { checkpoint, attestations } = publishedCheckpoint;
+  const headerHash = checkpoint.header.hash();
+  const archiveRoot = checkpoint.archive.root.toString();
+  const slot = checkpoint.header.slotNumber;
+  const epoch: EpochNumber = getEpochAtSlot(slot, constants);
   const { committee, seed } = await epochCache.getCommitteeForEpoch(epoch);
-  const logData = { blockNumber: block.number, slot, epoch, blockHash, archiveRoot };
+  const logData = { checkpointNumber: checkpoint.number, slot, epoch, headerHash, archiveRoot };
 
-  logger?.debug(`Validating attestations for block ${block.number} at slot ${slot} in epoch ${epoch}`, {
+  logger?.debug(`Validating attestations for checkpoint ${checkpoint.number} at slot ${slot} in epoch ${epoch}`, {
     committee: (committee ?? []).map(member => member.toString()),
-    recoveredAttestors: attestations.map(a => a.getSender().toString()),
-    postedAttestations: publishedBlock.attestations.map(a =>
-      a.address.isZero() ? a.signature.toString() : a.address.toString(),
-    ),
+    recoveredAttestors: attestorInfos,
+    postedAttestations: attestations.map(a => (a.address.isZero() ? a.signature : a.address).toString()),
     ...logData,
   });
 
   if (!committee || committee.length === 0) {
-    logger?.warn(`No committee found for epoch ${epoch} at slot ${slot}. Accepting block without validation.`, logData);
+    logger?.warn(
+      `No committee found for epoch ${epoch} at slot ${slot}. Accepting checkpoint without validation.`,
+      logData,
+    );
     return { valid: true };
   }
 
-  const committeeSet = new Set(committee.map(member => member.toString()));
   const requiredAttestationCount = Math.floor((committee.length * 2) / 3) + 1;
 
-  for (let i = 0; i < attestations.length; i++) {
-    const attestation = attestations[i];
-    const signer = attestation.getSender().toString();
-    if (!committeeSet.has(signer)) {
-      logger?.warn(`Attestation from non-committee member ${signer} at slot ${slot}`, { committee });
-      const reason = 'invalid-attestation';
-      return {
-        valid: false,
-        reason,
-        invalidIndex: i,
-        block: publishedBlock.block.toBlockInfo(),
+  const failedValidationResult = <TReason extends ValidateBlockNegativeResult['reason']>(reason: TReason) => ({
+    valid: false as const,
+    reason,
+    block: checkpoint.blocks[0].toBlockInfo(),
+    committee,
+    seed,
+    epoch,
+    attestors,
+    attestations,
+  });
+
+  for (let i = 0; i < attestorInfos.length; i++) {
+    const info = attestorInfos[i];
+
+    // Fail on invalid signatures (no address recovered)
+    if (info.status === 'invalid-signature' || info.status === 'empty') {
+      logger?.warn(`Attestation with empty or invalid signature at slot ${slot}`, {
         committee,
-        seed,
-        epoch,
-        attestors,
-        attestations: publishedBlock.attestations,
-      };
+        invalidIndex: i,
+        ...logData,
+      });
+      return { ...failedValidationResult('invalid-attestation'), invalidIndex: i };
+    }
+
+    // Check if the attestor at this index matches the committee member at the same index
+    if (info.status === 'recovered-from-signature' || info.status === 'provided-as-address') {
+      const signer = info.address.toString();
+      const expectedCommitteeMember = committee[i]?.toString();
+
+      if (!expectedCommitteeMember || signer !== expectedCommitteeMember) {
+        logger?.warn(
+          `Attestation at index ${i} from ${signer} does not match expected committee member ${expectedCommitteeMember} at slot ${slot}`,
+          {
+            committee,
+            invalidIndex: i,
+            ...logData,
+          },
+        );
+        return { ...failedValidationResult('invalid-attestation'), invalidIndex: i };
+      }
     }
   }
 
-  if (attestations.length < requiredAttestationCount) {
-    logger?.warn(`Insufficient attestations for block at slot ${slot}`, {
+  const validAttestationCount = attestorInfos.filter(info => info.status === 'recovered-from-signature').length;
+  if (validAttestationCount < requiredAttestationCount) {
+    logger?.warn(`Insufficient attestations for checkpoint at slot ${slot}`, {
       requiredAttestations: requiredAttestationCount,
-      actualAttestations: attestations.length,
+      actualAttestations: validAttestationCount,
       ...logData,
     });
-    const reason = 'insufficient-attestations';
-    return {
-      valid: false,
-      reason,
-      block: publishedBlock.block.toBlockInfo(),
-      committee,
-      seed,
-      epoch,
-      attestors,
-      attestations: publishedBlock.attestations,
-    };
+    return failedValidationResult('insufficient-attestations');
   }
 
-  logger?.debug(`Block attestations validated successfully for block ${block.number} at slot ${slot}`, logData);
+  logger?.debug(
+    `Checkpoint attestations validated successfully for checkpoint ${checkpoint.number} at slot ${slot}`,
+    logData,
+  );
   return { valid: true };
 }

@@ -123,3 +123,4 @@ data "kubernetes_service" "eth_beacon" {
 
   depends_on = [helm_release.eth_devnet]
 }
+

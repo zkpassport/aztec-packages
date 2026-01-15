@@ -1,8 +1,9 @@
 import { Buffer32 } from '@aztec/foundation/buffer';
-import { keccak256 } from '@aztec/foundation/crypto';
+import { keccak256 } from '@aztec/foundation/crypto/keccak';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import type { EthAddress } from '@aztec/foundation/eth-address';
 import type { Signature } from '@aztec/foundation/eth-signature';
-import type { Fr } from '@aztec/foundation/fields';
+import { createLogger } from '@aztec/foundation/log';
 import type { CommitteeAttestationsAndSigners } from '@aztec/stdlib/block';
 import {
   BlockAttestation,
@@ -12,28 +13,29 @@ import {
   SignatureDomainSeparator,
 } from '@aztec/stdlib/p2p';
 import type { CheckpointHeader } from '@aztec/stdlib/rollup';
-import type { StateReference, Tx } from '@aztec/stdlib/tx';
+import type { Tx } from '@aztec/stdlib/tx';
 
 import type { ValidatorKeyStore } from '../key_store/interface.js';
 
 export class ValidationService {
-  constructor(private keyStore: ValidatorKeyStore) {}
+  constructor(
+    private keyStore: ValidatorKeyStore,
+    private log = createLogger('validator:validation-service'),
+  ) {}
 
   /**
    * Create a block proposal with the given header, archive, and transactions
    *
-   * @param blockNumber - The block number this proposal is for
    * @param header - The block header
    * @param archive - The archive of the current block
    * @param txs - TxHash[] ordered list of transactions
+   * @param options - Block proposal options (including broadcastInvalidBlockProposal for testing)
    *
    * @returns A block proposal signing the above information (not the current implementation!!!)
    */
   async createBlockProposal(
-    blockNumber: number,
     header: CheckpointHeader,
     archive: Fr,
-    stateReference: StateReference,
     txs: Tx[],
     proposerAttesterAddress: EthAddress | undefined,
     options: BlockProposalOptions,
@@ -49,9 +51,14 @@ export class ValidationService {
     // TODO: check if this is calculated earlier / can not be recomputed
     const txHashes = await Promise.all(txs.map(tx => tx.getTxHash()));
 
+    // For testing: change the new archive to trigger state_mismatch validation failure
+    if (options.broadcastInvalidBlockProposal) {
+      archive = Fr.random();
+      this.log.warn(`Creating INVALID block proposal for slot ${header.slotNumber}`);
+    }
+
     return BlockProposal.createProposalFromSigner(
-      blockNumber,
-      new ConsensusPayload(header, archive, stateReference),
+      new ConsensusPayload(header, archive),
       txHashes,
       options.publishFullTxs ? txs : undefined,
       payloadSigner,
@@ -75,8 +82,7 @@ export class ValidationService {
     const signatures = await Promise.all(
       attestors.map(attestor => this.keyStore.signMessageWithAddress(attestor, buf)),
     );
-    //await this.keyStore.signMessage(buf);
-    return signatures.map(sig => new BlockAttestation(proposal.blockNumber, proposal.payload, sig));
+    return signatures.map(sig => new BlockAttestation(proposal.payload, sig, proposal.signature));
   }
 
   async signAttestationsAndSigners(

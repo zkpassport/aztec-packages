@@ -1,12 +1,13 @@
 import { BarretenbergSync } from '@aztec/bb.js';
 
-import { Fr } from '../../../fields/fields.js';
+import { Fr } from '../../../curves/bn254/field.js';
 import { poseidon2Permutation } from './index.js';
 
 describe('poseidon2Permutation', () => {
   beforeAll(async () => {
-    await BarretenbergSync.initSingleton(process.env.BB_WASM_PATH);
+    await BarretenbergSync.initSingleton();
   });
+
   it('test vectors from cpp should match', () => {
     const init = [0, 1, 2, 3];
     expect(poseidon2Permutation(init)).toEqual([

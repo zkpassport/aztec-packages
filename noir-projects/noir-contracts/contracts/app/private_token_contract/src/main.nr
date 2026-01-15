@@ -1,49 +1,51 @@
-// docs:start:private_token_contract
 use dep::aztec::macros::aztec;
 
 #[aztec]
 pub contract PrivateToken {
-    use dep::aztec::macros::{functions::{initializer, private, utility}, storage::storage};
-    use dep::aztec::{protocol_types::address::AztecAddress, state_vars::Map};
-    use dep::easy_private_state::EasyPrivateUint;
+    use dep::aztec::macros::{functions::{external, initializer}, storage::storage};
+    use dep::aztec::messages::message_delivery::MessageDelivery;
+    use dep::aztec::protocol_types::address::AztecAddress;
+    use dep::aztec::state_vars::Owned;
+    use dep::balance_set::BalanceSet;
 
     #[storage]
     struct Storage<Context> {
-        balances: Map<AztecAddress, EasyPrivateUint<Context>, Context>,
+        balances: Owned<BalanceSet<Context>, Context>,
     }
 
     /**
      * initialize the contract's initial state variables.
      */
-    #[private]
+    #[external("private")]
     #[initializer]
     fn constructor(initial_supply: u64, owner: AztecAddress) {
-        let balances = storage.balances;
-
-        balances.at(owner).add(initial_supply, owner);
+        self.storage.balances.at(owner).add(initial_supply as u128).deliver(
+            MessageDelivery.CONSTRAINED_ONCHAIN,
+        );
     }
 
     // Mints `amount` of tokens to `owner`.
-    #[private]
+    #[external("private")]
     fn mint(amount: u64, owner: AztecAddress) {
-        let balances = storage.balances;
-
-        balances.at(owner).add(amount, owner);
+        self.storage.balances.at(owner).add(amount as u128).deliver(
+            MessageDelivery.CONSTRAINED_ONCHAIN,
+        );
     }
 
     // Transfers `amount` of tokens from `sender` to a `recipient`.
-    #[private]
+    #[external("private")]
     fn transfer(amount: u64, sender: AztecAddress, recipient: AztecAddress) {
-        let balances = storage.balances;
-
-        balances.at(sender).sub(amount, sender);
-        balances.at(recipient).add(amount, recipient);
+        self.storage.balances.at(sender).sub(amount as u128).deliver(
+            MessageDelivery.CONSTRAINED_ONCHAIN,
+        );
+        self.storage.balances.at(recipient).add(amount as u128).deliver(
+            MessageDelivery.CONSTRAINED_ONCHAIN,
+        );
     }
 
     // Helper function to get the balance of a user.
-    #[utility]
-    unconstrained fn get_balance(owner: AztecAddress) -> Field {
-        storage.balances.at(owner).get_value()
+    #[external("utility")]
+    unconstrained fn get_balance(owner: AztecAddress) -> u128 {
+        self.storage.balances.at(owner).balance_of()
     }
 }
-// docs:end:private_token_contract

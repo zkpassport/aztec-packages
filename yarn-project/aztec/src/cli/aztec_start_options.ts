@@ -2,7 +2,9 @@ import { type ArchiverConfig, archiverConfigMappings } from '@aztec/archiver/con
 import { sequencerClientConfigMappings } from '@aztec/aztec-node/config';
 import { blobSinkConfigMappings } from '@aztec/blob-sink/server';
 import { botConfigMappings } from '@aztec/bot/config';
-import { l1ContractAddressesMapping, l1ContractsConfigMappings, l1ReaderConfigMappings } from '@aztec/ethereum';
+import { l1ContractsConfigMappings } from '@aztec/ethereum/config';
+import { l1ContractAddressesMapping } from '@aztec/ethereum/l1-contract-addresses';
+import { l1ReaderConfigMappings } from '@aztec/ethereum/l1-reader';
 import { getKeys } from '@aztec/foundation/collection';
 import {
   type ConfigMapping,
@@ -82,6 +84,7 @@ export const universalOptions = [
   'l1ConsensusHostApiKeys',
   'l1ConsensusHostApiKeyHeaders',
   'p2pEnabled',
+  'fishermanMode',
   ...getKeys(chainConfigMappings),
   ...getKeys(l1ContractsConfigMappings),
   ...getKeys(l1ContractAddressesMapping),
@@ -106,31 +109,27 @@ export const aztecStartOptions: { [key: string]: AztecStartOption[] } = {
     configToFlag('--auto-update-url', sharedNodeConfigMappings.autoUpdateUrl),
 
     configToFlag('--sync-mode', sharedNodeConfigMappings.syncMode),
-    configToFlag('--snapshots-url', sharedNodeConfigMappings.snapshotsUrl),
+    configToFlag('--snapshots-urls', sharedNodeConfigMappings.snapshotsUrls),
+
+    configToFlag('--fisherman-mode', sharedNodeConfigMappings.fishermanMode),
   ],
-  SANDBOX: [
+  LOCAL_NETWORK: [
     {
-      flag: '--sandbox',
-      description: 'Starts Aztec Sandbox',
+      flag: '--local-network',
+      description: 'Starts Aztec Local Network',
       defaultValue: undefined,
       env: undefined,
     },
     {
-      flag: '--sandbox.noPXE',
-      description: 'Do not expose PXE service on sandbox start',
-      env: 'NO_PXE',
-      ...booleanConfigHelper(),
-    },
-    {
-      flag: '--sandbox.l1Mnemonic <value>',
+      flag: '--local-network.l1Mnemonic <value>',
       description: 'Mnemonic for L1 accounts. Will be used ',
       defaultValue: DefaultMnemonic,
       env: 'MNEMONIC',
     },
     {
-      flag: '--sandbox.deployAztecContractsSalt <value>',
+      flag: '--local-network.deployAztecContractsSalt <value>',
       description:
-        'Numeric salt for deploying L1 Aztec contracts before starting the sandbox. Needs mnemonic or private key to be set.',
+        'Numeric salt for deploying L1 Aztec contracts before starting the local network. Needs mnemonic or private key to be set.',
       env: 'DEPLOY_AZTEC_CONTRACTS_SALT',
       defaultValue: undefined,
       parseVal: (val: string) => (val ? parseInt(val) : undefined),
@@ -146,7 +145,7 @@ export const aztecStartOptions: { [key: string]: AztecStartOption[] } = {
     },
     {
       flag: '--admin-port <value>',
-      description: 'Port to run admin APIs of Aztec Services on on',
+      description: 'Port to run admin APIs of Aztec Services on',
       defaultValue: 8880,
       env: 'AZTEC_ADMIN_PORT',
       parseVal: val => parseInt(val, 10),
@@ -172,7 +171,7 @@ export const aztecStartOptions: { [key: string]: AztecStartOption[] } = {
   ],
   STORAGE: [
     configToFlag('--data-directory', dataConfigMappings.dataDirectory),
-    configToFlag('--data-store-map-size-kb', dataConfigMappings.dataStoreMapSizeKB),
+    configToFlag('--data-store-map-size-kb', dataConfigMappings.dataStoreMapSizeKb),
   ],
   'WORLD STATE': [
     configToFlag('--world-state-data-directory', worldStateConfigMappings.worldStateDataDirectory),

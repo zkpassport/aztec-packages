@@ -1,10 +1,14 @@
-import { AztecAddress, Fr, type Logger, type Wallet } from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
 import { CheatCodes } from '@aztec/aztec/testing';
-import { type DeployL1ContractsReturnType, RollupContract } from '@aztec/ethereum';
+import { RollupContract } from '@aztec/ethereum/contracts';
+import type { DeployL1ContractsReturnType } from '@aztec/ethereum/deploy-l1-contracts';
 import type { TestDateProvider } from '@aztec/foundation/timer';
 import { LendingContract } from '@aztec/noir-contracts.js/Lending';
 import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
+import type { TestWallet } from '@aztec/test-wallet/server';
 
 import { afterAll, jest } from '@jest/globals';
 
@@ -14,7 +18,7 @@ import { LendingAccount, LendingSimulator, TokenSimulator } from './simulators/i
 
 describe('e2e_lending_contract', () => {
   jest.setTimeout(100_000);
-  let wallet: Wallet;
+  let wallet: TestWallet;
   let defaultAccountAddress: AztecAddress;
   let deployL1ContractsValues: DeployL1ContractsReturnType;
 
@@ -231,7 +235,7 @@ describe('e2e_lending_contract', () => {
         },
         true,
       );
-      await validateAction.send({ from: defaultAccountAddress }).wait();
+      await validateAction.send().wait();
 
       await lendingSim.progressSlots(SLOT_JUMP, dateProvider);
       lendingSim.depositPublic(lendingAccount.address, lendingAccount.address.toField(), activationThreshold);
@@ -357,7 +361,7 @@ describe('e2e_lending_contract', () => {
         },
         true,
       );
-      await validateAction.send({ from: defaultAccountAddress }).wait();
+      await validateAction.send().wait();
 
       await lendingSim.progressSlots(SLOT_JUMP, dateProvider);
       lendingSim.repayPublic(lendingAccount.address, lendingAccount.address.toField(), repayAmount);

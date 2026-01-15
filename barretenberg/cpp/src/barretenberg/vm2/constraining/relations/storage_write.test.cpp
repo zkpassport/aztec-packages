@@ -8,10 +8,10 @@
 #include "barretenberg/vm2/constraining/testing/check_relation.hpp"
 #include "barretenberg/vm2/generated/relations/execution.hpp"
 #include "barretenberg/vm2/generated/relations/lookups_sstore.hpp"
-#include "barretenberg/vm2/simulation/concrete_dbs.hpp"
 #include "barretenberg/vm2/simulation/events/public_data_tree_check_event.hpp"
+#include "barretenberg/vm2/simulation/gadgets/concrete_dbs.hpp"
+#include "barretenberg/vm2/simulation/gadgets/public_data_tree_check.hpp"
 #include "barretenberg/vm2/simulation/lib/merkle.hpp"
-#include "barretenberg/vm2/simulation/public_data_tree_check.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_dbs.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_execution_id_manager.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_field_gt.hpp"
@@ -81,8 +81,7 @@ TEST(SStoreConstrainingTest, NegativeDynamicL2GasIsZero)
         { C::execution_sel_execute_sstore, 1 },
         { C::execution_dynamic_l2_gas_factor, 1 },
     } });
-    EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_SSTORE_DYN_L2_GAS_IS_ZERO),
-                              "SSTORE_DYN_L2_GAS_IS_ZERO");
+    EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_DYN_L2_GAS_IS_ZERO), "DYN_L2_GAS_IS_ZERO");
 }
 
 TEST(SStoreConstrainingTest, MaxDataWritesReached)
@@ -210,7 +209,7 @@ TEST(SStoreConstrainingTest, Interactions)
 
     AppendOnlyTreeSnapshot public_data_tree_before = AppendOnlyTreeSnapshot{
         .root = 42,
-        .nextAvailableLeafIndex = 128,
+        .next_available_leaf_index = 128,
     };
     AppendOnlyTreeSnapshot written_slots_tree_before = written_public_data_slots_tree_check.get_snapshot();
 
@@ -255,18 +254,19 @@ TEST(SStoreConstrainingTest, Interactions)
             { C::execution_max_data_writes_reached, 0 },
             { C::execution_remaining_data_writes_inv,
               FF(MAX_PUBLIC_DATA_UPDATE_REQUESTS_PER_TX + AVM_WRITTEN_PUBLIC_DATA_SLOTS_TREE_INITIAL_SIZE -
-                 written_slots_tree_before.nextAvailableLeafIndex)
+                 written_slots_tree_before.next_available_leaf_index)
                   .invert() },
             { C::execution_subtrace_operation_id, AVM_EXEC_OP_ID_SSTORE },
             { C::execution_sel_write_public_data, 1 },
             { C::execution_prev_public_data_tree_root, public_data_tree_before.root },
-            { C::execution_prev_public_data_tree_size, public_data_tree_before.nextAvailableLeafIndex },
+            { C::execution_prev_public_data_tree_size, public_data_tree_before.next_available_leaf_index },
             { C::execution_public_data_tree_root, public_data_tree_after.root },
-            { C::execution_public_data_tree_size, public_data_tree_after.nextAvailableLeafIndex },
+            { C::execution_public_data_tree_size, public_data_tree_after.next_available_leaf_index },
             { C::execution_prev_written_public_data_slots_tree_root, written_slots_tree_before.root },
-            { C::execution_prev_written_public_data_slots_tree_size, written_slots_tree_before.nextAvailableLeafIndex },
+            { C::execution_prev_written_public_data_slots_tree_size,
+              written_slots_tree_before.next_available_leaf_index },
             { C::execution_written_public_data_slots_tree_root, written_slots_tree_after.root },
-            { C::execution_written_public_data_slots_tree_size, written_slots_tree_after.nextAvailableLeafIndex },
+            { C::execution_written_public_data_slots_tree_size, written_slots_tree_after.next_available_leaf_index },
         },
     });
 
@@ -279,8 +279,10 @@ TEST(SStoreConstrainingTest, Interactions)
     check_relation<sstore>(trace);
     check_interaction<ExecutionTraceBuilder,
                       lookup_execution_check_written_storage_slot_settings,
-                      lookup_sstore_record_written_storage_slot_settings,
-                      lookup_sstore_storage_write_settings>(trace);
+                      lookup_sstore_record_written_storage_slot_settings>(trace);
+    check_multipermutation_interaction<PublicDataTreeTraceBuilder,
+                                       perm_sstore_storage_write_settings,
+                                       perm_tx_balance_update_settings>(trace);
 }
 
 } // namespace

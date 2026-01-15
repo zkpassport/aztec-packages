@@ -1,12 +1,15 @@
 import type { InitialAccountData } from '@aztec/accounts/testing';
-import { type AztecNode, type ContractInstanceWithAddress, type TxHash, computeSecretHash } from '@aztec/aztec.js';
-import type { DeployL1ContractsReturnType } from '@aztec/ethereum';
-import { Fr } from '@aztec/foundation/fields';
+import type { ContractInstanceWithAddress } from '@aztec/aztec.js/contracts';
+import { computeSecretHash } from '@aztec/aztec.js/crypto';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import type { TxHash } from '@aztec/aztec.js/tx';
+import type { DeployL1ContractsReturnType } from '@aztec/ethereum/deploy-l1-contracts';
+import { Fr } from '@aztec/foundation/curves/bn254';
 // We use TokenBlacklist because we want to test the persistence of manually added notes and standard token no longer
 // implements TransparentNote shield flow.
 import { TokenBlacklistContract } from '@aztec/noir-contracts.js/TokenBlacklist';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
-import type { TestWallet } from '@aztec/test-wallet';
+import type { TestWallet } from '@aztec/test-wallet/server';
 
 import { jest } from '@jest/globals';
 import { mkdtemp } from 'fs/promises';
@@ -65,8 +68,10 @@ describe('Aztec persistence', () => {
     owner = initialFundedAccounts[0];
     ownerAddress = owner.address;
 
-    const contract = await TokenBlacklistContract.deploy(wallet, ownerAddress).send({ from: ownerAddress }).deployed();
-    contractInstance = contract.instance;
+    const { contract, instance } = await TokenBlacklistContract.deploy(wallet, ownerAddress)
+      .send({ from: ownerAddress })
+      .wait();
+    contractInstance = instance;
     contractAddress = contract.address;
 
     await progressBlocksPastDelay(contract);
@@ -127,7 +132,7 @@ describe('Aztec persistence', () => {
     beforeEach(async () => {
       context = await contextSetup();
       await context.wallet.createSchnorrAccount(owner.secret, owner.salt, owner.signingKey);
-      contract = await TokenBlacklistContract.at(contractAddress, wallet);
+      contract = TokenBlacklistContract.at(contractAddress, wallet);
     }, timeout);
 
     afterEach(async () => {
@@ -172,7 +177,7 @@ describe('Aztec persistence', () => {
     it('allows spending of private notes', async () => {
       const account = initialFundedAccounts[1]; // Not the owner account.
       const otherAccount = await context.wallet.createSchnorrAccount(account.secret, account.salt);
-      const otherAddress = otherAccount.getAddress();
+      const otherAddress = otherAccount.address;
 
       const initialOwnerBalance = await contract.methods
         .balance_of_private(ownerAddress)
@@ -221,35 +226,26 @@ describe('Aztec persistence', () => {
     });
 
     it("pxe does not have owner's private notes", async () => {
-      await context.pxe.registerContract({
-        artifact: TokenBlacklistContract.artifact,
-        instance: contractInstance,
-      });
-      const contract = await TokenBlacklistContract.at(contractAddress, wallet);
+      await context.wallet.registerContract(contractInstance, TokenBlacklistContract.artifact);
+      const contract = TokenBlacklistContract.at(contractAddress, wallet);
       await expect(contract.methods.balance_of_private(ownerAddress).simulate({ from: ownerAddress })).resolves.toEqual(
         0n,
       );
     });
 
     it('has access to public storage', async () => {
-      await context.pxe.registerContract({
-        artifact: TokenBlacklistContract.artifact,
-        instance: contractInstance,
-      });
-      const contract = await TokenBlacklistContract.at(contractAddress, wallet);
+      await context.wallet.registerContract(contractInstance, TokenBlacklistContract.artifact);
+      const contract = TokenBlacklistContract.at(contractAddress, wallet);
 
       await expect(contract.methods.total_supply().simulate({ from: ownerAddress })).resolves.toBeGreaterThan(0n);
     });
 
     it('pxe restores notes after registering the owner', async () => {
-      await context.pxe.registerContract({
-        artifact: TokenBlacklistContract.artifact,
-        instance: contractInstance,
-      });
+      await context.wallet.registerContract(contractInstance, TokenBlacklistContract.artifact);
 
       const account = initialFundedAccounts[0];
       await context.wallet.createSchnorrAccount(account.secret, account.salt);
-      const contract = await TokenBlacklistContract.at(contractAddress, context.wallet);
+      const contract = TokenBlacklistContract.at(contractAddress, context.wallet);
 
       // check that notes total more than 0 so that this test isn't dependent on run order
       await expect(
@@ -272,15 +268,12 @@ describe('Aztec persistence', () => {
     beforeAll(async () => {
       const temporaryContext = await setup(0, { deployL1ContractsValues }, {});
 
-      await temporaryContext.pxe.registerContract({
-        artifact: TokenBlacklistContract.artifact,
-        instance: contractInstance,
-      });
+      await temporaryContext.wallet.registerContract(contractInstance, TokenBlacklistContract.artifact);
 
       const account = initialFundedAccounts[0];
       await context.wallet.createSchnorrAccount(account.secret, account.salt);
 
-      const contract = await TokenBlacklistContract.at(contractAddress, context.wallet);
+      const contract = TokenBlacklistContract.at(contractAddress, context.wallet);
 
       // mint some tokens with a secret we know and redeem later on a separate PXE
       secret = Fr.random();
@@ -308,7 +301,7 @@ describe('Aztec persistence', () => {
       context = await setup(0, { dataDirectory, deployL1ContractsValues }, { dataDirectory });
       const account = initialFundedAccounts[0];
       await context.wallet.createSchnorrAccount(account.secret, account.salt);
-      contract = await TokenBlacklistContract.at(contractAddress, context.wallet);
+      contract = TokenBlacklistContract.at(contractAddress, context.wallet);
     });
 
     afterEach(async () => {
@@ -354,7 +347,6 @@ async function addPendingShieldNoteToPXE(
   txHash: TxHash,
   aztecNode: AztecNode,
 ) {
-  // docs:start:offchain_delivery
   const txEffects = await aztecNode.getTxEffect(txHash);
   await contract.methods
     .deliver_transparent_note(
@@ -367,5 +359,4 @@ async function addPendingShieldNoteToPXE(
       recipient,
     )
     .simulate({ from: recipient });
-  // docs:end:offchain_delivery
 }

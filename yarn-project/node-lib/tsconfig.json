@@ -59,6 +59,12 @@
     },
     {
       "path": "../world-state"
+    },
+    {
+      "path": "../blob-lib"
+    },
+    {
+      "path": "../node-keystore"
     }
   ],
   "include": ["src"]

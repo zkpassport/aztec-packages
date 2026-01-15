@@ -580,10 +580,12 @@ fn handle_foreign_call(
 /// (an external 'call' brillig foreign call was encountered)
 /// Adds the new instruction to the avm instructions list.
 // #[oracle(avmOpcodeCall)]
-// unconstrained fn call_opcode(
-//     gas: [Field; 2], // gas allocation: [l2_gas, da_gas]
+// unconstrained fn call_opcode<let N: u32>(
+//     l2_gas_allocation: u32,
+//     da_gas_allocation: u32,
 //     address: AztecAddress,
-//     args: [Field],
+//     length: u32,
+//     args: [Field; N],
 // ) {}
 fn handle_external_call(
     avm_instrs: &mut Vec<AvmInstruction>,
@@ -611,14 +613,14 @@ fn handle_external_call(
         ValueOrArray::MemoryAddress(offset) => offset,
         _ => panic!("Call instruction's target address input should be a basic MemoryAddress",),
     };
-    // The args are a slice, and this is represented as a (Field, HeapVector).
-    // The field is the length (memory address) and the HeapVector has the data and length again.
-    // This is an ACIR internal representation detail that leaks to the SSA.
-    // Observe that below, we use `inputs[4]` and therefore skip the length field.
+    let args_size_offset = match &inputs[3] {
+        ValueOrArray::MemoryAddress(offset) => offset,
+        _ => panic!("Call instruction's length input should be a basic MemoryAddress"),
+    };
     let args = &inputs[4];
-    let (args_offset_ptr, args_size_offset) = match args {
-        ValueOrArray::HeapVector(HeapVector { pointer, size }) => (pointer, size),
-        _ => panic!("Call instruction's args input should be a HeapVector input"),
+    let args_offset_ptr = match args {
+        ValueOrArray::HeapArray(HeapArray { pointer, size: _ }) => pointer,
+        _ => panic!("Call instruction's args input should be a HeapArray input"),
     };
 
     avm_instrs.push(AvmInstruction {
@@ -718,13 +720,13 @@ fn handle_emit_unencrypted_log(
         // The message array from Brillig is indirect.
         indirect: Some(
             AddressingModeBuilder::default()
-                .indirect_operand(&message_offset)
                 .direct_operand(&message_size_offset)
+                .indirect_operand(&message_offset)
                 .build(),
         ),
         operands: vec![
-            AvmOperand::U16 { value: message_offset.to_usize() as u16 },
             AvmOperand::U16 { value: message_size_offset.to_usize() as u16 },
+            AvmOperand::U16 { value: message_offset.to_usize() as u16 },
         ],
         ..Default::default()
     });
@@ -1325,41 +1327,74 @@ fn handle_debug_log(
     destinations: &[ValueOrArray],
     inputs: &[ValueOrArray],
 ) {
-    if !destinations.is_empty() || inputs.len() != 3 {
+    // We need to handle two flavors here:
+    //
+    // #[oracle(utilityDebugLog)]
+    // unconstrained fn debug_log_array_oracle<let M: u32, let N: u32>(
+    //     log_level: u8,
+    //     msg: str<M>,
+    //     length: u32,
+    //     args: [Field; N],
+    // ) {}
+    //
+    // and
+    //
+    //#[oracle(utilityDebugLog)]
+    // unconstrained fn debug_log_slice_oracle<let M: u32>(log_level: u8, msg: str<M>, args: [Field]) {}
+    //
+    // Luckily, these two flavors have both 4 arguments, since noir inserts a length field for slices before the slice.
+    // So we can handle both cases with mostly the same code.
+    //
+    if !destinations.is_empty() || inputs.len() != 4 {
         panic!(
-            "Transpiler expects ForeignCall::DEBUGLOG to have 0 destinations and 3 inputs, got {} and {}",
+            "Transpiler expects ForeignCall::DEBUGLOG to have 0 destinations and 4 inputs, got {} and {}",
             destinations.len(),
             inputs.len()
         );
     }
-    let (message_offset, message_size) = match &inputs[0] {
+    // Level
+    let level_offset = match &inputs[0] {
+        ValueOrArray::MemoryAddress(level) => level,
+        _ => panic!("Level for ForeignCall::DEBUGLOG should be a MemoryAddress."),
+    };
+    // Message
+    let (message_offset, message_size) = match &inputs[1] {
         ValueOrArray::HeapArray(HeapArray { pointer, size }) => (pointer, *size as u32),
         _ => panic!("Message for ForeignCall::DEBUGLOG should be a HeapArray."),
     };
-    // The fields are a slice, and this is represented as a (length: Field, slice: HeapVector).
-    // The length field is redundant and we skipt it.
-    let (fields_offset_ptr, fields_size_ptr) = match &inputs[2] {
+    // Length and pointer
+    let (fields_offset_ptr, fields_size_offset) = match &inputs[3] {
         ValueOrArray::HeapVector(HeapVector { pointer, size }) => (pointer, size),
+        ValueOrArray::HeapArray(HeapArray { pointer, .. }) => {
+            // match inputs[2] to be a regular
+            match &inputs[2] {
+                ValueOrArray::MemoryAddress(size) => (pointer, size),
+                _ => panic!("DebugLog with an array should have a memory address for the size."),
+            }
+        }
         _ => panic!("List of fields for ForeignCall::DEBUGLOG should be a HeapVector (slice)."),
     };
     avm_instrs.push(AvmInstruction {
         opcode: AvmOpcode::DEBUGLOG,
         // (left to right)
+        //  * level direct
         //  * message_offset INDIRECT
         //  * (N/A) message_size is an immediate
         //  * fields_offset_ptr INDIRECT
-        //  * fields_size_ptr direct
+        //  * fields_size_offset direct
         indirect: Some(
             AddressingModeBuilder::default()
+                .direct_operand(level_offset)
                 .indirect_operand(message_offset)
                 .indirect_operand(fields_offset_ptr)
-                .direct_operand(fields_size_ptr)
+                .direct_operand(fields_size_offset)
                 .build(),
         ),
         operands: vec![
+            AvmOperand::U16 { value: level_offset.to_usize() as u16 },
             AvmOperand::U16 { value: message_offset.to_usize() as u16 },
             AvmOperand::U16 { value: fields_offset_ptr.to_usize() as u16 },
-            AvmOperand::U16 { value: fields_size_ptr.to_usize() as u16 },
+            AvmOperand::U16 { value: fields_size_offset.to_usize() as u16 },
         ],
         immediates: vec![AvmOperand::U16 { value: message_size as u16 }],
         ..Default::default()

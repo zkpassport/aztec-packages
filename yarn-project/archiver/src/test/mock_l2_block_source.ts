@@ -1,7 +1,9 @@
-import { DefaultL1ContractsConfig } from '@aztec/ethereum';
+import { GENESIS_ARCHIVE_ROOT } from '@aztec/constants';
+import { DefaultL1ContractsConfig } from '@aztec/ethereum/config';
+import { BlockNumber, CheckpointNumber, EpochNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { Buffer32 } from '@aztec/foundation/buffer';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import type { Fr } from '@aztec/foundation/fields';
 import { createLogger } from '@aztec/foundation/log';
 import type { FunctionSelector } from '@aztec/stdlib/abi';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
@@ -13,6 +15,7 @@ import {
   PublishedL2Block,
   type ValidateBlockResult,
 } from '@aztec/stdlib/block';
+import type { Checkpoint } from '@aztec/stdlib/checkpoint';
 import type { ContractClassPublic, ContractDataSource, ContractInstanceWithAddress } from '@aztec/stdlib/contract';
 import { EmptyL1RollupConstants, type L1RollupConstants, getSlotRangeForEpoch } from '@aztec/stdlib/epoch-helpers';
 import { type BlockHeader, TxHash, TxReceipt, TxStatus } from '@aztec/stdlib/tx';
@@ -32,7 +35,7 @@ export class MockL2BlockSource implements L2BlockSource, ContractDataSource {
   public async createBlocks(numBlocks: number) {
     for (let i = 0; i < numBlocks; i++) {
       const blockNum = this.l2Blocks.length + 1;
-      const block = await L2Block.random(blockNum);
+      const block = await L2Block.random(BlockNumber(blockNum));
       this.l2Blocks.push(block);
     }
 
@@ -81,11 +84,11 @@ export class MockL2BlockSource implements L2BlockSource, ContractDataSource {
    * @returns In this mock instance, returns the number of L2 blocks that we've mocked.
    */
   public getBlockNumber() {
-    return Promise.resolve(this.l2Blocks.length);
+    return Promise.resolve(BlockNumber(this.l2Blocks.length));
   }
 
-  public getProvenBlockNumber(): Promise<number> {
-    return Promise.resolve(this.provenBlockNumber);
+  public getProvenBlockNumber() {
+    return Promise.resolve(BlockNumber(this.provenBlockNumber));
   }
 
   /**
@@ -111,6 +114,16 @@ export class MockL2BlockSource implements L2BlockSource, ContractDataSource {
     );
   }
 
+  public async getPublishedCheckpoints(from: CheckpointNumber, limit: number) {
+    // TODO: Implement this properly. This only works when we have one block per checkpoint.
+    return (await this.getPublishedBlocks(from, limit)).map(block => block.toPublishedCheckpoint());
+  }
+
+  public async getCheckpointByArchive(archive: Fr): Promise<Checkpoint | undefined> {
+    // TODO: Implement this properly. This only works when we have one block per checkpoint.
+    return (await this.getPublishedBlockByArchive(archive))?.block.toCheckpoint();
+  }
+
   public async getPublishedBlocks(from: number, limit: number, proven?: boolean) {
     const blocks = await this.getBlocks(from, limit, proven);
     return blocks.map(block =>
@@ -126,21 +139,77 @@ export class MockL2BlockSource implements L2BlockSource, ContractDataSource {
     );
   }
 
+  public async getPublishedBlockByHash(blockHash: Fr): Promise<PublishedL2Block | undefined> {
+    for (const block of this.l2Blocks) {
+      const hash = await block.hash();
+      if (hash.equals(blockHash)) {
+        return PublishedL2Block.fromFields({
+          block,
+          l1: {
+            blockNumber: BigInt(block.number),
+            blockHash: Buffer32.random().toString(),
+            timestamp: BigInt(block.number),
+          },
+          attestations: [],
+        });
+      }
+    }
+    return undefined;
+  }
+
+  public getPublishedBlockByArchive(archive: Fr): Promise<PublishedL2Block | undefined> {
+    const block = this.l2Blocks.find(b => b.archive.root.equals(archive));
+    if (!block) {
+      return Promise.resolve(undefined);
+    }
+    return Promise.resolve(
+      PublishedL2Block.fromFields({
+        block,
+        l1: {
+          blockNumber: BigInt(block.number),
+          blockHash: Buffer32.random().toString(),
+          timestamp: BigInt(block.number),
+        },
+        attestations: [],
+      }),
+    );
+  }
+
+  public async getBlockHeaderByHash(blockHash: Fr): Promise<BlockHeader | undefined> {
+    for (const block of this.l2Blocks) {
+      const hash = await block.hash();
+      if (hash.equals(blockHash)) {
+        return block.getBlockHeader();
+      }
+    }
+    return undefined;
+  }
+
+  public getBlockHeaderByArchive(archive: Fr): Promise<BlockHeader | undefined> {
+    const block = this.l2Blocks.find(b => b.archive.root.equals(archive));
+    return Promise.resolve(block?.getBlockHeader());
+  }
+
   getBlockHeader(number: number | 'latest'): Promise<BlockHeader | undefined> {
     return Promise.resolve(this.l2Blocks.at(typeof number === 'number' ? number - 1 : -1)?.getBlockHeader());
   }
 
-  getBlocksForEpoch(epochNumber: bigint): Promise<L2Block[]> {
+  getCheckpointsForEpoch(epochNumber: EpochNumber): Promise<Checkpoint[]> {
+    // TODO: Implement this properly. This only works when we have one block per checkpoint.
+    return this.getBlocksForEpoch(epochNumber).then(blocks => blocks.map(b => b.toCheckpoint()));
+  }
+
+  getBlocksForEpoch(epochNumber: EpochNumber): Promise<L2Block[]> {
     const epochDuration = DefaultL1ContractsConfig.aztecEpochDuration;
     const [start, end] = getSlotRangeForEpoch(epochNumber, { epochDuration });
     const blocks = this.l2Blocks.filter(b => {
-      const slot = b.header.globalVariables.slotNumber.toBigInt();
+      const slot = b.header.globalVariables.slotNumber;
       return slot >= start && slot <= end;
     });
     return Promise.resolve(blocks);
   }
 
-  async getBlockHeadersForEpoch(epochNumber: bigint): Promise<BlockHeader[]> {
+  async getBlockHeadersForEpoch(epochNumber: EpochNumber): Promise<BlockHeader[]> {
     const blocks = await this.getBlocksForEpoch(epochNumber);
     return blocks.map(b => b.getBlockHeader());
   }
@@ -202,34 +271,38 @@ export class MockL2BlockSource implements L2BlockSource, ContractDataSource {
 
     return {
       latest: {
-        number: latest,
+        number: BlockNumber(latest),
         hash: (await latestBlock?.hash())?.toString(),
       },
       proven: {
-        number: proven,
+        number: BlockNumber(proven),
         hash: (await provenBlock?.hash())?.toString(),
       },
       finalized: {
-        number: finalized,
+        number: BlockNumber(finalized),
         hash: (await finalizedBlock?.hash())?.toString(),
       },
     };
   }
 
-  getL2EpochNumber(): Promise<bigint> {
+  getL2EpochNumber(): Promise<EpochNumber> {
     throw new Error('Method not implemented.');
   }
 
-  getL2SlotNumber(): Promise<bigint> {
+  getL2SlotNumber(): Promise<SlotNumber> {
     throw new Error('Method not implemented.');
   }
 
-  isEpochComplete(_epochNumber: bigint): Promise<boolean> {
+  isEpochComplete(_epochNumber: EpochNumber): Promise<boolean> {
     throw new Error('Method not implemented.');
   }
 
   getL1Constants(): Promise<L1RollupConstants> {
     return Promise.resolve(EmptyL1RollupConstants);
+  }
+
+  getGenesisValues(): Promise<{ genesisArchiveRoot: Fr }> {
+    return Promise.resolve({ genesisArchiveRoot: new Fr(GENESIS_ARCHIVE_ROOT) });
   }
 
   getL1Timestamp(): Promise<bigint> {

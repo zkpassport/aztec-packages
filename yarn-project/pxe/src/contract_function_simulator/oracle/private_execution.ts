@@ -1,5 +1,6 @@
 import { PRIVATE_CIRCUIT_PUBLIC_INPUTS_LENGTH, PRIVATE_CONTEXT_INPUTS_LENGTH } from '@aztec/constants';
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { createLogger } from '@aztec/foundation/log';
 import { Timer } from '@aztec/foundation/timer';
 import { ProtocolContractAddress } from '@aztec/protocol-contracts';
@@ -88,6 +89,7 @@ export async function executePrivateFunction(
   const newNotes = privateExecutionOracle.getNewNotes();
   const noteHashNullifierCounterMap = privateExecutionOracle.getNoteHashNullifierCounterMap();
   const offchainEffects = privateExecutionOracle.getOffchainEffects();
+  const preTags = privateExecutionOracle.getUsedPreTags();
   const nestedExecutionResults = privateExecutionOracle.getNestedExecutionResults();
 
   let timerSubtractionList = nestedExecutionResults;
@@ -111,6 +113,7 @@ export async function executePrivateFunction(
     noteHashNullifierCounterMap,
     rawReturnValues,
     offchainEffects,
+    preTags,
     nestedExecutionResults,
     contractClassLogs,
     {
@@ -160,7 +163,7 @@ export async function readCurrentClassId(
   contractAddress: AztecAddress,
   instance: ContractInstance,
   executionDataProvider: ExecutionDataProvider | AztecNode,
-  blockNumber: number,
+  blockNumber: BlockNumber,
   timestamp: UInt64,
 ) {
   const { delayedPublicMutableSlot } = await DelayedPublicMutableValuesWithHash.getContractUpdateSlots(contractAddress);

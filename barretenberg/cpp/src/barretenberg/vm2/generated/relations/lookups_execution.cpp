@@ -34,5 +34,9 @@ INSTANTIATE_LOOKUP(lookup_execution_check_radix_gt_256_relation);
 INSTANTIATE_LOOKUP(lookup_execution_get_p_limbs_relation);
 INSTANTIATE_LOOKUP(lookup_execution_get_max_limbs_relation);
 INSTANTIATE_LOOKUP(lookup_execution_check_written_storage_slot_relation);
+INSTANTIATE_LOOKUP(lookup_execution_dispatch_to_alu_relation);
+INSTANTIATE_LOOKUP(lookup_execution_dispatch_to_bitwise_relation);
+INSTANTIATE_LOOKUP(lookup_execution_dispatch_to_cast_relation);
+INSTANTIATE_LOOKUP(lookup_execution_dispatch_to_set_relation);
 
 } // namespace bb::avm2

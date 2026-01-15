@@ -5,41 +5,41 @@ use aztec::macros::aztec;
 #[aztec]
 pub contract NoConstructor {
     use aztec::{
-        macros::{functions::{private, public, utility}, storage::storage},
+        macros::{functions::external, storage::storage},
         messages::message_delivery::MessageDelivery,
-        state_vars::PrivateMutable,
+        protocol_types::address::AztecAddress,
+        state_vars::{Owned, PrivateMutable},
     };
 
-    use value_note::value_note::ValueNote;
+    use field_note::field_note::FieldNote;
 
     #[storage]
     struct Storage<Context> {
-        private_mutable: PrivateMutable<ValueNote, Context>,
+        private_mutable: Owned<PrivateMutable<FieldNote, Context>, Context>,
     }
 
     /// Arbitrary public method used to test that publishing for public execution works for a contract with no constructor.
-    #[public]
+    #[external("public")]
     fn emit_public(value: Field) {
-        context.emit_public_log(/*message=*/ value);
+        self.context.emit_public_log(/*message=*/ value);
     }
 
     /// Arbitrary function used to test that we can call private functions on a contract with
     /// no constructor/initializer.
-    #[private]
+    #[external("private")]
     fn initialize_private_mutable(value: Field) {
-        let note = ValueNote::new(value, context.msg_sender());
+        let owner = self.msg_sender().unwrap();
+        let note = FieldNote { value };
 
-        storage.private_mutable.initialize(note).emit(
-            &mut context,
-            context.msg_sender(),
+        self.storage.private_mutable.at(owner).initialize(note).deliver(
             MessageDelivery.CONSTRAINED_ONCHAIN,
         );
     }
 
     /// Helper function used to test that call to `initialize_private_mutable` was successful or not yet performed.
-    #[utility]
-    unconstrained fn is_private_mutable_initialized() -> bool {
-        storage.private_mutable.is_initialized()
+    #[external("utility")]
+    unconstrained fn is_private_mutable_initialized(owner: AztecAddress) -> bool {
+        self.storage.private_mutable.at(owner).is_initialized()
     }
 
 }

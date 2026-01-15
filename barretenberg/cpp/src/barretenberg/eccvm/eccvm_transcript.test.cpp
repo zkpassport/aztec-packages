@@ -1,4 +1,6 @@
+#include "barretenberg/commitment_schemes/ipa/ipa.hpp"
 #include "barretenberg/ecc/curves/bn254/g1.hpp"
+#include "barretenberg/eccvm/eccvm_flavor.hpp"
 #include "barretenberg/eccvm/eccvm_prover.hpp"
 #include "barretenberg/eccvm/eccvm_verifier.hpp"
 #include "barretenberg/flavor/flavor.hpp"
@@ -9,6 +11,17 @@
 #include <gtest/gtest.h>
 
 using namespace bb;
+
+namespace {
+/**
+ * @brief Add a hiding op with random Px, Py to the op_queue for testing.
+ */
+void add_hiding_op_for_test(const std::shared_ptr<ECCOpQueue>& op_queue)
+{
+    using Fq = curve::BN254::BaseField;
+    op_queue->append_hiding_op(Fq::random_element(), Fq::random_element());
+}
+} // namespace
 
 class ECCVMTranscriptTests : public ::testing::Test {
   public:
@@ -32,13 +45,14 @@ class ECCVMTranscriptTests : public ::testing::Test {
     {
         TranscriptManifest manifest_expected;
         // Size of types is number of bb::frs needed to represent the type
-        size_t frs_per_Fq = bb::field_conversion::calc_num_bn254_frs<FF>();
-        size_t frs_per_Fr = bb::field_conversion::calc_num_bn254_frs<Flavor::BF>();
-        size_t frs_per_G = bb::field_conversion::calc_num_bn254_frs<typename Flavor::Commitment>();
+        size_t frs_per_Fq = FrCodec::calc_num_fields<FF>();
+        size_t frs_per_Fr = FrCodec::calc_num_fields<Flavor::BF>();
+        size_t frs_per_G = FrCodec::calc_num_fields<typename Flavor::Commitment>();
         size_t frs_per_evals = (Flavor::NUM_ALL_ENTITIES)*frs_per_Fq;
 
         size_t round = 0;
         manifest_expected.add_entry(round, "vk_hash", frs_per_Fr);
+        manifest_expected.add_entry(round, "Gemini:masking_poly_comm", frs_per_G);
         manifest_expected.add_entry(round, "TRANSCRIPT_ADD", frs_per_G);
         manifest_expected.add_entry(round, "TRANSCRIPT_EQ", frs_per_G);
         manifest_expected.add_entry(round, "TRANSCRIPT_MSM_TRANSITION", frs_per_G);
@@ -124,7 +138,7 @@ class ECCVMTranscriptTests : public ::testing::Test {
         manifest_expected.add_entry(round, "TRANSCRIPT_ACCUMULATOR_NOT_EMPTY", frs_per_G);
         manifest_expected.add_entry(round, "TRANSCRIPT_ACCUMULATOR_X", frs_per_G);
         manifest_expected.add_entry(round, "TRANSCRIPT_ACCUMULATOR_Y", frs_per_G);
-        manifest_expected.add_challenge(round, "beta", "gamma");
+        manifest_expected.add_challenge(round, std::array{ "beta", "gamma" });
 
         round++;
         manifest_expected.add_entry(round, "LOOKUP_INVERSES", frs_per_G);
@@ -159,8 +173,6 @@ class ECCVMTranscriptTests : public ::testing::Test {
         manifest_expected.add_entry(round, "Libra:claimed_evaluation", frs_per_Fq);
         manifest_expected.add_entry(round, "Libra:grand_sum_commitment", frs_per_G);
         manifest_expected.add_entry(round, "Libra:quotient_commitment", frs_per_G);
-        manifest_expected.add_entry(round, "Gemini:masking_poly_comm", frs_per_G);
-        manifest_expected.add_entry(round, "Gemini:masking_poly_eval", frs_per_Fq);
 
         manifest_expected.add_challenge(round, "rho");
 
@@ -220,8 +232,8 @@ class ECCVMTranscriptTests : public ::testing::Test {
     {
         TranscriptManifest manifest_expected;
         // Size of types is number of bb::frs needed to represent the type
-        size_t frs_per_Fq = bb::field_conversion::calc_num_bn254_frs<FF>();
-        size_t frs_per_G = bb::field_conversion::calc_num_bn254_frs<typename Flavor::Commitment>();
+        size_t frs_per_Fq = FrCodec::calc_num_fields<FF>();
+        size_t frs_per_G = FrCodec::calc_num_fields<Flavor::Commitment>();
         size_t round = 0;
 
         manifest_expected.add_entry(round, "IPA:commitment", frs_per_G);
@@ -273,6 +285,7 @@ class ECCVMTranscriptTests : public ::testing::Test {
         op_queue->mul_accumulate(b, x);
         op_queue->mul_accumulate(c, x);
         op_queue->merge();
+        add_hiding_op_for_test(op_queue);
 
         ECCVMCircuitBuilder builder{ op_queue };
         return builder;
@@ -294,8 +307,12 @@ TEST_F(ECCVMTranscriptTests, ProverManifestConsistency)
     std::shared_ptr<Transcript> prover_transcript = std::make_shared<Transcript>();
     ECCVMProver prover(builder, prover_transcript);
     prover.transcript->enable_manifest();
-    prover.ipa_transcript->enable_manifest();
-    ECCVMProof proof = prover.construct_proof();
+    auto [proof, opening_claim] = prover.construct_proof();
+
+    // Compute IPA proof with manifest enabled
+    auto ipa_transcript = std::make_shared<Transcript>();
+    ipa_transcript->enable_manifest();
+    ECCVMFlavor::PCS::compute_opening_proof(prover.key->commitment_key, opening_claim, ipa_transcript);
 
     // Check that the prover generated manifest agrees with the manifest hard coded in this suite
     auto manifest_expected = this->construct_eccvm_honk_manifest();
@@ -308,7 +325,7 @@ TEST_F(ECCVMTranscriptTests, ProverManifestConsistency)
     }
 
     auto ipa_manifest_expected = this->construct_eccvm_ipa_manifest();
-    auto prover_ipa_manifest = prover.ipa_transcript->get_manifest();
+    auto prover_ipa_manifest = ipa_transcript->get_manifest();
 
     // Note: a manifest can be printed using manifest.print()
     ASSERT_GT(ipa_manifest_expected.size(), 0);
@@ -332,15 +349,24 @@ TEST_F(ECCVMTranscriptTests, VerifierManifestConsistency)
     std::shared_ptr<Transcript> prover_transcript = std::make_shared<Transcript>();
     ECCVMProver prover(builder, prover_transcript);
     prover_transcript->enable_manifest();
-    prover.ipa_transcript->enable_manifest();
-    ECCVMProof proof = prover.construct_proof();
+    auto [proof, opening_claim] = prover.construct_proof();
+
+    // Compute IPA proof with manifest enabled
+    auto prover_ipa_transcript = std::make_shared<Transcript>();
+    prover_ipa_transcript->enable_manifest();
+    ECCVMFlavor::PCS::compute_opening_proof(prover.key->commitment_key, opening_claim, prover_ipa_transcript);
 
     // Automatically generate a transcript manifest in the verifier by verifying a proof
     std::shared_ptr<Transcript> verifier_transcript = std::make_shared<Transcript>();
-    ECCVMVerifier verifier(verifier_transcript);
+    ECCVMVerifier verifier(verifier_transcript, proof);
     verifier.transcript->enable_manifest();
-    verifier.ipa_transcript->enable_manifest();
-    verifier.verify_proof(proof);
+    auto verifier_opening_claim = verifier.verify_proof();
+
+    // Verify IPA with manifest enabled
+    auto verifier_ipa_transcript = std::make_shared<Transcript>(prover_ipa_transcript->export_proof());
+    verifier_ipa_transcript->enable_manifest();
+    ECCVMFlavor::PCS::reduce_verify(
+        verifier.key->pcs_verification_key, verifier_opening_claim, verifier_ipa_transcript);
 
     // Check consistency between the manifests generated by the prover and verifier
     auto prover_manifest = prover.transcript->get_manifest();
@@ -357,8 +383,8 @@ TEST_F(ECCVMTranscriptTests, VerifierManifestConsistency)
     }
 
     // Check consistency of IPA transcripts
-    auto prover_ipa_manifest = prover.ipa_transcript->get_manifest();
-    auto verifier_ipa_manifest = verifier.ipa_transcript->get_manifest();
+    auto prover_ipa_manifest = prover_ipa_transcript->get_manifest();
+    auto verifier_ipa_manifest = verifier_ipa_transcript->get_manifest();
     ASSERT_GT(prover_ipa_manifest.size(), 0);
     for (size_t round = 0; round < prover_ipa_manifest.size(); ++round) {
         ASSERT_EQ(prover_ipa_manifest[round], verifier_ipa_manifest[round])
@@ -376,7 +402,8 @@ TEST_F(ECCVMTranscriptTests, ChallengeGenerationTest)
     // initialized with random value sent to verifier
     auto transcript = Flavor::Transcript::prover_init_empty();
     // test a bunch of challenges
-    auto challenges = transcript->template get_challenges<FF>("a", "b", "c", "d", "e", "f");
+    std::vector<std::string> challenge_labels{ "a", "b", "c", "d", "e", "f" };
+    auto challenges = transcript->template get_challenges<FF>(challenge_labels);
     // check they are not 0
     for (size_t i = 0; i < challenges.size(); ++i) {
         ASSERT_NE(challenges[i], 0) << "Challenge " << i << " is 0";
@@ -384,9 +411,10 @@ TEST_F(ECCVMTranscriptTests, ChallengeGenerationTest)
     constexpr uint32_t random_val{ 17 }; // arbitrary
     transcript->send_to_verifier("random val", random_val);
     // test more challenges
-    auto [a, b, c] = transcript->template get_challenges<FF>("a", "b", "c");
+    challenge_labels = { "a", "b", "c" };
+    challenges = transcript->template get_challenges<FF>(challenge_labels);
 
-    ASSERT_NE(a, 0) << "Challenge a is 0";
-    ASSERT_NE(b, 0) << "Challenge b is 0";
-    ASSERT_NE(c, 0) << "Challenge c is 0";
+    ASSERT_NE(challenges[0], 0) << "Challenge a is 0";
+    ASSERT_NE(challenges[1], 0) << "Challenge b is 0";
+    ASSERT_NE(challenges[2], 0) << "Challenge c is 0";
 }

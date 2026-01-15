@@ -1,10 +1,13 @@
-import { randomInt } from '@aztec/foundation/crypto';
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { randomInt } from '@aztec/foundation/crypto/random';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { openTmpStore } from '@aztec/kv-store/lmdb-v2';
 import { EventSelector } from '@aztec/stdlib/abi';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
+import { L2BlockHash } from '@aztec/stdlib/block';
 import { TxHash } from '@aztec/stdlib/tx';
 
+import type { PackedPrivateEvent } from '../../pxe.js';
 import { PrivateEventDataProvider } from './private_event_data_provider.js';
 
 const getRandomMsgContent = () => {
@@ -14,221 +17,176 @@ const getRandomMsgContent = () => {
 describe('PrivateEventDataProvider', () => {
   let privateEventDataProvider: PrivateEventDataProvider;
   let contractAddress: AztecAddress;
-  let recipient: AztecAddress;
+  let scope: AztecAddress;
   let msgContent: Fr[];
-  let blockNumber: number;
+  let l2BlockNumber: BlockNumber;
+  let l2BlockHash: L2BlockHash;
   let eventSelector: EventSelector;
   let txHash: TxHash;
   let eventCommitmentIndex: number;
+  let expectedEvent: PackedPrivateEvent;
 
   beforeEach(async () => {
     const store = await openTmpStore('private_event_data_provider_test');
     privateEventDataProvider = new PrivateEventDataProvider(store);
     contractAddress = await AztecAddress.random();
-    recipient = await AztecAddress.random();
+    scope = await AztecAddress.random();
     msgContent = getRandomMsgContent();
-    blockNumber = 123;
+    l2BlockNumber = BlockNumber(123);
+    l2BlockHash = L2BlockHash.random();
     eventSelector = EventSelector.random();
     txHash = TxHash.random();
     eventCommitmentIndex = randomInt(10);
+
+    expectedEvent = {
+      packedEvent: msgContent,
+      txHash,
+      l2BlockNumber,
+      l2BlockHash,
+      eventSelector,
+    };
   });
 
   it('stores and retrieves private events', async () => {
-    await privateEventDataProvider.storePrivateEventLog(
+    await privateEventDataProvider.storePrivateEventLog(eventSelector, msgContent, eventCommitmentIndex, {
       contractAddress,
-      recipient,
-      eventSelector,
-      msgContent,
+      scope,
       txHash,
-      eventCommitmentIndex,
-      blockNumber,
-    );
-    const events = await privateEventDataProvider.getPrivateEvents(
+      l2BlockNumber,
+      l2BlockHash,
+    });
+    const events = await privateEventDataProvider.getPrivateEvents(eventSelector, {
       contractAddress,
-      blockNumber,
-      1,
-      [recipient],
-      eventSelector,
-    );
-    expect(events).toEqual([msgContent]);
+      fromBlock: l2BlockNumber,
+      toBlock: l2BlockNumber + 1,
+      scopes: [scope],
+    });
+    expect(events).toEqual([expectedEvent]);
   });
 
   it('ignores duplicate events with same eventCommitmentIndex', async () => {
-    await privateEventDataProvider.storePrivateEventLog(
+    await privateEventDataProvider.storePrivateEventLog(eventSelector, msgContent, eventCommitmentIndex, {
       contractAddress,
-      recipient,
-      eventSelector,
-      msgContent,
+      scope,
       txHash,
-      eventCommitmentIndex,
-      blockNumber,
-    );
-    await privateEventDataProvider.storePrivateEventLog(
+      l2BlockNumber,
+      l2BlockHash,
+    });
+
+    const events = await privateEventDataProvider.getPrivateEvents(eventSelector, {
       contractAddress,
-      recipient,
-      eventSelector,
-      msgContent,
-      txHash,
-      eventCommitmentIndex,
-      blockNumber,
-    );
-    const events = await privateEventDataProvider.getPrivateEvents(
-      contractAddress,
-      blockNumber,
-      1,
-      [recipient],
-      eventSelector,
-    );
-    expect(events).toEqual([msgContent]);
+      fromBlock: l2BlockNumber,
+      toBlock: l2BlockNumber + 1,
+      scopes: [scope],
+    });
+
+    expect(events).toEqual([expectedEvent]);
   });
 
   it('allows multiple events with same content but different eventCommitmentIndex', async () => {
     const otherEventCommitmentIndex = eventCommitmentIndex + 1;
-    await privateEventDataProvider.storePrivateEventLog(
+
+    await privateEventDataProvider.storePrivateEventLog(eventSelector, msgContent, eventCommitmentIndex, {
       contractAddress,
-      recipient,
-      eventSelector,
-      msgContent,
+      scope,
       txHash,
-      eventCommitmentIndex,
-      blockNumber,
-    );
-    await privateEventDataProvider.storePrivateEventLog(
+      l2BlockNumber,
+      l2BlockHash,
+    });
+    await privateEventDataProvider.storePrivateEventLog(eventSelector, msgContent, otherEventCommitmentIndex, {
       contractAddress,
-      recipient,
-      eventSelector,
-      msgContent,
+      scope,
       txHash,
-      otherEventCommitmentIndex,
-      blockNumber,
-    );
-    const events = await privateEventDataProvider.getPrivateEvents(
+      l2BlockNumber,
+      l2BlockHash,
+    });
+
+    const events = await privateEventDataProvider.getPrivateEvents(eventSelector, {
       contractAddress,
-      blockNumber,
-      1,
-      [recipient],
-      eventSelector,
-    );
-    expect(events).toEqual([msgContent, msgContent]);
+      fromBlock: l2BlockNumber,
+      toBlock: l2BlockNumber + 1,
+      scopes: [scope],
+    });
+
+    expect(events).toEqual([expectedEvent, expectedEvent]);
   });
 
   it('filters events by block range', async () => {
-    await privateEventDataProvider.storePrivateEventLog(
-      contractAddress,
-      recipient,
-      eventSelector,
-      getRandomMsgContent(),
-      TxHash.random(),
-      0,
-      100,
-    );
-    await privateEventDataProvider.storePrivateEventLog(
-      contractAddress,
-      recipient,
-      eventSelector,
-      msgContent,
-      TxHash.random(),
-      1,
-      200,
-    );
-    await privateEventDataProvider.storePrivateEventLog(
-      contractAddress,
-      recipient,
-      eventSelector,
-      getRandomMsgContent(),
-      TxHash.random(),
-      2,
-      300,
-    );
+    expectedEvent = {
+      ...expectedEvent,
+      txHash: TxHash.random(),
+      l2BlockNumber: BlockNumber(200),
+    };
 
-    const events = await privateEventDataProvider.getPrivateEvents(
+    await privateEventDataProvider.storePrivateEventLog(eventSelector, getRandomMsgContent(), 0, {
       contractAddress,
-      150,
-      100,
-      [recipient],
-      eventSelector,
-    );
+      scope,
+      txHash: TxHash.random(),
+      l2BlockNumber: BlockNumber(100),
+      l2BlockHash,
+    });
+    await privateEventDataProvider.storePrivateEventLog(eventSelector, msgContent, 1, {
+      contractAddress,
+      scope,
+      txHash: expectedEvent.txHash,
+      l2BlockNumber: expectedEvent.l2BlockNumber,
+      l2BlockHash: expectedEvent.l2BlockHash,
+    });
+    await privateEventDataProvider.storePrivateEventLog(eventSelector, getRandomMsgContent(), 2, {
+      contractAddress,
+      scope,
+      txHash: TxHash.random(),
+      l2BlockNumber: BlockNumber(300),
+      l2BlockHash,
+    });
 
-    expect(events).toEqual([msgContent]); // Only includes event from block 200
+    const events = await privateEventDataProvider.getPrivateEvents(eventSelector, {
+      contractAddress,
+      fromBlock: 150,
+      toBlock: 150 + 100,
+      scopes: [scope],
+    });
+
+    expect(events).toEqual([expectedEvent]); // Only includes event from block 200
   });
 
   it('filters events by recipient', async () => {
-    const otherRecipient = await AztecAddress.random();
-    await privateEventDataProvider.storePrivateEventLog(
-      contractAddress,
-      recipient,
-      eventSelector,
-      msgContent,
-      txHash,
-      eventCommitmentIndex,
-      blockNumber,
-    );
-    await privateEventDataProvider.storePrivateEventLog(
-      contractAddress,
-      otherRecipient,
-      eventSelector,
-      msgContent,
-      TxHash.random(),
-      eventCommitmentIndex + 1,
-      blockNumber,
-    );
+    const otherScope = await AztecAddress.random();
 
-    const events = await privateEventDataProvider.getPrivateEvents(
+    await privateEventDataProvider.storePrivateEventLog(eventSelector, msgContent, eventCommitmentIndex, {
       contractAddress,
-      blockNumber,
-      1,
-      [recipient],
-      eventSelector,
-    );
-    expect(events).toEqual([msgContent]);
+      scope,
+      txHash,
+      l2BlockNumber,
+      l2BlockHash,
+    });
+    await privateEventDataProvider.storePrivateEventLog(eventSelector, msgContent, eventCommitmentIndex + 1, {
+      contractAddress,
+      scope: otherScope,
+      txHash: TxHash.random(),
+      l2BlockNumber,
+      l2BlockHash,
+    });
+
+    const events = await privateEventDataProvider.getPrivateEvents(eventSelector, {
+      contractAddress,
+      fromBlock: l2BlockNumber,
+      toBlock: l2BlockNumber + 1,
+      scopes: [scope],
+    });
+
+    expect(events).toEqual([expectedEvent]);
   });
 
   it('returns empty array when no events match criteria', async () => {
-    const events = await privateEventDataProvider.getPrivateEvents(
+    const events = await privateEventDataProvider.getPrivateEvents(eventSelector, {
       contractAddress,
-      blockNumber,
-      1,
-      [recipient],
-      eventSelector,
-    );
+      fromBlock: l2BlockNumber,
+      toBlock: l2BlockNumber + 1,
+      scopes: [scope],
+    });
+
     expect(events).toEqual([]);
-  });
-
-  it('tracks size correctly', async () => {
-    expect(await privateEventDataProvider.getSize()).toBe(0);
-
-    await privateEventDataProvider.storePrivateEventLog(
-      contractAddress,
-      recipient,
-      eventSelector,
-      msgContent,
-      txHash,
-      eventCommitmentIndex,
-      blockNumber,
-    );
-    expect(await privateEventDataProvider.getSize()).toBe(1);
-
-    await privateEventDataProvider.storePrivateEventLog(
-      contractAddress,
-      recipient,
-      eventSelector,
-      msgContent,
-      txHash,
-      eventCommitmentIndex,
-      blockNumber,
-    );
-    expect(await privateEventDataProvider.getSize()).toBe(1); // Duplicate event not stored
-
-    await privateEventDataProvider.storePrivateEventLog(
-      contractAddress,
-      recipient,
-      eventSelector,
-      msgContent,
-      TxHash.random(),
-      eventCommitmentIndex + 1,
-      blockNumber,
-    );
-    expect(await privateEventDataProvider.getSize()).toBe(2);
   });
 
   describe('event ordering', () => {
@@ -243,45 +201,38 @@ describe('PrivateEventDataProvider', () => {
     });
 
     it('returns events in order by eventCommitmentIndex', async () => {
-      await privateEventDataProvider.storePrivateEventLog(
+      await privateEventDataProvider.storePrivateEventLog(eventSelector, msgContent2, 1, {
         contractAddress,
-        recipient,
-        eventSelector,
-        msgContent2,
-        TxHash.random(),
-        1, // eventCommitmentIndex
-        200,
-      );
+        scope,
+        txHash: TxHash.random(),
+        l2BlockNumber: BlockNumber(200),
+        l2BlockHash,
+      });
 
-      await privateEventDataProvider.storePrivateEventLog(
+      await privateEventDataProvider.storePrivateEventLog(eventSelector, msgContent1, 0, {
         contractAddress,
-        recipient,
-        eventSelector,
-        msgContent1,
-        TxHash.random(),
-        0, // eventCommitmentIndex
-        100,
-      );
+        scope,
+        txHash: TxHash.random(),
+        l2BlockNumber: BlockNumber(100),
+        l2BlockHash,
+      });
 
-      await privateEventDataProvider.storePrivateEventLog(
+      await privateEventDataProvider.storePrivateEventLog(eventSelector, msgContent3, 2, {
         contractAddress,
-        recipient,
-        eventSelector,
-        msgContent3,
-        TxHash.random(),
-        2, // eventCommitmentIndex
-        300,
-      );
+        scope,
+        txHash: TxHash.random(),
+        l2BlockNumber: BlockNumber(300),
+        l2BlockHash,
+      });
 
-      const events = await privateEventDataProvider.getPrivateEvents(
+      const events = await privateEventDataProvider.getPrivateEvents(eventSelector, {
         contractAddress,
-        0,
-        1000,
-        [recipient],
-        eventSelector,
-      );
+        fromBlock: 0,
+        toBlock: 0 + 1000,
+        scopes: [scope],
+      });
 
-      expect(events).toEqual([msgContent1, msgContent2, msgContent3]);
+      expect(events.map(e => e.packedEvent)).toEqual([msgContent1, msgContent2, msgContent3]);
     });
   });
 });

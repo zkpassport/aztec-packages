@@ -1,34 +1,28 @@
-import {
-  AztecAddress,
-  type AztecNode,
-  BatchCall,
-  Fr,
-  type Logger,
-  type PXE,
-  type Wallet,
-  createPXEClient,
-  makeFetch,
-} from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { BatchCall } from '@aztec/aztec.js/contracts';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import { type AztecNode, createAztecNodeClient } from '@aztec/aztec.js/node';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
 import { CounterContract } from '@aztec/noir-test-contracts.js/Counter';
 import { NoConstructorContract } from '@aztec/noir-test-contracts.js/NoConstructor';
 import { StatefulTestContract } from '@aztec/noir-test-contracts.js/StatefulTest';
 import { GasFees } from '@aztec/stdlib/gas';
-import { TestWallet } from '@aztec/test-wallet';
+import { TestWallet } from '@aztec/test-wallet/server';
 
 import { DeployTest } from './deploy_test.js';
 
 describe('e2e_deploy_contract deploy method', () => {
   const t = new DeployTest('deploy method');
 
-  let pxe: PXE;
   let logger: Logger;
   let wallet: Wallet;
   let aztecNode: AztecNode;
   let defaultAccountAddress: AztecAddress;
 
   beforeAll(async () => {
-    ({ pxe, logger, wallet, aztecNode, defaultAccountAddress } = await t.setup());
+    ({ logger, wallet, aztecNode, defaultAccountAddress } = await t.setup());
   });
 
   afterAll(() => t.teardown());
@@ -52,8 +46,9 @@ describe('e2e_deploy_contract deploy method', () => {
     logger.debug(`Calling public method on stateful test contract at ${contract.address.toString()}`);
     await contract.methods.increment_public_value(owner, 84).send({ from: defaultAccountAddress }).wait();
     expect(await contract.methods.get_public_value(owner).simulate({ from: defaultAccountAddress })).toEqual(84n);
+    const instance = (await wallet.getContractMetadata(contract.address)).contractInstance!;
     expect(
-      (await pxe.getContractClassMetadata(contract.instance.currentContractClassId)).isContractClassPubliclyRegistered,
+      (await wallet.getContractClassMetadata(instance.currentContractClassId)).isContractClassPubliclyRegistered,
     ).toBeTrue();
   });
 
@@ -110,7 +105,7 @@ describe('e2e_deploy_contract deploy method', () => {
   it('refuses to deploy a contract with no constructor and no public deployment', async () => {
     logger.debug(`Deploying contract with no constructor and skipping public deploy`);
     const opts = { skipInstancePublication: true, skipClassPublication: true, from: defaultAccountAddress };
-    await expect(NoConstructorContract.deploy(wallet).prove(opts)).rejects.toThrow(
+    await expect(NoConstructorContract.deploy(wallet).send(opts).wait()).rejects.toThrow(
       'No transactions are needed to publish or initialize contract NoConstructor',
     );
   });
@@ -161,12 +156,12 @@ describe('e2e_deploy_contract deploy method', () => {
 
   describe('regressions', () => {
     it('fails properly when trying to deploy a contract with a failing constructor with a pxe client with retries', async () => {
-      const { PXE_URL } = process.env;
-      if (!PXE_URL) {
+      const { AZTEC_NODE_URL } = process.env;
+      if (!AZTEC_NODE_URL) {
         return;
       }
-      const pxeClient = createPXEClient(PXE_URL, {}, makeFetch([1, 2, 3], false));
-      const retryingWallet = new TestWallet(pxeClient);
+      const aztecNode = createAztecNodeClient(AZTEC_NODE_URL);
+      const retryingWallet = await TestWallet.create(aztecNode);
       await expect(
         StatefulTestContract.deployWithOpts({ wallet: retryingWallet, method: 'wrong_constructor' })
           .send({ from: defaultAccountAddress })

@@ -4,8 +4,9 @@ import {
   NULLIFIER_SUBTREE_HEIGHT,
   NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP,
 } from '@aztec/constants';
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { padArrayEnd } from '@aztec/foundation/collection';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { L2BlockHeader } from '@aztec/stdlib/block';
 import { makeContentCommitment } from '@aztec/stdlib/testing';
 import { AppendOnlyTreeSnapshot, MerkleTreeId, type MerkleTreeWriteOperations } from '@aztec/stdlib/trees';
@@ -16,7 +17,7 @@ import { GlobalVariables, TxEffect } from '@aztec/stdlib/tx';
  * @param blockNumber The number for the block in which there is a single transaction.
  * @returns The transaction request hash.
  */
-export function getSingleTxBlockRequestHash(blockNumber: number): Fr {
+export function getSingleTxBlockRequestHash(blockNumber: BlockNumber): Fr {
   return new Fr(blockNumber + 9999); // Why does this need to be a high number? Why do small numbered nullifiers already exist?
 }
 
@@ -37,7 +38,7 @@ export async function insertTxEffectIntoWorldTrees(
 
   await worldTrees.appendLeaves(
     MerkleTreeId.L1_TO_L2_MESSAGE_TREE,
-    padArrayEnd(txEffect.l2ToL1Msgs, Fr.ZERO, NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP),
+    padArrayEnd<Fr, number>(txEffect.l2ToL1Msgs, Fr.ZERO, NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP),
   );
 
   // We do not need to add public data writes because we apply them as we go.
@@ -55,6 +56,7 @@ export async function makeTXEBlockHeader(
     makeContentCommitment(),
     stateReference,
     globalVariables,
+    Fr.ZERO,
     Fr.ZERO,
     Fr.ZERO,
     Fr.ZERO,

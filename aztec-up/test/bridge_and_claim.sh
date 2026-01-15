@@ -27,10 +27,10 @@ bash ${bash_args:-} <(curl -s $INSTALL_URI/aztec-install)
 # We can't create a new shell for this test, so just re-source our modified .bashrc to get updated PATH.
 PS1=" " source ~/.bash_profile
 
-# Start sandbox and wait for port to open.
-aztec start --sandbox &
-sandbox_pid=$!
-trap 'echo "Sending kill to pid $sandbox_pid"; kill $sandbox_pid &>/dev/null; wait $sandbox_pid' EXIT
+# Start local network and wait for port to open.
+aztec start --local-network &
+local_network=$!
+trap 'echo "Sending kill to pid $local_network"; kill $local_network &>/dev/null; wait $local_network' EXIT
 while ! curl -fs localhost:8080/status &>/dev/null; do sleep 1; done
 
 # Execute wallet commands as per: https://docs.aztec.network/guides/getting_started
@@ -59,8 +59,8 @@ done
 aztec-wallet \
   --prover native \
   deploy-account \
+  accounts:main \
   --payment method=fee_juice,claim \
-  -f accounts:main
 
 # We sanity check the account deployment worked and the fee juice was claimed by deploying a token
 # with the new account.

@@ -1,34 +1,50 @@
 import type { ArchiveSource } from '@aztec/archiver';
-import { getConfigEnvVars } from '@aztec/aztec-node';
-import { AztecAddress, Fr, GlobalVariables, type L2Block, createLogger } from '@aztec/aztec.js';
-import { BatchedBlob, Blob } from '@aztec/blob-lib';
-import { createBlobSinkClient } from '@aztec/blob-sink/client';
-import { GENESIS_ARCHIVE_ROOT, MAX_NULLIFIERS_PER_TX, NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP } from '@aztec/constants';
-import { EpochCache } from '@aztec/epoch-cache';
+import { type AztecNodeConfig, getConfigEnvVars } from '@aztec/aztec-node';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import type { L2Block } from '@aztec/aztec.js/block';
+import { Fr } from '@aztec/aztec.js/fields';
+import { createLogger } from '@aztec/aztec.js/log';
+import { GlobalVariables } from '@aztec/aztec.js/tx';
 import {
-  type DeployL1ContractsArgs,
-  type ExtendedViemWalletClient,
-  GovernanceProposerContract,
-  type L1ContractAddresses,
-  RollupContract,
-  createEthereumChain,
-  createExtendedL1Client,
-} from '@aztec/ethereum';
+  BatchedBlob,
+  BatchedBlobAccumulator,
+  getBlobsPerL1Block,
+  getPrefixedEthBlobCommitments,
+} from '@aztec/blob-lib';
+import { createBlobSinkClient } from '@aztec/blob-sink/client';
+import {
+  GENESIS_ARCHIVE_ROOT,
+  GENESIS_BLOCK_HEADER_HASH,
+  MAX_NULLIFIERS_PER_TX,
+  NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP,
+} from '@aztec/constants';
+import { EpochCache } from '@aztec/epoch-cache';
+import { createEthereumChain } from '@aztec/ethereum/chain';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import { GovernanceProposerContract, RollupContract } from '@aztec/ethereum/contracts';
+import type { DeployL1ContractsArgs } from '@aztec/ethereum/deploy-l1-contracts';
+import type { L1ContractAddresses } from '@aztec/ethereum/l1-contract-addresses';
+import { TxUtilsState } from '@aztec/ethereum/l1-tx-utils';
 import { createL1TxUtilsWithBlobsFromViemWallet } from '@aztec/ethereum/l1-tx-utils-with-blobs';
 import { EthCheatCodesWithState, RollupCheatCodes, startAnvil } from '@aztec/ethereum/test';
+import type { ExtendedViemWalletClient } from '@aztec/ethereum/types';
 import { range } from '@aztec/foundation/array';
+import { BlockNumber, CheckpointNumber, EpochNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { Buffer32 } from '@aztec/foundation/buffer';
 import { times, timesParallel } from '@aztec/foundation/collection';
 import { SecretValue } from '@aztec/foundation/config';
-import { SHA256Trunc, Secp256k1Signer, sha256ToField } from '@aztec/foundation/crypto';
+import { Secp256k1Signer, flipSignature } from '@aztec/foundation/crypto/secp256k1-signer';
+import { SHA256Trunc, sha256ToField } from '@aztec/foundation/crypto/sha256';
 import { EthAddress } from '@aztec/foundation/eth-address';
+import { retryUntil } from '@aztec/foundation/retry';
+import { sleep } from '@aztec/foundation/sleep';
 import { hexToBuffer } from '@aztec/foundation/string';
 import { TestDateProvider } from '@aztec/foundation/timer';
 import { openTmpStore } from '@aztec/kv-store/lmdb';
 import { OutboxAbi, RollupAbi } from '@aztec/l1-artifacts';
 import { StandardTree } from '@aztec/merkle-tree';
 import { getVKTreeRoot } from '@aztec/noir-protocol-circuits-types/vk-tree';
-import { protocolContractTreeRoot } from '@aztec/protocol-contracts';
+import { ProtocolContractsList } from '@aztec/protocol-contracts';
 import { buildBlockWithCleanDB } from '@aztec/prover-client/block-factory';
 import { SequencerPublisher, SequencerPublisherMetrics } from '@aztec/sequencer-client';
 import {
@@ -38,14 +54,15 @@ import {
   PublishedL2Block,
   Signature,
 } from '@aztec/stdlib/block';
+import { type L1RollupConstants, getSlotStartBuildTimestamp } from '@aztec/stdlib/epoch-helpers';
 import { GasFees, GasSettings } from '@aztec/stdlib/gas';
 import { SlashFactoryContract } from '@aztec/stdlib/l1-contracts';
 import { orderAttestations } from '@aztec/stdlib/p2p';
 import {
   fr,
   makeAndSignCommitteeAttestationsAndSigners,
-  makeBloatedProcessedTx,
   makeBlockAttestationFromBlock,
+  mockProcessedTx,
 } from '@aztec/stdlib/testing';
 import type { BlockHeader, ProcessedTx } from '@aztec/stdlib/tx';
 import {
@@ -84,7 +101,7 @@ const deployerPK = '0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092
 
 const logger = createLogger('integration_l1_publisher');
 
-const config = getConfigEnvVars();
+const config: AztecNodeConfig = { ...getConfigEnvVars(), checkIntervalMs: 100, stallTimeMs: 6_000 };
 
 const numberOfConsecutiveBlocks = 2;
 
@@ -94,6 +111,7 @@ describe('L1Publisher integration', () => {
   let l1Client: ExtendedViemWalletClient;
   let l1ContractAddresses: L1ContractAddresses;
   let deployerAccount: PrivateKeyAccount;
+  let l1Constants: L1RollupConstants;
 
   let governanceProposerContract: GovernanceProposerContract;
 
@@ -133,12 +151,13 @@ describe('L1Publisher integration', () => {
   let rpcUrl: string;
   let anvil: Anvil;
 
-  const progressTimeBySlot = async (slotsToJump = 1n) => {
+  const progressTimeBySlot = async (slotsToJump = 1) => {
     const currentTime = (await l1Client.getBlock()).timestamp;
     const currentSlot = await rollup.getSlotNumber();
-    const timestamp = await rollup.getTimestampForSlot(currentSlot + slotsToJump);
+    const targetSlot = SlotNumber(currentSlot + slotsToJump);
+    const timestamp = await rollup.getTimestampForSlot(targetSlot);
     if (timestamp > currentTime) {
-      await ethCheatCodes.warp(Number(timestamp), { resetBlockInterval: true, updateDateProvider: dateProvider });
+      await ethCheatCodes.warp(Number(timestamp), { resetBlockInterval: true });
     }
   };
 
@@ -153,7 +172,8 @@ describe('L1Publisher integration', () => {
       ...deployL1ContractsArgs,
     }));
 
-    ethCheatCodes = new EthCheatCodesWithState(config.l1RpcUrls);
+    dateProvider = new TestDateProvider();
+    ethCheatCodes = new EthCheatCodesWithState(config.l1RpcUrls, dateProvider);
 
     rollupAddress = getAddress(l1ContractAddresses.rollupAddress.toString());
     outboxAddress = getAddress(l1ContractAddresses.outboxAddress.toString());
@@ -168,7 +188,10 @@ describe('L1Publisher integration', () => {
       client: l1Client,
     });
 
-    dateProvider = new TestDateProvider();
+    l1Constants = {
+      ...(await rollup.getRollupConstants()),
+      ethereumSlotDuration: config.ethereumSlotDuration,
+    };
 
     builderDb = await NativeWorldStateService.tmp(EthAddress.fromString(rollupAddress));
     blocks = [];
@@ -196,13 +219,15 @@ describe('L1Publisher integration', () => {
         const latestBlock = blocks.at(-1);
         const res = latestBlock
           ? { number: latestBlock.number, hash: latestBlock.hash.toString() }
-          : { number: 0, hash: undefined };
+          : { number: BlockNumber.ZERO, hash: GENESIS_BLOCK_HEADER_HASH.toString() };
 
-        return Promise.resolve({
-          latest: res,
-          proven: res,
-          finalized: res,
-        } as L2Tips);
+        return Promise.resolve({ latest: res, proven: res, finalized: res });
+      },
+      getBlockNumber(): Promise<BlockNumber> {
+        return Promise.resolve(BlockNumber(blocks.at(-1)?.number ?? BlockNumber.ZERO));
+      },
+      getProvenBlockNumber(): Promise<BlockNumber> {
+        return Promise.resolve(BlockNumber(blocks.at(-1)?.number ?? BlockNumber.ZERO));
       },
     });
 
@@ -216,7 +241,7 @@ describe('L1Publisher integration', () => {
     await worldStateSynchronizer.start();
 
     const sequencerL1Client = createExtendedL1Client(config.l1RpcUrls, sequencerPK, foundry);
-    const l1TxUtils = createL1TxUtilsWithBlobsFromViemWallet(sequencerL1Client, logger, dateProvider, config);
+    const l1TxUtils = createL1TxUtilsWithBlobsFromViemWallet(sequencerL1Client, { logger, dateProvider }, config);
     const rollupContract = new RollupContract(sequencerL1Client, l1ContractAddresses.rollupAddress.toString());
     const slashingProposerContract = await rollupContract.getSlashingProposer();
     governanceProposerContract = new GovernanceProposerContract(
@@ -230,9 +255,9 @@ describe('L1Publisher integration', () => {
     publisher = new SequencerPublisher(
       {
         l1RpcUrls: config.l1RpcUrls,
+        l1DebugRpcUrls: [],
         l1Contracts: l1ContractAddresses,
         publisherPrivateKeys: [new SecretValue(sequencerPK)],
-        l1PublishRetryIntervalMS: 100,
         l1ChainId: chainId,
         viemPollingIntervalMS: 100,
         ethereumSlotDuration: config.ethereumSlotDuration,
@@ -247,6 +272,7 @@ describe('L1Publisher integration', () => {
         slashFactoryContract: undefined as unknown as SlashFactoryContract,
         dateProvider,
         metrics: sequencerPublisherMetrics,
+        lastActions: {},
       },
     );
 
@@ -263,16 +289,12 @@ describe('L1Publisher integration', () => {
     baseFee = new GasFees(0, await rollup.getManaBaseFeeAt(ts, true));
 
     // We jump two epochs such that the committee can be setup.
-    await rollupCheatCodes.advanceToEpoch(BigInt(config.lagInEpochs + 1), {
-      updateDateProvider: dateProvider,
-    });
+    await rollupCheatCodes.advanceToEpoch(EpochNumber(config.lagInEpochsForValidatorSet + 1));
     await rollupCheatCodes.setupEpoch();
 
     ({ committee } = await epochCache.getCommittee());
     ({ currentProposer: proposer } = await epochCache.getProposerAttesterAddressInCurrentOrNextSlot());
-
-    logger.warn('committee', committee);
-    logger.warn('proposer', proposer);
+    logger.warn(`Current epoch committee and proposer`, { committee, proposer });
   };
 
   afterEach(async () => {
@@ -281,13 +303,13 @@ describe('L1Publisher integration', () => {
   });
 
   const makeProcessedTx = (seed = 0x1): Promise<ProcessedTx> =>
-    makeBloatedProcessedTx({
-      header: prevHeader,
+    mockProcessedTx({
+      anchorBlockHeader: prevHeader,
       chainId: fr(chainId),
       version: fr(version),
       vkTreeRoot: getVKTreeRoot(),
       gasSettings: GasSettings.default({ maxFeesPerGas: baseFee }),
-      protocolContractTreeRoot,
+      protocolContracts: ProtocolContractsList,
       seed,
     });
 
@@ -298,13 +320,13 @@ describe('L1Publisher integration', () => {
 
   const buildBlock = async (globalVariables: GlobalVariables, txs: ProcessedTx[], l1ToL2Messages: Fr[]) => {
     await worldStateSynchronizer.syncImmediate();
-    const tempFork = await worldStateSynchronizer.fork(globalVariables.blockNumber - 1);
+    const tempFork = await worldStateSynchronizer.fork(BlockNumber(globalVariables.blockNumber - 1));
     const block = await buildBlockWithCleanDB(txs, globalVariables, l1ToL2Messages, tempFork);
     await tempFork.close();
     return block;
   };
 
-  const buildSingleBlock = async (opts: { l1ToL2Messages?: Fr[]; blockNumber?: number } = {}) => {
+  const buildSingleBlock = async (opts: { l1ToL2Messages?: Fr[]; blockNumber?: BlockNumber } = {}) => {
     const l1ToL2Messages = opts.l1ToL2Messages ?? new Array(NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP).fill(Fr.ZERO);
 
     const txs = await Promise.all([makeProcessedTx(0x1000), makeProcessedTx(0x2000)]);
@@ -314,8 +336,8 @@ describe('L1Publisher integration', () => {
     const globalVariables = new GlobalVariables(
       new Fr(chainId),
       new Fr(version),
-      opts.blockNumber ?? 1,
-      new Fr(slot),
+      opts.blockNumber ?? BlockNumber(1),
+      slot,
       timestamp,
       coinbase,
       feeRecipient,
@@ -358,13 +380,15 @@ describe('L1Publisher integration', () => {
 
       let currentL1ToL2Messages: Fr[] = [];
       let nextL1ToL2Messages: Fr[] = [];
-      const allBlobs: Blob[] = [];
+      const blobFieldsPerCheckpoint: Fr[][] = [];
       // The below batched blob is used for testing different epochs with 1..numberOfConsecutiveBlocks blocks on L1.
       // For real usage, always collect ALL epoch blobs first then call .batch().
       let currentBatch: BatchedBlob | undefined;
 
       for (let i = 0; i < numberOfConsecutiveBlocks; i++) {
-        const l1ToL2Content = range(NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP, 128 * i + 1 + 0x400).map(fr);
+        // With just one l1 client (serial sending) this takes too much time to send NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP
+        // and causes a chain prune
+        const l1ToL2Content = range(Math.min(16, NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP), 128 * i + 1 + 0x400).map(fr);
 
         for (let j = 0; j < l1ToL2Content.length; j++) {
           nextL1ToL2Messages.push(await sendToL2(l1ToL2Content[j], recipientAddress));
@@ -383,8 +407,8 @@ describe('L1Publisher integration', () => {
         const globalVariables = new GlobalVariables(
           new Fr(chainId),
           new Fr(version),
-          i + 1, // block number
-          new Fr(slot),
+          BlockNumber(i + 1), // block number
+          slot,
           timestamp,
           coinbase,
           feeRecipient,
@@ -405,7 +429,8 @@ describe('L1Publisher integration', () => {
         // Check that we have not yet written a root to this blocknumber
         expect(BigInt(emptyRoot)).toStrictEqual(0n);
 
-        const blockBlobs = await Blob.getBlobsPerBlock(block.body.toBlobFields());
+        const checkpointBlobFields = block.getCheckpointBlobFields();
+        const blockBlobs = getBlobsPerL1Block(checkpointBlobFields);
         expect(block.header.contentCommitment.blobsHash).toEqual(
           sha256ToField(blockBlobs.map(b => b.getEthVersionedBlobHash())),
         );
@@ -413,10 +438,10 @@ describe('L1Publisher integration', () => {
         let prevBlobAccumulatorHash = hexToBuffer(await rollup.getCurrentBlobCommitmentsHash());
 
         blocks.push(block);
-        allBlobs.push(...blockBlobs);
+        blobFieldsPerCheckpoint.push(checkpointBlobFields);
 
         // Batch the blobs so far, so they can be used in the L1 unit tests:
-        currentBatch = await BatchedBlob.batch(allBlobs);
+        currentBatch = await BatchedBlobAccumulator.batch(blobFieldsPerCheckpoint);
 
         await writeJson(
           `${jsonFileNamePrefix}_${block.number}`,
@@ -435,19 +460,20 @@ describe('L1Publisher integration', () => {
           address: rollupAddress,
           event: getAbiItem({
             abi: RollupAbi,
-            name: 'L2BlockProposed',
+            name: 'CheckpointProposed',
           }),
           fromBlock: blockNumber + 1n,
         });
         expect(logs).toHaveLength(i + 1);
-        expect(logs[i].args.blockNumber).toEqual(BigInt(i + 1));
-        const thisBlockNumber = BigInt(block.header.globalVariables.blockNumber);
-        const isFirstBlockOfEpoch =
-          thisBlockNumber == 1n ||
-          (await rollup.getEpochNumberForBlock(thisBlockNumber)) >
-            (await rollup.getEpochNumberForBlock(thisBlockNumber - 1n));
+        expect(logs[i].args.checkpointNumber).toEqual(BigInt(i + 1));
+        const thisCheckpointNumber = CheckpointNumber(block.header.globalVariables.blockNumber);
+        const prevCheckpointNumber = CheckpointNumber(thisCheckpointNumber - 1);
+        const isFirstCheckpointOfEpoch =
+          thisCheckpointNumber == CheckpointNumber(1) ||
+          (await rollup.getEpochNumberForCheckpoint(thisCheckpointNumber)) >
+            (await rollup.getEpochNumberForCheckpoint(prevCheckpointNumber));
         // If we are at the first blob of the epoch, we must initialize the hash:
-        prevBlobAccumulatorHash = isFirstBlockOfEpoch ? Buffer.alloc(0) : prevBlobAccumulatorHash;
+        prevBlobAccumulatorHash = isFirstCheckpointOfEpoch ? Buffer.alloc(0) : prevBlobAccumulatorHash;
         const currentBlobAccumulatorHash = hexToBuffer(await rollup.getCurrentBlobCommitmentsHash());
         let expectedBlobAccumulatorHash = prevBlobAccumulatorHash;
         blockBlobs
@@ -467,7 +493,6 @@ describe('L1Publisher integration', () => {
             {
               header: block.getCheckpointHeader().toViem(),
               archive: `0x${block.archive.root.toBuffer().toString('hex')}`,
-              stateReference: block.header.state.toViem(),
               oracleInput: {
                 feeAssetPriceModifier: 0n,
               },
@@ -475,7 +500,7 @@ describe('L1Publisher integration', () => {
             CommitteeAttestationsAndSigners.empty().getPackedAttestations(),
             [],
             Signature.empty().toViemSignature(),
-            Blob.getPrefixedEthBlobCommitments(blockBlobs),
+            getPrefixedEthBlobCommitments(blockBlobs),
           ],
         });
         const expectedData = encodeFunctionData({
@@ -516,9 +541,9 @@ describe('L1Publisher integration', () => {
     };
 
     it.each([
-      [0, 'empty_block'],
-      [1, 'single_tx_block'],
-      [4, 'mixed_block'],
+      [0, 'empty_checkpoint'],
+      [1, 'single_tx_checkpoint'],
+      [4, 'mixed_checkpoint'],
     ])(
       `builds ${numberOfConsecutiveBlocks} blocks of %i bloated txs building on each other`,
       async (numTxs: number, jsonFileNamePrefix: string) => {
@@ -587,6 +612,52 @@ describe('L1Publisher integration', () => {
       );
     });
 
+    it('rejects flipped proposer signature', async () => {
+      const block = await buildSingleBlock();
+      const blockAttestations = validators.map(v => makeBlockAttestationFromBlock(block, v));
+      const attestations = orderAttestations(blockAttestations, committee!);
+
+      const canPropose = await publisher.canProposeAtNextEthBlock(new Fr(GENESIS_ARCHIVE_ROOT), proposer!);
+      expect(canPropose?.slot).toEqual(block.header.getSlot());
+      await publisher.validateBlockHeader(block.getCheckpointHeader());
+
+      const attestationsAndSigners = new CommitteeAttestationsAndSigners(attestations);
+      const attestationsAndSignersSignature = makeAndSignCommitteeAttestationsAndSigners(
+        attestationsAndSigners,
+        validators.find(v => v.address.equals(proposer!))!,
+      );
+
+      await expect(
+        publisher.enqueueProposeL2Block(block, attestationsAndSigners, flipSignature(attestationsAndSignersSignature)),
+      ).rejects.toThrow(/ECDSAInvalidSignatureS/);
+    });
+
+    it('rejects signature with invalid recovery value', async () => {
+      const block = await buildSingleBlock();
+      const blockAttestations = validators.map(v => makeBlockAttestationFromBlock(block, v));
+      const attestations = orderAttestations(blockAttestations, committee!);
+
+      const canPropose = await publisher.canProposeAtNextEthBlock(new Fr(GENESIS_ARCHIVE_ROOT), proposer!);
+      expect(canPropose?.slot).toEqual(block.header.getSlot());
+      await publisher.validateBlockHeader(block.getCheckpointHeader());
+
+      const attestationsAndSigners = new CommitteeAttestationsAndSigners(attestations);
+      const attestationsAndSignersSignature = makeAndSignCommitteeAttestationsAndSigners(
+        attestationsAndSigners,
+        validators.find(v => v.address.equals(proposer!))!,
+      );
+
+      logger.warn(`Original v value: ${attestationsAndSignersSignature.v}`);
+
+      // Move v-value from 27-28 to 0-1
+      const wrongV = attestationsAndSignersSignature.v - 27;
+      const wrongSig = new Signature(attestationsAndSignersSignature.r, attestationsAndSignersSignature.s, wrongV);
+
+      await expect(publisher.enqueueProposeL2Block(block, attestationsAndSigners, wrongSig)).rejects.toThrow(
+        /ECDSAInvalidSignature/,
+      );
+    });
+
     it('publishes a block invalidating the previous one', async () => {
       const badBlock = await buildSingleBlock();
 
@@ -611,7 +682,7 @@ describe('L1Publisher integration', () => {
       ({ currentProposer: proposer } = await epochCache.getProposerAttesterAddressInCurrentOrNextSlot());
 
       // Prepare for invalidating the previous one and publish the same block with proper attestations
-      const block = await buildSingleBlock({ blockNumber: 1 });
+      const block = await buildSingleBlock({ blockNumber: BlockNumber(1) });
       expect(block.number).toEqual(badBlock.number);
       const blockAttestations = validators.map(v => makeBlockAttestationFromBlock(block, v));
       const attestations = orderAttestations(blockAttestations, committee!);
@@ -624,7 +695,7 @@ describe('L1Publisher integration', () => {
         block: block.toBlockInfo(),
         attestors: [],
         attestations: badAttestations,
-        epoch: 1n,
+        epoch: EpochNumber(1),
         seed: 1n,
         reason: 'insufficient-attestations',
       });
@@ -644,7 +715,9 @@ describe('L1Publisher integration', () => {
       await expect(publisher.validateBlockHeader(block.getCheckpointHeader())).rejects.toThrow(
         /Rollup__InvalidArchive/,
       );
-      await publisher.validateBlockHeader(block.getCheckpointHeader(), { forcePendingBlockNumber });
+      await publisher.validateBlockHeader(block.getCheckpointHeader(), {
+        forcePendingBlockNumber: forcePendingBlockNumber ?? BlockNumber.ZERO,
+      });
 
       // At this point I'm gonna need to propose the correct signature ye? So confused actually here.
       const attestationsAndSigners = new CommitteeAttestationsAndSigners(attestations);
@@ -657,7 +730,7 @@ describe('L1Publisher integration', () => {
       logger.warn('Enqueuing requests to invalidate and propose the block');
       publisher.enqueueInvalidateBlock(invalidateRequest);
       await publisher.enqueueProposeL2Block(block, attestationsAndSigners, attestationsAndSignersSignature, {
-        forcePendingBlockNumber,
+        forcePendingBlockNumber: forcePendingBlockNumber ?? BlockNumber.ZERO,
       });
       const result = await publisher.sendRequests();
       expect(result!.successfulActions).toEqual(['invalidate-by-insufficient-attestations', 'propose']);
@@ -706,6 +779,175 @@ describe('L1Publisher integration', () => {
         expect.anything(),
         expect.objectContaining({ blockNumber: 1 }),
       );
+    });
+  });
+
+  describe('timeouts', () => {
+    let initialL2Slot: bigint;
+    let sendRequestsResult: Awaited<ReturnType<SequencerPublisher['sendRequests']>> | null;
+
+    beforeEach(async () => {
+      sendRequestsResult = null;
+
+      await setup({ aztecSlotDuration: 48 });
+
+      await ethCheatCodes.setAutomine(false);
+      await ethCheatCodes.setBlockInterval(config.ethereumSlotDuration);
+      initialL2Slot = BigInt(await rollup.getSlotNumber());
+    });
+
+    const getProposeTxTimeoutAt = (block: L2Block) => {
+      const { slotDuration: aztecSlotDuration } = l1Constants;
+      const txTimeoutAt = new Date(
+        (Number(getSlotStartBuildTimestamp(block.slot, l1Constants)) + Number(aztecSlotDuration)) * 1000,
+      );
+      logger.warn(`Setting tx timeout at ${txTimeoutAt.toISOString()} (${txTimeoutAt.getTime()})`);
+      return txTimeoutAt;
+    };
+
+    const sendRequests = async () => {
+      void publisher
+        .sendRequests()
+        .then(r => (sendRequestsResult = r ?? null))
+        .catch(err => {
+          sendRequestsResult = null;
+          return err;
+        });
+
+      // Wait until the publish tx is sent
+      await retryUntil(() => ethCheatCodes.getTxPoolStatus().then(s => s.pending > 0), 'tx sent', 20, 0.1);
+    };
+
+    const enqueueProposeL2Block = async (block: L2Block) => {
+      await publisher.enqueueProposeL2Block(block, CommitteeAttestationsAndSigners.empty(), Signature.empty(), {
+        txTimeoutAt: getProposeTxTimeoutAt(block),
+      });
+    };
+
+    it(`cancels block proposal when the L2 slot ends`, async () => {
+      const block = await buildSingleBlock();
+      await enqueueProposeL2Block(block);
+      await sendRequests();
+
+      // Advance one L1 block at a time without mining the publish tx.
+      // While we are on the same L2 slot, sendRequests should not resolve.
+      while (true) {
+        await ethCheatCodes.mineEmptyBlock();
+        await ethCheatCodes.syncDateProvider();
+        const currentL2Slot = await rollup.getSlotNumber();
+        const { slot: nextL2Slot } = epochCache.getEpochAndSlotInNextL1Slot();
+        logger.warn(`L2 slot in next L1 slot is ${nextL2Slot}`, { nextL2Slot, currentL2Slot, initialL2Slot });
+
+        // Make sure we give enough time to the l1 tx utils to process
+        await sleep(1000);
+
+        if (nextL2Slot > initialL2Slot) {
+          expect(sendRequestsResult).toBeNull();
+          break;
+        }
+      }
+
+      // The publisher should now be in cancelled state
+      expect(publisher.l1TxUtils.state).toEqual(TxUtilsState.CANCELLED);
+
+      // Now allow the cancellation to be mined, check that we transition to MINED, and the last tx was indeed a cancellation.
+      await ethCheatCodes.mine();
+      await retryUntil(() => publisher.l1TxUtils.state === TxUtilsState.MINED, 'state is mined', 2, 0.1);
+      const lastBlock = await l1Client.getBlock({ includeTransactions: true });
+      const cancelTx = lastBlock.transactions.at(-1);
+      expect(cancelTx).toBeDefined();
+      expect(cancelTx?.input).toEqual('0x');
+      expect(cancelTx?.value).toEqual(0n);
+      const cancelTxReceipt = await l1Client.getTransactionReceipt({ hash: cancelTx!.hash });
+      expect(cancelTxReceipt.status).toEqual('success');
+    });
+
+    it(`speeds up block proposal if not mined`, async () => {
+      const block = await buildSingleBlock();
+      await enqueueProposeL2Block(block);
+      await sendRequests();
+
+      const [initialTx] = await ethCheatCodes.getTxPoolContents();
+      expect(initialTx).toBeDefined();
+
+      // After N L1 blocks, the publisher should have bumped the gas and resent the tx
+      const l1SlotsUntilSpeedUp = 1;
+      for (let i = 0; i < l1SlotsUntilSpeedUp; i++) {
+        await ethCheatCodes.mineEmptyBlock();
+        await ethCheatCodes.syncDateProvider();
+      }
+
+      // We should now be in speed-up state
+      await retryUntil(() => publisher.l1TxUtils.state === TxUtilsState.SPEED_UP, 'speed up', 2, 0.1);
+      const [speedUpTx] = await ethCheatCodes.getTxPoolContents();
+      expect(speedUpTx).toBeDefined();
+      expect(speedUpTx!.hash).not.toEqual(initialTx!.hash);
+      expect(BigInt(speedUpTx!.maxFeePerGas!)).toBeGreaterThan(BigInt(initialTx!.maxFeePerGas!));
+      expect(BigInt(speedUpTx!.maxPriorityFeePerGas!)).toBeGreaterThan(BigInt(initialTx!.maxPriorityFeePerGas!));
+
+      // Now mine an L1 block with txs, and see that we transition to MINED state
+      await ethCheatCodes.mine();
+      await retryUntil(() => publisher.l1TxUtils.state === TxUtilsState.MINED, 'state is mined', 2, 0.1);
+      const lastBlock = await l1Client.getBlock({ includeTransactions: true });
+      const minedTx = lastBlock.transactions.find(t => t.hash === speedUpTx!.hash);
+      expect(minedTx).toBeDefined();
+      const minedTxReceipt = await l1Client.getTransactionReceipt({ hash: minedTx!.hash });
+      expect(minedTxReceipt.status).toEqual('success');
+      expect(await rollup.getCheckpointNumber()).toEqual(CheckpointNumber.fromBlockNumber(block.number));
+    });
+
+    it(`can send two consecutive proposals if the first one times out`, async () => {
+      const block1 = await buildSingleBlock();
+      await enqueueProposeL2Block(block1);
+      await sendRequests();
+
+      const [initialTx] = await ethCheatCodes.getTxPoolContents();
+      expect(initialTx).toBeDefined();
+
+      // Let the proposal timeout by mining empty blocks until we're past the L2 slot
+      while (true) {
+        await ethCheatCodes.mineEmptyBlock();
+        await ethCheatCodes.syncDateProvider();
+        const { slot: nextL2Slot } = epochCache.getEpochAndSlotInNextL1Slot();
+
+        // Wait for state to transition and give the publisher time to process
+        await sleep(1000);
+
+        // The publisher should now be in cancelled state
+        if (nextL2Slot > initialL2Slot) {
+          expect(publisher.l1TxUtils.state).toEqual(TxUtilsState.CANCELLED);
+          expect(sendRequestsResult).toBeNull();
+          break;
+        }
+      }
+
+      // The cancellation should still be on the pool
+      expect(await ethCheatCodes.getTxPoolStatus()).toEqual({ pending: 1, queued: 0 });
+
+      // Now we should be able to send a second proposal
+      const block2 = await buildSingleBlock({ blockNumber: BlockNumber(1) });
+      expect(BigInt(block2.slot)).toEqual(initialL2Slot + 1n);
+      sendRequestsResult = undefined;
+      await enqueueProposeL2Block(block2);
+      await sendRequests();
+
+      // Wait for the new proposal to be sent to the pool
+      await retryUntil(() => ethCheatCodes.getTxPoolStatus().then(s => s.queued + s.pending > 1), 'tx queued', 20, 0.1);
+
+      // Mine a block
+      await ethCheatCodes.mine();
+
+      // Wait for completion
+      await retryUntil(() => !!sendRequestsResult, 'request resolved', 5, 0.1);
+      await retryUntil(() => publisher.l1TxUtils.state === TxUtilsState.MINED, 'mined', 10, 0.1);
+
+      // The second proposal should succeed
+      expect(sendRequestsResult).not.toBeNull();
+      expect(sendRequestsResult!.successfulActions).toEqual(['propose']);
+      expect(sendRequestsResult!.failedActions).toEqual([]);
+      expect(await rollup.getCheckpointNumber()).toEqual(CheckpointNumber.fromBlockNumber(block2.number));
+      const rollupBlock = await rollup.getCheckpoint(CheckpointNumber.fromBlockNumber(block2.number));
+      expect(SlotNumber.fromBigInt(rollupBlock.slotNumber)).toEqual(block2.slot);
     });
   });
 });

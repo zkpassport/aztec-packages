@@ -6,20 +6,20 @@
 
 #pragma once
 #include "aes128_constraint.hpp"
-
-#ifndef DISABLE_AZTEC_VM
 #include "avm2_recursion_constraint.hpp"
-#endif
+#include "barretenberg/circuit_checker/circuit_checker.hpp"
 
-#include "barretenberg/client_ivc/client_ivc.hpp"
-#include "barretenberg/common/slab_allocator.hpp"
+#include "arithmetic_constraints.hpp"
+#include "barretenberg/chonk/chonk.hpp"
 #include "barretenberg/serialize/msgpack.hpp"
 #include "blake2s_constraint.hpp"
 #include "blake3_constraint.hpp"
 #include "block_constraint.hpp"
+#include "chonk_recursion_constraints.hpp"
 #include "ec_operations.hpp"
 #include "ecdsa_constraints.hpp"
 #include "honk_recursion_constraint.hpp"
+#include "hypernova_recursion_constraint.hpp"
 #include "keccak_constraint.hpp"
 #include "logic_constraint.hpp"
 #include "multi_scalar_mul.hpp"
@@ -32,6 +32,9 @@
 #include <vector>
 
 namespace acir_format {
+
+using QuadConstraints = mul_quad_<fr>;
+using WitnessVector = std::vector<bb::fr>;
 
 /**
  * @brief Indices of the original opcode that originated each constraint in AcirFormat.
@@ -54,11 +57,11 @@ struct AcirFormatOriginalOpcodeIndices {
     std::vector<size_t> ec_add_constraints;
     std::vector<size_t> honk_recursion_constraints;
     std::vector<size_t> avm_recursion_constraints;
-    std::vector<size_t> pg_recursion_constraints;
-    std::vector<size_t> civc_recursion_constraints;
-    std::vector<size_t> assert_equalities;
-    std::vector<size_t> poly_triple_constraints;
+    std::vector<size_t> hn_recursion_constraints;
+    std::vector<size_t> chonk_recursion_constraints;
+    std::vector<size_t> arithmetic_triple_constraints;
     std::vector<size_t> quad_constraints;
+    std::vector<size_t> big_quad_constraints;
     // Multiple opcode indices per block:
     std::vector<std::vector<size_t>> block_constraints;
 
@@ -66,18 +69,23 @@ struct AcirFormatOriginalOpcodeIndices {
                            AcirFormatOriginalOpcodeIndices const& rhs) = default;
 };
 
+/**
+ * @brief Barretenberg's representation of ACIR constraints
+ *
+ * @details ACIR constraints are deserialized from bytes and stored in this format before being passed to the function
+ * create_circuit, which constructs a circuit out of the constraints. An AcirFormat instance records all the constraints
+ * that have to be added, plus some metadata:
+ * 1. the maximum witness index (used in write_vk situations to fill the circuit with dummy variables)
+ * 2. the number of original acir opcodes
+ * 3. the indices of the public inputs
+ * 4. the number of gates added to the circuit by each opcode (if calculated)
+ * 5. the original indices of the opcodes (recording the order in which the opcodes were added to the struct)
+ *
+ */
 struct AcirFormat {
-    // The number of witnesses in the circuit
-    uint32_t varnum;
-    // Specifies whether a prover that produces SNARK recursion friendly proofs should be used.
-    // The proof produced when this flag is true should be friendly for recursive verification inside
-    // of another SNARK. For example, a recursive friendly proof may use Blake3Pedersen for
-    // hashing in its transcript, while we still want a prove that uses Keccak for its transcript in order
-    // to be able to verify SNARKs on Ethereum.
-
+    uint32_t max_witness_index = 0;
     uint32_t num_acir_opcodes;
 
-    using PolyTripleConstraint = bb::poly_triple_<bb::curve::BN254::ScalarField>;
     std::vector<uint32_t> public_inputs;
 
     std::vector<LogicConstraint> logic_constraints;
@@ -94,40 +102,25 @@ struct AcirFormat {
     std::vector<EcAdd> ec_add_constraints;
     std::vector<RecursionConstraint> honk_recursion_constraints;
     std::vector<RecursionConstraint> avm_recursion_constraints;
-    std::vector<RecursionConstraint> pg_recursion_constraints;
-    std::vector<RecursionConstraint> civc_recursion_constraints;
-    std::vector<bb::poly_triple_<bb::curve::BN254::ScalarField>> assert_equalities;
-
-    // A standard plonk arithmetic constraint, as defined in the poly_triple struct, consists of selector values
-    // for q_M,q_L,q_R,q_O,q_C and indices of three variables taking the role of left, right and output wire
-    // This could be a large vector so use slab allocator, we don't expect the blackbox implementations to be so large.
-    bb::SlabVector<PolyTripleConstraint> poly_triple_constraints;
-    // A standard ultra plonk arithmetic constraint, of width 4: q_Ma*b+q_A*a+q_B*b+q_C*c+q_d*d+q_const = 0
-    bb::SlabVector<bb::mul_quad_<bb::curve::BN254::ScalarField>> quad_constraints;
+    std::vector<RecursionConstraint> hn_recursion_constraints;
+    std::vector<RecursionConstraint> chonk_recursion_constraints;
+    std::vector<QuadConstraints> quad_constraints; // Standard honk arithmetic constraint of width 4
     // A vector of vector of mul_quad gates (i.e arithmetic constraints of width 4)
     // Each vector of gates represente a 'big' expression (a polynomial of degree 1 or 2 which does not fit inside one
-    // mul_gate) that has been splitted into multiple mul_gates, using w4_omega (the 4th wire of the next gate), to
+    // mul_gate) that has been splitted into multiple mul_gates, using w4_shift (the 4th wire of the next gate), to
     // reduce the number of intermediate variables.
-    bb::SlabVector<std::vector<bb::mul_quad_<bb::curve::BN254::ScalarField>>> big_quad_constraints;
+    std::vector<std::vector<QuadConstraints>> big_quad_constraints;
     std::vector<BlockConstraint> block_constraints;
 
     // Number of gates added to the circuit per original opcode.
     // Has length equal to num_acir_opcodes.
     std::vector<size_t> gates_per_opcode;
 
-    // Set of constrained witnesses
-    std::set<uint32_t> constrained_witness;
-    // map witness with their minimal bit-range
-    std::map<uint32_t, uint32_t> minimal_range;
-    // map witness with their minimal bit-range implied by array operations
-    std::map<uint32_t, uint32_t> index_range;
-
     // Indices of the original opcode that originated each constraint in AcirFormat.
     AcirFormatOriginalOpcodeIndices original_opcode_indices;
 
     // For serialization, update with any new fields
-    MSGPACK_FIELDS(varnum,
-                   public_inputs,
+    MSGPACK_FIELDS(public_inputs,
                    logic_constraints,
                    range_constraints,
                    aes128_constraints,
@@ -142,115 +135,61 @@ struct AcirFormat {
                    ec_add_constraints,
                    honk_recursion_constraints,
                    avm_recursion_constraints,
-                   pg_recursion_constraints,
-                   civc_recursion_constraints,
-                   poly_triple_constraints,
+                   hn_recursion_constraints,
+                   chonk_recursion_constraints,
                    quad_constraints,
                    big_quad_constraints,
-                   block_constraints,
-                   assert_equalities);
+                   block_constraints);
 
     friend bool operator==(AcirFormat const& lhs, AcirFormat const& rhs) = default;
 };
 
-using WitnessVector = bb::SlabVector<bb::fr>;
-using WitnessVectorStack = std::vector<std::pair<uint32_t, WitnessVector>>;
-
+/**
+ * @brief Struct containing both the constraints to be added to the circuit and the witness vector
+ *
+ */
 struct AcirProgram {
     AcirFormat constraints;
-    WitnessVector witness = {};
+    WitnessVector witness;
 };
 
 /**
- * @brief Storage for constaint_systems/witnesses for a stack of acir programs
- * @details In general the number of items in the witness stack will be equal or greater than the number of constraint
- * systems because the program may consist of multiple calls to the same function.
+ * @brief Metadata required to create a circuit
  *
+ * @details The metadata is required for three reasons:
+ * 1. When we add constraints to kernels, we need an IVC instance. The metadata contains a pointer to such
+ *    instance.
+ * 2. When we add constraints to rollup circuits, we need to know whether the circuit should propagate an IPA claim or
+ *    recursively verify it. The boolean has_ipa_claim specifies what the circuit should do with an IPA claim.
+ * 3. If we wish to collect the number of gates added by each opcode, we set collect_gates_per_opcode to true.
  */
-struct AcirProgramStack {
-    std::vector<AcirFormat> constraint_systems;
-    WitnessVectorStack witness_stack;
-
-    AcirProgramStack(std::vector<AcirFormat> constraint_systems_in, WitnessVectorStack witness_stack_in)
-        : constraint_systems(std::move(constraint_systems_in))
-        , witness_stack(std::move(witness_stack_in))
-    {}
-
-    size_t size() const { return witness_stack.size(); }
-    bool empty() const { return witness_stack.empty(); }
-
-    AcirProgram back()
-    {
-        auto witness_stack_item = witness_stack.back();
-        auto witness = witness_stack_item.second;
-        auto constraint_system = constraint_systems[witness_stack_item.first];
-
-        return { constraint_system, witness };
-    }
-
-    void pop_back() { witness_stack.pop_back(); }
-};
-
 struct ProgramMetadata {
-
     // An IVC instance; needed to construct a circuit from IVC recursion constraints
-    std::shared_ptr<ClientIVC> ivc = nullptr;
+    std::shared_ptr<bb::IVCBase> ivc = nullptr;
 
-    bool recursive = false; // Specifies whether a prover that produces SNARK recursion friendly proofs should be used.
-                            // The proof produced when this flag is true should be friendly for recursive verification
-                            // inside of another SNARK. For example, a recursive friendly proof may use Blake3Pedersen
-                            // for hashing in its transcript, while we still want a prove that uses Keccak for its
-                            // transcript in order to be able to verify SNARKs on Ethereum.
-    uint32_t honk_recursion = 0; // honk_recursion means we will honk to recursively verify this
-                                 // circuit. This distinction is needed to not add the default
-                                 // aggregation object when we're not using the honk RV.
-                                 // 0 means we are not proving with honk
-                                 // 1 means we are using the UltraHonk flavor
-                                 // 2 means we are using the UltraRollupHonk flavor
+    bool has_ipa_claim =
+        false; // Boolean describing whether the circuit should propagate an IPA claim or not. If `True`, the circuit
+               // should propagate an IPA claim. In our codebase, circuits that propagate IPA claims are the ones whose
+               // proof is constructed/verified using Rollup flavors.
     bool collect_gates_per_opcode = false;
     size_t size_hint = 0;
 };
 
-// TODO(https://github.com/AztecProtocol/barretenberg/issues/1161) Refactor this function
-template <typename Builder = bb::UltraCircuitBuilder>
-Builder create_circuit(AcirProgram& program, const ProgramMetadata& metadata = ProgramMetadata{});
-
-template <typename Builder>
-void build_constraints(Builder& builder, AcirProgram& program, const ProgramMetadata& metadata);
-
 /**
- * @brief Utility class for tracking the gate count of acir constraints
+ * @brief Create a circuit out of an ACIR program and metadata
+ *
+ * @details This function instantiates the builder, adds the required witnesses to it, and then calls build_constraints
+ * to add the required constraints to the builder.
  *
  */
-template <typename Builder> class GateCounter {
-  public:
-    GateCounter(Builder* builder, bool collect_gates_per_opcode)
-        : builder(builder)
-        , collect_gates_per_opcode(collect_gates_per_opcode)
-    {}
+template <typename Builder>
+Builder create_circuit(AcirProgram& program, const ProgramMetadata& metadata = ProgramMetadata{});
 
-    size_t compute_diff()
-    {
-        if (!collect_gates_per_opcode) {
-            return 0;
-        }
-        size_t new_gate_count = builder->get_estimated_num_finalized_gates();
-        size_t diff = new_gate_count - prev_gate_count;
-        prev_gate_count = new_gate_count;
-        return diff;
-    }
-
-    void track_diff(std::vector<size_t>& gates_per_opcode, size_t opcode_index)
-    {
-        if (collect_gates_per_opcode) {
-            gates_per_opcode[opcode_index] = compute_diff();
-        }
-    }
-
-  private:
-    Builder* builder;
-    bool collect_gates_per_opcode;
-    size_t prev_gate_count{};
-};
+/**
+ * @brief Add to the builder the constraints contained in an AcirFormat instance
+ *
+ */
+template <typename Builder>
+void build_constraints(Builder& builder, AcirFormat& constraints, const ProgramMetadata& metadata);
 
 } // namespace acir_format

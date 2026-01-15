@@ -22,7 +22,13 @@
       "path": "../noir-contracts.js"
     },
     {
+      "path": "../pxe"
+    },
+    {
       "path": "../stdlib"
+    },
+    {
+      "path": "../wallet-sdk"
     }
   ],
   "include": ["src", "src/**/*.json"]

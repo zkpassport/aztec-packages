@@ -1,8 +1,11 @@
-import { EthAddress, retryUntil } from '@aztec/aztec.js';
-import { RollupContract, type ViemPublicClient } from '@aztec/ethereum';
+import { EthAddress } from '@aztec/aztec.js/addresses';
+import { RollupContract } from '@aztec/ethereum/contracts';
 import { ChainMonitor } from '@aztec/ethereum/test';
+import type { ViemPublicClient } from '@aztec/ethereum/types';
+import { EpochNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { createLogger } from '@aztec/foundation/log';
 import { promiseWithResolvers } from '@aztec/foundation/promise';
+import { retryUntil } from '@aztec/foundation/retry';
 import { timeoutPromise } from '@aztec/foundation/timer';
 import { type SlasherConfig, type TallySlasherSettings, getTallySlasherSettings } from '@aztec/slasher';
 import { type L1RollupConstants, getSlotRangeForEpoch, getStartTimestampForEpoch } from '@aztec/stdlib/epoch-helpers';
@@ -26,7 +29,7 @@ const config = setupEnvironment(process.env);
 // allows us to run multiple validators per node but disable a single one, as opposed to having to
 // disable every validator on a node.
 describe('slash inactivity test', () => {
-  jest.setTimeout(10 * 60 * 2000); // 20 minutes
+  jest.setTimeout(120 * 60 * 1000); // 120 minutes
 
   const logger = createLogger(`e2e:slash-inactivity`);
 
@@ -62,7 +65,7 @@ describe('slash inactivity test', () => {
     logger.warn(`Retrieving committee for next epoch (current epoch is ${startEpoch})`);
     return await retryUntil(
       async () => {
-        const nextEpoch = (await rollup.getCurrentEpoch()) + 1n;
+        const nextEpoch = EpochNumber.fromBigInt(BigInt(await rollup.getCurrentEpoch()) + 1n);
         const nextEpochStartTimestamp = getStartTimestampForEpoch(nextEpoch, constants);
         const committee = await rollup.getCommitteeAt(nextEpochStartTimestamp);
 
@@ -130,7 +133,7 @@ describe('slash inactivity test', () => {
     offlineValidator = EthAddress.fromString(committee[0]);
 
     // Wait until we're near the end of the previous epoch
-    const lastSlotBeforeEpoch = getSlotRangeForEpoch(epoch, constants)[0] - 1n;
+    const lastSlotBeforeEpoch = SlotNumber(getSlotRangeForEpoch(epoch, constants)[0] - 1);
     logger.warn(`Waiting until slot ${lastSlotBeforeEpoch} (current is ${monitor.l2SlotNumber})`);
     await monitor.waitUntilL2Slot(lastSlotBeforeEpoch);
 
@@ -155,8 +158,10 @@ describe('slash inactivity test', () => {
 
     // Wait for an epoch, then reenable the validator, otherwise it will get slashed for every epoch
     // for the slashed round, plus the slash offset, plus the execution delay, which would kick them out.
-    const lastSlotBeforeNextEpoch = getSlotRangeForEpoch(epoch + 1n, constants)[0] - 1n;
-    logger.warn(`Waiting until end of epoch ${epoch + 1n} at slot ${lastSlotBeforeNextEpoch}`);
+    const lastSlotBeforeNextEpoch = SlotNumber.fromBigInt(
+      BigInt(getSlotRangeForEpoch(EpochNumber.fromBigInt(BigInt(epoch) + 1n), constants)[0]) - 1n,
+    );
+    logger.warn(`Waiting until end of epoch ${BigInt(epoch) + 1n} at slot ${lastSlotBeforeNextEpoch}`);
     await monitor.waitUntilL2Slot(lastSlotBeforeNextEpoch);
     await updateSequencersConfig(config, { disabledValidators: [] });
     logger.warn(`Updated sequencer configs to reenable ${offlineValidator}`);
@@ -164,12 +169,22 @@ describe('slash inactivity test', () => {
     // Now we wait for the slash
     const beforeSlash = await rollup.getAttesterView(offlineValidator);
     const timeout = getTotalSlashDelayInSeconds() + 60;
-    await waitForSlash(offlineValidator, timeout);
+    const slashEvent = await waitForSlash(offlineValidator, timeout);
+    expect(slashEvent.attester.equals(offlineValidator)).toBe(true);
+    const localThreshold = await rollup.getLocalEjectionThreshold();
+
+    const expectedBurnAmount =
+      beforeSlash.effectiveBalance < inactivityPenalty ? beforeSlash.effectiveBalance : inactivityPenalty;
+    expect(slashEvent.amount).toEqual(expectedBurnAmount);
     const afterSlash = await rollup.getAttesterView(offlineValidator);
 
     // The validator should have been slashed for their inactivity during the epoch it was disabled
-    logger.warn(`Verifying slash for ${slashSettings.slashingAmounts[0]}`, { beforeSlash, afterSlash });
+    logger.info(`Verifying slash for ${slashSettings.slashingAmounts[0]}`, { beforeSlash, afterSlash });
     const slashed = beforeSlash.effectiveBalance - afterSlash.effectiveBalance;
-    expect(slashed).toEqual(inactivityPenalty);
+    const expectedBalanceDrop =
+      beforeSlash.effectiveBalance - inactivityPenalty < localThreshold
+        ? beforeSlash.effectiveBalance // If validator falls below threshold, this test does not add the validator back into the rollup
+        : inactivityPenalty;
+    expect(slashed).toEqual(expectedBalanceDrop);
   });
 });

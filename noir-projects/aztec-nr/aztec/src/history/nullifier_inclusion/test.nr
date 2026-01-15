@@ -14,7 +14,7 @@ unconstrained fn note_is_nullified_succeeds_on_blocks_after_note_nullification()
         PrivateContextOptions::new().at_anchor_block_number(test::NOTE_NULLIFIED_AT),
         |context| {
             let header = context.anchor_block_header;
-            header.prove_note_is_nullified(retrieved_note, test::NOTE_STORAGE_SLOT, context);
+            header.prove_note_is_nullified(retrieved_note, context);
         },
     );
 }
@@ -27,7 +27,7 @@ unconstrained fn note_is_nullified_fails_on_blocks_before_note_nullification() {
         PrivateContextOptions::new().at_anchor_block_number(test::NOTE_NULLIFIED_AT - 1),
         |context| {
             let header = context.anchor_block_header;
-            header.prove_note_is_nullified(retrieved_note, test::NOTE_STORAGE_SLOT, context);
+            header.prove_note_is_nullified(retrieved_note, context);
         },
     );
 }
@@ -52,10 +52,8 @@ unconstrained fn prove_nullifier_inclusion_succeeds_on_blocks_after_nullifier_cr
     env.private_context_opts(
         PrivateContextOptions::new().at_anchor_block_number(nullifier_created_at),
         |context| {
-            // docs:start:prove_nullifier_inclusion
             let header = context.anchor_block_header;
             header.prove_nullifier_inclusion(siloed_nullifier);
-            // docs:end:prove_nullifier_inclusion
         },
     );
 }

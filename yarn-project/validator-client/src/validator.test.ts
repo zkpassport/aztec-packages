@@ -1,12 +1,15 @@
+import { GENESIS_ARCHIVE_ROOT } from '@aztec/constants';
 import type { EpochCache } from '@aztec/epoch-cache';
+import { BlockNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { Buffer32 } from '@aztec/foundation/buffer';
 import { times } from '@aztec/foundation/collection';
 import { SecretValue, getConfigFromMappings } from '@aztec/foundation/config';
-import { Secp256k1Signer, makeEthSignDigest } from '@aztec/foundation/crypto';
+import { Secp256k1Signer, makeEthSignDigest } from '@aztec/foundation/crypto/secp256k1-signer';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
+import type { Hex } from '@aztec/foundation/string';
 import { TestDateProvider, Timer } from '@aztec/foundation/timer';
-import { type Hex, type KeyStore, KeystoreManager } from '@aztec/node-keystore';
+import { type KeyStore, KeystoreManager } from '@aztec/node-keystore';
 import {
   AuthRequest,
   AuthResponse,
@@ -16,17 +19,16 @@ import {
   type TxProvider,
   createSecp256k1PeerId,
 } from '@aztec/p2p';
-import { computeInHashFromL1ToL2Messages } from '@aztec/prover-client/helpers';
 import { OffenseType, WANT_TO_SLASH_EVENT } from '@aztec/slasher';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import type { L2Block, L2BlockSource } from '@aztec/stdlib/block';
 import { Gas } from '@aztec/stdlib/gas';
 import type { BuildBlockResult, IFullNodeBlockBuilder, SlasherConfig } from '@aztec/stdlib/interfaces/server';
-import type { L1ToL2MessageSource } from '@aztec/stdlib/messaging';
+import { type L1ToL2MessageSource, computeInHashFromL1ToL2Messages } from '@aztec/stdlib/messaging';
 import type { BlockProposal } from '@aztec/stdlib/p2p';
 import { makeBlockAttestation, makeBlockProposal, makeL2BlockHeader, mockTx } from '@aztec/stdlib/testing';
 import { AppendOnlyTreeSnapshot } from '@aztec/stdlib/trees';
-import { ContentCommitment, type Tx, TxHash } from '@aztec/stdlib/tx';
+import { BlockHeader, ContentCommitment, type Tx, TxHash } from '@aztec/stdlib/tx';
 import { AttestationTimeoutError } from '@aztec/stdlib/validators';
 
 import { describe, expect, it, jest } from '@jest/globals';
@@ -37,7 +39,8 @@ import { type ValidatorClientConfig, validatorClientConfigMappings } from './con
 import { ValidatorClient } from './validator.js';
 
 describe('ValidatorClient', () => {
-  let config: ValidatorClientConfig & Pick<SlasherConfig, 'slashBroadcastedInvalidBlockPenalty'>;
+  let config: ValidatorClientConfig &
+    Pick<SlasherConfig, 'slashBroadcastedInvalidBlockPenalty'> & { disableTransactions: boolean };
   let validatorClient: ValidatorClient;
   let p2pClient: MockProxy<P2P>;
   let blockSource: MockProxy<L2BlockSource>;
@@ -53,6 +56,7 @@ describe('ValidatorClient', () => {
     p2pClient = mock<P2P>();
     p2pClient.getAttestationsForSlot.mockImplementation(() => Promise.resolve([]));
     p2pClient.handleAuthRequestFromPeer.mockResolvedValue(StatusMessage.random());
+    p2pClient.broadcastAttestations.mockResolvedValue();
     blockBuilder = mock<IFullNodeBlockBuilder>();
     blockBuilder.getConfig.mockReturnValue({ l1GenesisTime: 1n, slotDuration: 24, l1ChainId: 1, rollupVersion: 1 });
     epochCache = mock<EpochCache>();
@@ -74,6 +78,7 @@ describe('ValidatorClient', () => {
       validatorReexecute: false,
       validatorReexecuteDeadlineMs: 6000,
       slashBroadcastedInvalidBlockPenalty: 1n,
+      disableTransactions: false,
     };
 
     const keyStore: KeyStore = {
@@ -116,7 +121,6 @@ describe('ValidatorClient', () => {
         header.globalVariables.blockNumber,
         header.toCheckpointHeader(),
         archive,
-        header.state,
         txs,
         EthAddress.fromString(validatorAccounts[0].address),
         { publishFullTxs: false },
@@ -156,7 +160,7 @@ describe('ValidatorClient', () => {
         makeBlockAttestation({ signer: attestor2, archive, txHashes }),
       ];
       p2pClient.getAttestationsForSlot.mockImplementation((slot, proposalId) => {
-        if (slot === proposal.payload.header.slotNumber.toBigInt() && proposalId === proposal.archive.toString()) {
+        if (proposal.payload.header.slotNumber === slot && proposalId === proposal.archive.toString()) {
           return Promise.resolve(expectedAttestations);
         }
         return Promise.resolve([]);
@@ -186,27 +190,59 @@ describe('ValidatorClient', () => {
       expect(addAttestationsSpy).toHaveBeenCalled();
       expect(addAttestationsSpy.mock.calls[0][0]).toHaveLength(2);
     });
+
+    it('should filter out attestations with mismatched payload', async () => {
+      const signer = Secp256k1Signer.random();
+      const attestor1 = Secp256k1Signer.random();
+      const attestor2 = Secp256k1Signer.random();
+
+      const archive = Fr.random();
+      const txHashes = [0, 1, 2, 3, 4, 5].map(() => TxHash.random());
+
+      const proposal = makeBlockProposal({ signer, archive, txHashes });
+
+      // Create attestations - one with matching payload, one with mismatched
+      const validAttestation = makeBlockAttestation({ signer: attestor1, archive, txHashes });
+      const invalidAttestation = makeBlockAttestation({ signer: attestor2, archive: Fr.random(), txHashes });
+
+      p2pClient.getAttestationsForSlot.mockImplementation((slot, proposalId) =>
+        proposal.payload.header.slotNumber === slot && proposalId === proposal.archive.toString()
+          ? Promise.resolve([validAttestation, invalidAttestation])
+          : Promise.resolve([]),
+      );
+
+      // Perform the query - should timeout but we're testing the filtering behavior
+      await expect(
+        validatorClient.collectAttestations(proposal, 2, new Date(dateProvider.now() + 1000)),
+      ).rejects.toThrow(AttestationTimeoutError);
+
+      // Verify that getAttestationsForSlot was called (meaning the loop ran)
+      expect(p2pClient.getAttestationsForSlot).toHaveBeenCalled();
+    });
   });
 
   describe('attestToProposal', () => {
     let proposal: BlockProposal;
+    let blockNumber: BlockNumber;
     let sender: PeerId;
     let blockBuildResult: BuildBlockResult;
 
     const makeTxFromHash = (txHash: TxHash) => ({ getTxHash: () => txHash, txHash }) as Tx;
 
     const enableReexecution = () => {
-      (validatorClient as any).config.validatorReexecute = true;
+      validatorClient.updateConfig({ validatorReexecute: true });
       blockBuilder.buildBlock.mockImplementation(() => Promise.resolve(blockBuildResult));
     };
 
-    beforeEach(async () => {
-      const emptyInHash = await computeInHashFromL1ToL2Messages([]);
+    beforeEach(() => {
+      const emptyInHash = computeInHashFromL1ToL2Messages([]);
       const contentCommitment = new ContentCommitment(Fr.random(), emptyInHash, Fr.random());
-      proposal = makeBlockProposal({ header: makeL2BlockHeader(1, 100, 100, { contentCommitment }) });
+      const blockHeader = makeL2BlockHeader(1, 100, 100, { contentCommitment });
+      blockNumber = BlockNumber(blockHeader.getBlockNumber());
+      proposal = makeBlockProposal({ header: blockHeader });
       // Set the current time to the start of the slot of the proposal
       const genesisTime = 1n;
-      const slotTime = genesisTime + proposal.slotNumber.toBigInt() * BigInt(blockBuilder.getConfig().slotDuration);
+      const slotTime = genesisTime + BigInt(proposal.slotNumber) * BigInt(blockBuilder.getConfig().slotDuration);
       dateProvider.setTime(Number(slotTime * 1000n));
       sender = { toString: () => 'proposal-sender-peer-id' } as PeerId;
 
@@ -225,14 +261,18 @@ describe('ValidatorClient', () => {
       epochCache.getProposerAttesterAddressInCurrentOrNextSlot.mockResolvedValue({
         currentProposer: proposal.getSender(),
         nextProposer: proposal.getSender(),
-        currentSlot: proposal.slotNumber.toBigInt(),
-        nextSlot: proposal.slotNumber.toBigInt() + 1n,
+        currentSlot: proposal.slotNumber,
+        nextSlot: SlotNumber(proposal.slotNumber + 1),
       });
       epochCache.filterInCommittee.mockResolvedValue([EthAddress.fromString(validatorAccounts[0].address)]);
 
-      blockSource.getBlock.mockResolvedValue({
-        archive: new AppendOnlyTreeSnapshot(proposal.payload.header.lastArchiveRoot, proposal.blockNumber),
-      } as L2Block);
+      // Return parent block when requested
+      blockSource.getBlockHeaderByArchive.mockResolvedValue({
+        getBlockNumber: () => blockNumber - 1,
+        getSlot: () => SlotNumber(blockHeader.getSlot() - 1),
+      } as BlockHeader);
+
+      blockSource.getGenesisValues.mockResolvedValue({ genesisArchiveRoot: new Fr(GENESIS_ARCHIVE_ROOT) });
       blockSource.syncImmediate.mockImplementation(() => Promise.resolve());
 
       blockBuildResult = {
@@ -244,9 +284,9 @@ describe('ValidatorClient', () => {
         numMsgs: 0,
         usedTxs: [],
         block: {
-          header: makeL2BlockHeader(),
+          header: blockHeader.clone(),
           body: { txEffects: times(proposal.txHashes.length, () => ({})) },
-          archive: new AppendOnlyTreeSnapshot(proposal.archive, proposal.blockNumber),
+          archive: new AppendOnlyTreeSnapshot(proposal.archive, blockNumber),
         } as L2Block,
       };
     });
@@ -260,11 +300,11 @@ describe('ValidatorClient', () => {
 
     it('should wait for previous block to sync', async () => {
       epochCache.filterInCommittee.mockResolvedValue([EthAddress.fromString(validatorAccounts[0].address)]);
-      blockSource.getBlock.mockResolvedValueOnce(undefined);
-      blockSource.getBlock.mockResolvedValueOnce(undefined);
-      blockSource.getBlock.mockResolvedValueOnce(undefined);
+      blockSource.getBlockHeaderByArchive.mockResolvedValueOnce(undefined);
+      blockSource.getBlockHeaderByArchive.mockResolvedValueOnce(undefined);
+      blockSource.getBlockHeaderByArchive.mockResolvedValueOnce(undefined);
       const attestations = await validatorClient.attestToProposal(proposal, sender);
-      expect(blockSource.getBlock).toHaveBeenCalledTimes(4);
+      expect(blockSource.getBlockHeaderByArchive).toHaveBeenCalledTimes(4);
       expect(attestations).toBeDefined();
       expect(attestations?.length).toBe(1);
     });
@@ -275,7 +315,7 @@ describe('ValidatorClient', () => {
       expect(attestations?.length).toBeGreaterThan(0);
     });
 
-    it('should not attest to proposal if roots do not match, and should emit WANT_TO_SLASH_EVENT', async () => {
+    it('should not attest to proposal if roots do not match and should emit WANT_TO_SLASH_EVENT', async () => {
       // Block builder returns a block with a different root
       const emitSpy = jest.spyOn(validatorClient, 'emit');
       enableReexecution();
@@ -287,14 +327,33 @@ describe('ValidatorClient', () => {
 
       // We should emit WANT_TO_SLASH_EVENT
       const proposer = proposal.getSender();
+      expect(proposer).toBeDefined();
       expect(emitSpy).toHaveBeenCalledWith(WANT_TO_SLASH_EVENT, [
         {
-          validator: proposer,
+          validator: proposer!,
           amount: config.slashBroadcastedInvalidBlockPenalty,
           offenseType: OffenseType.BROADCASTED_INVALID_BLOCK_PROPOSAL,
           epochOrSlot: expect.any(BigInt),
         },
       ]);
+    });
+
+    it('should not attest to proposal if a random field in the proposal does not match', async () => {
+      // Block builder returns a block with a different archive root
+      enableReexecution();
+      blockBuildResult.block.archive.root = Fr.random();
+
+      // We should not attest to the proposal
+      const attestations = await validatorClient.attestToProposal(proposal, sender);
+      expect(attestations).toBeUndefined();
+    });
+
+    it('should not attest to proposal if the proposed block number is taken', async () => {
+      enableReexecution();
+      blockSource.getBlockHeader.mockResolvedValue({} as BlockHeader);
+      const attestations = await validatorClient.attestToProposal(proposal, sender);
+      expect(attestations).toBeUndefined();
+      expect(blockSource.getBlockHeader).toHaveBeenCalledWith(blockNumber);
     });
 
     it('should not emit WANT_TO_SLASH_EVENT if slashing is disabled', async () => {
@@ -315,6 +374,7 @@ describe('ValidatorClient', () => {
 
       expect(txProvider.getTxsForBlockProposal).toHaveBeenCalledWith(
         proposal,
+        blockNumber,
         expect.objectContaining({ pinnedPeer: sender }),
       );
     });
@@ -327,6 +387,7 @@ describe('ValidatorClient', () => {
 
       expect(txProvider.getTxsForBlockProposal).toHaveBeenCalledWith(
         proposal,
+        blockNumber,
         expect.objectContaining({ pinnedPeer: sender }),
       );
     });
@@ -365,8 +426,8 @@ describe('ValidatorClient', () => {
         Promise.resolve({
           currentProposer: EthAddress.random(),
           nextProposer: EthAddress.random(),
-          currentSlot: proposal.slotNumber.toBigInt(),
-          nextSlot: proposal.slotNumber.toBigInt() + 1n,
+          currentSlot: proposal.slotNumber,
+          nextSlot: SlotNumber(proposal.slotNumber + 1),
         }),
       );
 
@@ -387,8 +448,8 @@ describe('ValidatorClient', () => {
       epochCache.getProposerAttesterAddressInCurrentOrNextSlot.mockResolvedValue({
         currentProposer: proposal.getSender(),
         nextProposer: proposal.getSender(),
-        currentSlot: proposal.slotNumber.toBigInt() + 20n,
-        nextSlot: proposal.slotNumber.toBigInt() + 21n,
+        currentSlot: SlotNumber(proposal.slotNumber + 20),
+        nextSlot: SlotNumber(proposal.slotNumber + 21),
       });
 
       const attestation = await validatorClient.attestToProposal(proposal, sender);
@@ -401,6 +462,28 @@ describe('ValidatorClient', () => {
 
       const attestation = await validatorClient.attestToProposal(proposal, sender);
       expect(attestation).toBeUndefined();
+    });
+
+    it('should validate proposals in fisherman mode but not create or broadcast attestations', async () => {
+      // Enable fisherman mode (which also triggers re-execution)
+      validatorClient.updateConfig({ fishermanMode: true });
+
+      // Enable re-execution (required in fisherman mode)
+      enableReexecution();
+
+      // Set up so validator is NOT in the committee
+      epochCache.filterInCommittee.mockResolvedValueOnce([]);
+
+      // Spy on addAttestations to verify attestations are NOT added to the pool
+      const addAttestationsSpy = jest.spyOn(p2pClient, 'addAttestations');
+
+      const attestations = await validatorClient.attestToProposal(proposal, sender);
+
+      // In fisherman mode, no attestations should be created or returned
+      expect(attestations).toBeUndefined();
+
+      // Attestations should NOT be added to the p2p pool
+      expect(addAttestationsSpy).not.toHaveBeenCalled();
     });
   });
 

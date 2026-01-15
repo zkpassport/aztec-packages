@@ -4,10 +4,11 @@ use dep::aztec::macros::aztec;
 
 #[aztec]
 pub contract MultiCallEntrypoint {
-    use aztec::{authwit::entrypoint::app::AppPayload, macros::functions::private};
+    use aztec::{authwit::entrypoint::app::AppPayload, macros::functions::{external, nophasecheck}};
 
-    #[private]
+    #[external("private")]
+    #[nophasecheck]
     fn entrypoint(app_payload: AppPayload) {
-        app_payload.execute_calls(&mut context);
+        app_payload.execute_calls(self.context);
     }
 }

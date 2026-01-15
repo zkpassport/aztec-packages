@@ -1,7 +1,10 @@
-import { type AztecNode, L1FeeJuicePortalManager, type PXE } from '@aztec/aztec.js';
+import { L1FeeJuicePortalManager } from '@aztec/aztec.js/ethereum';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import { ProtocolContractAddress } from '@aztec/aztec.js/protocol';
 import { prettyPrintJSON } from '@aztec/cli/utils';
-import { createEthereumChain, createExtendedL1Client } from '@aztec/ethereum';
-import { Fr } from '@aztec/foundation/fields';
+import { createEthereumChain } from '@aztec/ethereum/chain';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import type { LogFn, Logger } from '@aztec/foundation/log';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { getNonNullifiedL1ToL2MessageWitness } from '@aztec/stdlib/messaging';
@@ -9,7 +12,6 @@ import { getNonNullifiedL1ToL2MessageWitness } from '@aztec/stdlib/messaging';
 export async function bridgeL1FeeJuice(
   amount: bigint,
   recipient: AztecAddress,
-  pxe: PXE,
   node: AztecNode,
   l1RpcUrls: string[],
   chainId: number,
@@ -26,12 +28,8 @@ export async function bridgeL1FeeJuice(
   const chain = createEthereumChain(l1RpcUrls, chainId);
   const client = createExtendedL1Client(chain.rpcUrls, privateKey ?? mnemonic, chain.chainInfo);
 
-  const {
-    protocolContractAddresses: { feeJuice: feeJuiceAddress },
-  } = await pxe.getPXEInfo();
-
   // Setup portal manager
-  const portal = await L1FeeJuicePortalManager.new(pxe, client, debugLogger);
+  const portal = await L1FeeJuicePortalManager.new(node, client, debugLogger);
   const { claimAmount, claimSecret, messageHash, messageLeafIndex } = await portal.bridgeTokensPublic(
     recipient,
     amount,
@@ -68,7 +66,12 @@ export async function bridgeL1FeeJuice(
     const delayedCheck = (delay: number) => {
       return new Promise((resolve, reject) => {
         setTimeout(() => {
-          void getNonNullifiedL1ToL2MessageWitness(node, feeJuiceAddress, Fr.fromHexString(messageHash), claimSecret)
+          void getNonNullifiedL1ToL2MessageWitness(
+            node,
+            ProtocolContractAddress.FeeJuice,
+            Fr.fromHexString(messageHash),
+            claimSecret,
+          )
             .then(witness => resolve(witness))
             .catch(err => reject(err));
         }, delay);

@@ -1,12 +1,13 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import { Timer } from '@aztec/foundation/timer';
+import type { PublicSimulatorConfig } from '@aztec/stdlib/avm';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
 import type { GlobalVariables } from '@aztec/stdlib/tx';
 
 import { strict as assert } from 'assert';
 
-import { SideEffectLimitReachedError } from '../side_effect_errors.js';
+import { CheckedPublicExecutionError } from '../public_errors.js';
 import type { PublicPersistableStateManager } from '../state_manager/state_manager.js';
 import { AvmContext } from './avm_context.js';
 import { AvmContractCallResult } from './avm_contract_call_result.js';
@@ -14,7 +15,7 @@ import { AvmExecutionEnvironment } from './avm_execution_environment.js';
 import type { Gas } from './avm_gas.js';
 import { AvmMachineState } from './avm_machine_state.js';
 import type { AvmSimulatorInterface } from './avm_simulator_interface.js';
-import { AvmExecutionError, AvmRevertReason, InvalidProgramCounterError } from './errors.js';
+import { AvmRevertReason, InvalidProgramCounterError } from './errors.js';
 import type { Instruction } from './opcodes/instruction.js';
 import { revertReasonFromExceptionalHalt, revertReasonFromExplicitRevert } from './revert_reason.js';
 import {
@@ -75,7 +76,7 @@ export class AvmSimulator implements AvmSimulatorInterface {
     isStaticCall: boolean,
     calldata: Fr[],
     allocatedGas: Gas,
-    clientInitiatedSimulation: boolean = false,
+    config: PublicSimulatorConfig,
   ) {
     const avmExecutionEnv = new AvmExecutionEnvironment(
       address,
@@ -85,7 +86,7 @@ export class AvmSimulator implements AvmSimulatorInterface {
       globals,
       isStaticCall,
       calldata,
-      clientInitiatedSimulation,
+      config,
     );
 
     const avmMachineState = new AvmMachineState(allocatedGas);
@@ -97,22 +98,13 @@ export class AvmSimulator implements AvmSimulatorInterface {
    * Fetch the bytecode and execute it in the current context.
    */
   public async execute(): Promise<AvmContractCallResult> {
-    let bytecode: Buffer | undefined;
-    try {
-      bytecode = await this.context.persistableState.getBytecode(this.context.environment.address);
-    } catch (err: any) {
-      if (!(err instanceof AvmExecutionError || err instanceof SideEffectLimitReachedError)) {
-        this.log.error(`Unknown error thrown by AVM during bytecode retrieval: ${err}`);
-        throw err;
-      }
-      return await this.handleFailureToRetrieveBytecode(
-        `Bytecode retrieval for contract '${this.context.environment.address}' failed with ${err.message}. Reverting...`,
-      );
-    }
+    const bytecode = await this.context.persistableState.getBytecode(this.context.environment.address);
+    // getBytecode returns undefined if bytecode is not found or if the limit of contract calls to unique class IDs is reached.
+    // If it throws an error that reaches this point, it is a bug.
 
     if (!bytecode) {
       return await this.handleFailureToRetrieveBytecode(
-        `No bytecode found at: ${this.context.environment.address}. Reverting...`,
+        `No bytecode found. Contract is not deployed, or limit encountered for max calls to unique contract class IDs. Contract address: ${this.context.environment.address}. Reverting...`,
       );
     }
 
@@ -135,6 +127,7 @@ export class AvmSimulator implements AvmSimulatorInterface {
     assert(bytecode.length > 0, "AVM simulator can't execute empty bytecode");
 
     this.bytecode = bytecode;
+    let instructionName = 'NONE'; // This is used for logging purposes
 
     const { machineState } = this.context;
     const callStartGas = machineState.gasLeft; // Save gas before executing instruction (for profiling)
@@ -163,6 +156,7 @@ export class AvmSimulator implements AvmSimulatorInterface {
         }
         machineState.nextPc = machineState.pc + bytesRead;
 
+        instructionName = instruction.constructor.name;
         // Execute the instruction.
         // Normal returns and reverts will return normally here.
         // "Exceptional halts" will throw.
@@ -183,7 +177,7 @@ export class AvmSimulator implements AvmSimulatorInterface {
 
         if (machineState.pc >= bytecode.length) {
           this.log.warn('Passed end of program');
-          throw new InvalidProgramCounterError(machineState.pc, /*max=*/ bytecode.length);
+          throw new InvalidProgramCounterError(machineState.pc, /*max=*/ bytecode.length - 1);
         }
       }
 
@@ -211,18 +205,12 @@ export class AvmSimulator implements AvmSimulatorInterface {
       // Return results for processing by calling context
       return results;
     } catch (err: any) {
-      this.log.verbose('Exceptional halt (revert by something other than REVERT opcode)');
-      // FIXME: weird that we have to do this OutOfGasError check because:
-      // 1. OutOfGasError is an AvmExecutionError, so that check should cover both
-      // 2. We should at least be able to do instanceof OutOfGasError instead of checking the constructor name
-      if (
-        !(
-          err.constructor.name == 'OutOfGasError' ||
-          err instanceof AvmExecutionError ||
-          err instanceof SideEffectLimitReachedError
-        )
-      ) {
-        this.log.error(`Unknown error thrown by AVM: ${err}`);
+      this.log.info(
+        `Exceptional halt (revert by something other than REVERT opcode) for instruction
+         ${instructionName} at pc ${machineState.pc} and instruction counter ${machineState.instrCounter}`,
+      );
+      if (!(err instanceof CheckedPublicExecutionError)) {
+        this.log.error(`Unchecked/unknown error thrown by AVM. This is a bug. Error: ${err}`);
         throw err;
       }
 
@@ -247,12 +235,15 @@ export class AvmSimulator implements AvmSimulatorInterface {
 
   private async handleFailureToRetrieveBytecode(message: string): Promise<AvmContractCallResult> {
     // revert, consuming all gas
-    const fnName = await this.context.persistableState.getPublicFunctionDebugName(this.context.environment);
+    const { functionSelector, functionName } = await this.context.persistableState.getPublicFunctionSelectorAndName(
+      this.context.environment,
+    );
     const revertReason = new AvmRevertReason(
       message,
       /*failingFunction=*/ {
         contractAddress: this.context.environment.address,
-        functionName: fnName,
+        functionSelector,
+        functionName,
       },
       /*noirCallStack=*/ [],
     );

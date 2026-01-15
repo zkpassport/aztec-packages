@@ -15,8 +15,6 @@ void bc_retrievalImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
 {
     using C = ColumnAndShifts;
 
-    BB_BENCH_NAME("accumulate/bc_retrieval");
-
     const auto constants_MAX_PUBLIC_CALLS_TO_UNIQUE_CONTRACT_CLASS_IDS = FF(21);
     const auto constants_AVM_RETRIEVED_BYTECODES_TREE_INITIAL_SIZE = FF(1);
     const auto bc_retrieval_REMAINING_BYTECODES = ((constants_MAX_PUBLIC_CALLS_TO_UNIQUE_CONTRACT_CLASS_IDS +
@@ -99,7 +97,7 @@ void bc_retrievalImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
     { // PRIVATE_FUNCTION_ROOT_IS_ZERO_IF_ERROR
         using View = typename std::tuple_element_t<10, ContainerOverSubrelations>::View;
         auto tmp = static_cast<View>(in.get(C::bc_retrieval_error)) *
-                   static_cast<View>(in.get(C::bc_retrieval_private_function_root));
+                   static_cast<View>(in.get(C::bc_retrieval_private_functions_root));
         std::get<10>(evals) += (tmp * scaling_factor);
     }
     { // BYTECODE_ID_IS_ZERO_IF_ERROR

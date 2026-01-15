@@ -1,4 +1,4 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { BufferReader, serializeToBuffer, serializeToFields } from '@aztec/foundation/serialize';
 import type { FieldsOf } from '@aztec/foundation/types';
 
@@ -20,9 +20,9 @@ export class EpochConstantData {
      */
     public vkTreeRoot: Fr,
     /**
-     * Root of the protocol contract tree.
+     * Hash of the protocol contracts list.
      */
-    public protocolContractTreeRoot: Fr,
+    public protocolContractsHash: Fr,
     /**
      * Identifier of the prover of the epoch.
      */
@@ -34,13 +34,7 @@ export class EpochConstantData {
   }
 
   static getFields(fields: FieldsOf<EpochConstantData>) {
-    return [
-      fields.chainId,
-      fields.version,
-      fields.vkTreeRoot,
-      fields.protocolContractTreeRoot,
-      fields.proverId,
-    ] as const;
+    return [fields.chainId, fields.version, fields.vkTreeRoot, fields.protocolContractsHash, fields.proverId] as const;
   }
 
   toFields(): Fr[] {

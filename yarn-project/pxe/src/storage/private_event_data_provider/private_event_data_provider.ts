@@ -1,27 +1,44 @@
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { createLogger } from '@aztec/foundation/log';
 import { BufferReader, serializeToBuffer } from '@aztec/foundation/serialize';
 import type { AztecAsyncArray, AztecAsyncKVStore, AztecAsyncMap } from '@aztec/kv-store';
 import type { EventSelector } from '@aztec/stdlib/abi';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
-import type { TxHash } from '@aztec/stdlib/tx';
+import { L2BlockHash } from '@aztec/stdlib/block';
+import { type InTx, TxHash } from '@aztec/stdlib/tx';
 
-import type { DataProvider } from '../data_provider.js';
+import type { PackedPrivateEvent } from '../../pxe.js';
 
-interface PrivateEventEntry {
+export type PrivateEventDataProviderFilter = {
+  contractAddress: AztecAddress;
+  fromBlock: number;
+  toBlock: number;
+  scopes: AztecAddress[];
+  txHash?: TxHash;
+};
+
+type PrivateEventEntry = {
   msgContent: Buffer;
-  blockNumber: number;
   eventCommitmentIndex: number;
-}
+  l2BlockNumber: number;
+  l2BlockHash: Buffer;
+  txHash: Buffer;
+};
+
+type PrivateEventMetadata = InTx & {
+  contractAddress: AztecAddress;
+  scope: AztecAddress;
+};
 
 /**
  * Stores decrypted private event logs.
  */
-export class PrivateEventDataProvider implements DataProvider {
+export class PrivateEventDataProvider {
   #store: AztecAsyncKVStore;
   /** Array storing the actual private event log entries containing the log content and block number */
   #eventLogs: AztecAsyncArray<PrivateEventEntry>;
-  /** Map from contract_address_recipient_eventSelector to array of indices into #eventLogs for efficient lookup */
+  /** Map from contract_address_scope_eventSelector to array of indices into #eventLogs for efficient lookup */
   #eventLogIndex: AztecAsyncMap<string, number[]>;
   /** Map from eventCommitmentIndex to boolean indicating if log has been seen. */
   #seenLogs: AztecAsyncMap<number, boolean>;
@@ -35,27 +52,31 @@ export class PrivateEventDataProvider implements DataProvider {
     this.#seenLogs = this.#store.openMap('seen_logs');
   }
 
+  #keyFor(contractAddress: AztecAddress, scope: AztecAddress, eventSelector: EventSelector): string {
+    return `${contractAddress.toString()}_${scope.toString()}_${eventSelector.toString()}`;
+  }
+
   /**
    * Store a private event log.
-   * @param contractAddress - The address of the contract that emitted the event.
-   * @param recipient - The recipient of the event.
    * @param eventSelector - The event selector of the event.
    * @param msgContent - The content of the event.
-   * @param txHash - The transaction hash of the event log.
    * @param eventCommitmentIndex - The index of the event commitment in the nullifier tree.
-   * @param blockNumber - The block number in which the event was emitted.
+   * @param metadata
+   *  contractAddress - The address of the contract that emitted the event.
+   *  scope - The address to which the event is scoped.
+   *  txHash - The transaction hash of the event log.
+   *  blockNumber - The block number in which the event was emitted.
    */
   storePrivateEventLog(
-    contractAddress: AztecAddress,
-    recipient: AztecAddress,
     eventSelector: EventSelector,
     msgContent: Fr[],
-    txHash: TxHash,
     eventCommitmentIndex: number,
-    blockNumber: number,
+    metadata: PrivateEventMetadata,
   ): Promise<void> {
+    const { contractAddress, scope, txHash, l2BlockNumber, l2BlockHash } = metadata;
+
     return this.#store.transactionAsync(async () => {
-      const key = `${contractAddress.toString()}_${recipient.toString()}_${eventSelector.toString()}`;
+      const key = this.#keyFor(contractAddress, scope, eventSelector);
 
       // Check if this exact log has already been stored using eventCommitmentIndex as unique identifier
       const hasBeenSeen = await this.#seenLogs.getAsync(eventCommitmentIndex);
@@ -64,13 +85,15 @@ export class PrivateEventDataProvider implements DataProvider {
         return;
       }
 
-      this.logger.verbose('storing private event log', { contractAddress, recipient, msgContent, blockNumber });
+      this.logger.verbose('storing private event log', { contractAddress, scope, msgContent, l2BlockNumber });
 
       const index = await this.#eventLogs.lengthAsync();
       await this.#eventLogs.push({
         msgContent: serializeToBuffer(msgContent),
-        blockNumber,
+        l2BlockNumber,
+        l2BlockHash: l2BlockHash.toBuffer(),
         eventCommitmentIndex,
+        txHash: txHash.toBuffer(),
       });
 
       const existingIndices = (await this.#eventLogIndex.getAsync(key)) || [];
@@ -83,29 +106,28 @@ export class PrivateEventDataProvider implements DataProvider {
 
   /**
    * Returns the private events given search parameters.
-   * @param contractAddress - The address of the contract to get events from.
-   * @param from - The block number to search from.
-   * @param numBlocks - The amount of blocks to search.
-   * @param recipients - The addresses that decrypted the logs.
    * @param eventSelector - The event selector to filter by.
-   * @returns - The event log contents.
+   * @param filter - Filtering criteria:
+   *  contractAddress: The address of the contract to get events from.
+   *  fromBlock: The block number to search from (inclusive).
+   *  toBlock: The block number to search upto (exclusive).
+   *  scope: - The addresses that decrypted the logs.
+   * @returns - The event log contents, augmented with metadata about
+   *  the transaction and block it the event was included in .
    */
   public async getPrivateEvents(
-    contractAddress: AztecAddress,
-    from: number,
-    numBlocks: number,
-    recipients: AztecAddress[],
     eventSelector: EventSelector,
-  ): Promise<Fr[][]> {
-    const events: Array<{ msgContent: Fr[]; blockNumber: number; eventCommitmentIndex: number }> = [];
+    filter: PrivateEventDataProviderFilter,
+  ): Promise<PackedPrivateEvent[]> {
+    const events: Array<{ eventCommitmentIndex: number; event: PackedPrivateEvent }> = [];
 
-    for (const recipient of recipients) {
-      const key = `${contractAddress.toString()}_${recipient.toString()}_${eventSelector.toString()}`;
+    for (const scope of filter.scopes) {
+      const key = this.#keyFor(filter.contractAddress, scope, eventSelector);
       const indices = (await this.#eventLogIndex.getAsync(key)) || [];
 
       for (const index of indices) {
         const entry = await this.#eventLogs.atAsync(index);
-        if (!entry || entry.blockNumber < from || entry.blockNumber >= from + numBlocks) {
+        if (!entry || entry.l2BlockNumber < filter.fromBlock || entry.l2BlockNumber >= filter.toBlock) {
           continue;
         }
 
@@ -113,22 +135,28 @@ export class PrivateEventDataProvider implements DataProvider {
         const reader = BufferReader.asReader(entry.msgContent);
         const numFields = entry.msgContent.length / Fr.SIZE_IN_BYTES;
         const msgContent = reader.readArray(numFields, Fr);
+        const txHash = TxHash.fromBuffer(entry.txHash);
+        const l2BlockHash = L2BlockHash.fromBuffer(entry.l2BlockHash);
+
+        if (filter.txHash && !txHash.equals(filter.txHash)) {
+          continue;
+        }
 
         events.push({
-          msgContent,
-          blockNumber: entry.blockNumber,
           eventCommitmentIndex: entry.eventCommitmentIndex,
+          event: {
+            packedEvent: msgContent,
+            l2BlockNumber: BlockNumber(entry.l2BlockNumber),
+            txHash,
+            l2BlockHash,
+            eventSelector,
+          },
         });
       }
     }
 
     // Sort by eventCommitmentIndex only
     events.sort((a, b) => a.eventCommitmentIndex - b.eventCommitmentIndex);
-
-    return events.map(e => e.msgContent);
-  }
-
-  getSize(): Promise<number> {
-    return this.#eventLogs.lengthAsync();
+    return events.map(ev => ev.event);
   }
 }

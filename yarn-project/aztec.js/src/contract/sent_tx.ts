@@ -1,7 +1,6 @@
 import { promiseWithResolvers } from '@aztec/foundation/promise';
 import { retryUntil } from '@aztec/foundation/retry';
-import type { FieldsOf } from '@aztec/foundation/types';
-import type { AztecNode, PXE } from '@aztec/stdlib/interfaces/client';
+import type { AztecNode } from '@aztec/stdlib/interfaces/client';
 import { TxHash, type TxReceipt, TxStatus } from '@aztec/stdlib/tx';
 
 import type { Wallet } from '../wallet/wallet.js';
@@ -20,7 +19,7 @@ export type WaitOpts = {
 
 export const DefaultWaitOpts: WaitOpts = {
   ignoreDroppedReceiptsFor: 5,
-  timeout: 60,
+  timeout: 300,
   interval: 1,
 };
 
@@ -34,7 +33,7 @@ export class SentTx {
   protected txHash?: TxHash;
 
   constructor(
-    protected pxeWalletOrNode: Wallet | AztecNode | PXE,
+    protected walletOrNode: Wallet | AztecNode,
     sendTx: () => Promise<TxHash>,
   ) {
     const { promise, resolve } = promiseWithResolvers<void>();
@@ -80,7 +79,7 @@ export class SentTx {
    */
   public async getReceipt(): Promise<TxReceipt> {
     const txHash = await this.getTxHash();
-    return await this.pxeWalletOrNode.getTxReceipt(txHash);
+    return await this.walletOrNode.getTxReceipt(txHash);
   }
 
   /**
@@ -88,7 +87,7 @@ export class SentTx {
    * @param opts - Options for configuring the waiting for the tx to be mined.
    * @returns The transaction receipt.
    */
-  public async wait(opts?: WaitOpts): Promise<FieldsOf<TxReceipt>> {
+  public async wait(opts?: WaitOpts): Promise<TxReceipt> {
     const receipt = await this.waitForReceipt(opts);
     if (receipt.status !== TxStatus.SUCCESS && !opts?.dontThrowOnRevert) {
       throw new Error(
@@ -105,7 +104,7 @@ export class SentTx {
 
     return await retryUntil(
       async () => {
-        const txReceipt = await this.pxeWalletOrNode.getTxReceipt(txHash);
+        const txReceipt = await this.walletOrNode.getTxReceipt(txHash);
         // If receipt is not yet available, try again
         if (txReceipt.status === TxStatus.PENDING) {
           return undefined;

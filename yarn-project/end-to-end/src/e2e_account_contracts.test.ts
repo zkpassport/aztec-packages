@@ -2,30 +2,28 @@ import { DefaultAccountInterface } from '@aztec/accounts/defaults';
 import { EcdsaKAccountContract } from '@aztec/accounts/ecdsa';
 import { SchnorrAccountContract } from '@aztec/accounts/schnorr';
 import { SingleKeyAccountContract } from '@aztec/accounts/single_key';
-import {
-  type Account,
-  type AccountContract,
-  AccountManager,
-  AztecAddress,
-  type AztecNode,
-  BaseAccount,
-  CompleteAddress,
-  FeeJuicePaymentMethod,
-  Fr,
-  GrumpkinScalar,
-  type Logger,
-  type PXE,
-  type Wallet,
-  getAccountContractAddress,
-} from '@aztec/aztec.js';
-import { randomBytes } from '@aztec/foundation/crypto';
+import { type Account, type AccountContract, getAccountContractAddress } from '@aztec/aztec.js/account';
+import { BaseAccount } from '@aztec/aztec.js/account';
+import { AztecAddress, CompleteAddress } from '@aztec/aztec.js/addresses';
+import { Fr, GrumpkinScalar } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import { randomBytes } from '@aztec/foundation/crypto/random';
 import { ChildContract } from '@aztec/noir-test-contracts.js/Child';
+import { createPXE, getPXEConfig } from '@aztec/pxe/server';
 import { deriveSigningKey } from '@aztec/stdlib/keys';
-import { TestWallet } from '@aztec/test-wallet';
+import { TestWallet } from '@aztec/test-wallet/server';
 
 import { setup } from './fixtures/utils.js';
 
 export class TestWalletInternals extends TestWallet {
+  static override async create(node: AztecNode): Promise<TestWalletInternals> {
+    const pxeConfig = getPXEConfig();
+    pxeConfig.proverEnabled = false;
+    const pxe = await createPXE(node, pxeConfig);
+    return new TestWalletInternals(pxe, node);
+  }
+
   replaceAccountAt(account: Account, address: AztecAddress) {
     this.accounts.set(address.toString(), account);
   }
@@ -35,11 +33,10 @@ const itShouldBehaveLikeAnAccountContract = (
   getAccountContract: (encryptionKey: GrumpkinScalar) => AccountContract,
 ) => {
   describe(`behaves like an account contract`, () => {
-    let pxe: PXE;
     let aztecNode: AztecNode;
     let logger: Logger;
     let teardown: () => Promise<void>;
-    let wallet: Wallet;
+    let wallet: TestWalletInternals;
     let completeAddress: CompleteAddress;
     let child: ChildContract;
 
@@ -47,8 +44,8 @@ const itShouldBehaveLikeAnAccountContract = (
       const secret = Fr.random();
       const salt = Fr.random();
       const signingKey = deriveSigningKey(secret);
-      const accountContract = getAccountContract(signingKey);
-      const address = await getAccountContractAddress(accountContract, secret, salt);
+      const contract = getAccountContract(signingKey);
+      const address = await getAccountContractAddress(contract, secret, salt);
       const accountData = {
         secret,
         signingKey,
@@ -56,20 +53,16 @@ const itShouldBehaveLikeAnAccountContract = (
         address,
       };
 
-      ({ logger, pxe, teardown, aztecNode } = await setup(0, { initialFundedAccounts: [accountData] }));
-      wallet = new TestWalletInternals(pxe);
+      ({ logger, teardown, aztecNode } = await setup(0, { initialFundedAccounts: [accountData] }));
+      wallet = await TestWalletInternals.create(aztecNode);
 
-      const accountManager = await AccountManager.create(wallet, pxe, secret, accountContract, salt);
+      const accountManager = await wallet.createAccount({ secret, contract, salt });
       completeAddress = await accountManager.getCompleteAddress();
       if (await accountManager.hasInitializer()) {
         // The account is pre-funded and can pay for its own fee.
-        const paymentMethod = new FeeJuicePaymentMethod(address);
-        await accountManager.deploy({ fee: { paymentMethod } }).wait();
-      } else {
-        await accountManager.register();
+        const deployMethod = await accountManager.getDeployMethod();
+        await deployMethod.send({ from: AztecAddress.ZERO }).wait();
       }
-
-      (wallet as TestWalletInternals).replaceAccountAt(await accountManager.getAccount(), address);
 
       child = await ChildContract.deploy(wallet).send({ from: address }).deployed();
     });
@@ -93,10 +86,10 @@ const itShouldBehaveLikeAnAccountContract = (
       const accountInterface = new DefaultAccountInterface(
         randomContract.getAuthWitnessProvider(completeAddress),
         completeAddress,
-        await pxe.getNodeInfo(),
+        await wallet.getChainInfo(),
       );
       const account = new BaseAccount(accountInterface);
-      (wallet as TestWalletInternals).replaceAccountAt(account, completeAddress.address);
+      wallet.replaceAccountAt(account, completeAddress.address);
       await expect(child.methods.value(42).simulate({ from: completeAddress.address })).rejects.toThrow(
         'Cannot satisfy constraint',
       );

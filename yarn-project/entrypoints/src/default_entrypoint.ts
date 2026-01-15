@@ -1,8 +1,8 @@
 import { FunctionType } from '@aztec/stdlib/abi';
-import { HashedValues, TxContext, TxExecutionRequest } from '@aztec/stdlib/tx';
+import type { GasSettings } from '@aztec/stdlib/gas';
+import { type ExecutionPayload, HashedValues, TxContext, TxExecutionRequest } from '@aztec/stdlib/tx';
 
-import type { EntrypointInterface, FeeOptions, TxExecutionOptions } from './interfaces.js';
-import type { ExecutionPayload } from './payload.js';
+import type { EntrypointInterface } from './interfaces.js';
 
 /**
  * Default implementation of the entrypoint interface. It calls a function on a contract directly
@@ -13,14 +13,7 @@ export class DefaultEntrypoint implements EntrypointInterface {
     private rollupVersion: number,
   ) {}
 
-  async createTxExecutionRequest(
-    exec: ExecutionPayload,
-    fee: FeeOptions,
-    options: TxExecutionOptions,
-  ): Promise<TxExecutionRequest> {
-    if (options.txNonce || options.cancellable !== undefined) {
-      throw new Error('TxExecutionOptions are not supported in DefaultEntrypoint');
-    }
+  async createTxExecutionRequest(exec: ExecutionPayload, gasSettings: GasSettings): Promise<TxExecutionRequest> {
     // Initial request with calls, authWitnesses and capsules
     const { calls, authWitnesses, capsules, extraHashedArgs } = exec;
 
@@ -42,7 +35,7 @@ export class DefaultEntrypoint implements EntrypointInterface {
       call.to,
       call.selector,
       hashedArguments[0].hash,
-      new TxContext(this.chainId, this.rollupVersion, fee.gasSettings),
+      new TxContext(this.chainId, this.rollupVersion, gasSettings),
       [...hashedArguments, ...extraHashedArgs],
       authWitnesses,
       capsules,

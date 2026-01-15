@@ -15,8 +15,6 @@ void bitwiseImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
 {
     using C = ColumnAndShifts;
 
-    BB_BENCH_NAME("accumulate/bitwise");
-
     const auto constants_MEM_TAG_FF = FF(0);
     const auto bitwise_TAG_A_DIFF = (in.get(C::bitwise_tag_a) - constants_MEM_TAG_FF);
     const auto bitwise_TAG_AB_DIFF = (in.get(C::bitwise_tag_a) - in.get(C::bitwise_tag_b));
@@ -75,7 +73,7 @@ void bitwiseImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
     }
     { // RES_TAG_SHOULD_MATCH_INPUT
         using View = typename std::tuple_element_t<9, ContainerOverSubrelations>::View;
-        auto tmp = static_cast<View>(in.get(C::bitwise_start)) *
+        auto tmp = (FF(1) - static_cast<View>(in.get(C::bitwise_err))) * static_cast<View>(in.get(C::bitwise_start)) *
                    (static_cast<View>(in.get(C::bitwise_tag_c)) - static_cast<View>(in.get(C::bitwise_tag_a)));
         std::get<9>(evals) += (tmp * scaling_factor);
     }

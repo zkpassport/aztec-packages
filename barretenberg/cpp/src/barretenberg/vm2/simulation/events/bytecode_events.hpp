@@ -13,8 +13,6 @@
 
 namespace bb::avm2::simulation {
 
-using BytecodeId = FF;
-
 // Storage and decomposition of bytecode into sliding window.
 struct BytecodeDecompositionEvent {
     BytecodeId bytecode_id;
@@ -49,7 +47,7 @@ struct InstructionFetchingEvent {
     // TODO: Do we want to have a dep on Instruction here or do we redefine what we need?
     Instruction instruction;
     std::shared_ptr<std::vector<uint8_t>> bytecode;
-    std::optional<InstrDeserializationError> error;
+    std::optional<InstrDeserializationEventError> error;
 
     // To be used with deduplicating event emitters.
     using Key = std::tuple<BytecodeId, uint32_t>;

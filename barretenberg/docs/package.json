@@ -5,13 +5,14 @@
   "scripts": {
     "docs": "yarn preprocess && docusaurus start --host ${HOST:-localhost}",
     "dev": "HOST=0.0.0.0 ENV=dev yarn run docs",
+    "dev:netlify": "yarn netlify dev",
     "build": "yarn clear && yarn preprocess && ./scripts/build_docs.sh && docusaurus build",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "./scripts/clean.sh",
     "serve": "docusaurus serve",
-    "typecheck": "tsc",
-    "test": "TS_NODE_PROJECT=./tsconfig.test.json mocha",
+    "typecheck": "yarn tsgo",
+    "test": "NODE_NO_WARNINGS=1 node --experimental-vm-modules ./node_modules/.bin/jest",
     "preprocess": "node src/preprocess/index.js",
     "preprocess:clean": "node src/preprocess/index.js clean"
   },
@@ -21,9 +22,10 @@
     "@docusaurus/plugin-client-redirects": "3.7.0",
     "@docusaurus/plugin-ideal-image": "^3.7.0",
     "@docusaurus/preset-classic": "3.7.0",
+    "@getbrevo/brevo": "^3.0.1",
     "@mdx-js/react": "^3.0.0",
     "@noir-lang/noir_js": "1.0.0-beta.8",
-    "axios": "^1.8.3",
+    "axios": "^1.12.0",
     "clsx": "^2.0.0",
     "fs-extra": "^11.3.0",
     "netlify": "^22.2.2",
@@ -38,17 +40,25 @@
     "@docusaurus/module-type-aliases": "3.7.0",
     "@docusaurus/tsconfig": "3.7.0",
     "@docusaurus/types": "3.7.0",
-    "@types/chai": "4",
-    "@types/expect": "^24.3.2",
-    "@types/mocha": "^10.0.10",
-    "chai": "4",
-    "mocha": "^11.7.1",
+    "@jest/globals": "^30.0.0",
+    "@swc/core": "^1.10.0",
+    "@swc/jest": "^0.2.37",
+    "@types/jest": "^30.0.0",
+    "jest": "^30.0.0",
     "netlify-cli": "^17.23.0",
     "nodemon": "^3.1.10",
-    "ts-mocha": "^11.1.0",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "~5.6.2"
+    "typescript": "~5.6.2",
+    "@typescript/native-preview": "7.0.0-dev.20251126.1"
+  },
+  "jest": {
+    "testRegex": "./examples/.*\\.test\\.ts$",
+    "transform": {
+      "^.+\\.tsx?$": ["@swc/jest"]
+    },
+    "extensionsToTreatAsEsm": [".ts"],
+    "testTimeout": 120000
   },
   "browserslist": {
     "production": [
@@ -64,6 +74,10 @@
   },
   "engines": {
     "node": ">=18.0"
+  },
+  "resolutions": {
+    "tar-fs": "^3.1.1",
+    "@docusaurus/mdx-loader/image-size": "1.2.1"
   },
   "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }

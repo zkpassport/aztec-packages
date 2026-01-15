@@ -1,5 +1,10 @@
-import { type AztecAddress, EthAddress, ProvenTx, Tx, TxReceipt, TxStatus, waitForProven } from '@aztec/aztec.js';
-import { type ExtendedViemWalletClient, RollupContract } from '@aztec/ethereum';
+import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { EthAddress } from '@aztec/aztec.js/addresses';
+import { waitForProven } from '@aztec/aztec.js/contracts';
+import { Tx, TxReceipt, TxStatus } from '@aztec/aztec.js/tx';
+import { RollupContract } from '@aztec/ethereum/contracts';
+import type { ExtendedViemWalletClient } from '@aztec/ethereum/types';
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { parseBooleanEnv } from '@aztec/foundation/config';
 import { getTestData, isGenerateTestDataEnabled } from '@aztec/foundation/testing';
 import { updateProtocolCircuitSampleInputs } from '@aztec/foundation/testing/files';
@@ -7,9 +12,10 @@ import type { FieldsOf } from '@aztec/foundation/types';
 import { FeeJuicePortalAbi, TestERC20Abi } from '@aztec/l1-artifacts';
 import { Gas } from '@aztec/stdlib/gas';
 import { PrivateKernelTailCircuitPublicInputs } from '@aztec/stdlib/kernel';
-import { ClientIvcProof } from '@aztec/stdlib/proofs';
+import { ChonkProof } from '@aztec/stdlib/proofs';
 import type { CircuitName } from '@aztec/stdlib/stats';
 import { TX_ERROR_INVALID_PROOF } from '@aztec/stdlib/tx';
+import { ProvenTx, proveInteraction } from '@aztec/test-wallet/server';
 
 import TOML from '@iarna/toml';
 import '@jest/globals';
@@ -28,7 +34,7 @@ describe('full_prover', () => {
   const COINBASE_ADDRESS = EthAddress.random();
   const t = new FullProverTest('full_prover', 1, COINBASE_ADDRESS, REAL_PROOFS);
 
-  let { provenAssets, accounts, tokenSim, logger, cheatCodes } = t;
+  let { provenAsset, accounts, tokenSim, logger, cheatCodes, provenWallet, aztecNode } = t;
   let sender: AztecAddress;
   let recipient: AztecAddress;
 
@@ -43,7 +49,7 @@ describe('full_prover', () => {
     await t.applyMintSnapshot();
     await t.setup();
 
-    ({ provenAssets, accounts, tokenSim, logger, cheatCodes } = t);
+    ({ provenAsset, accounts, tokenSim, logger, cheatCodes, provenWallet, aztecNode } = t);
     [sender, recipient] = accounts;
 
     rollup = new RollupContract(t.l1Contracts.l1Client, t.l1Contracts.l1ContractAddresses.rollupAddress);
@@ -86,21 +92,21 @@ describe('full_prover', () => {
       );
 
       // Create the two transactions
-      const privateBalance = await provenAssets[0].methods.balance_of_private(sender).simulate({ from: sender });
+      const privateBalance = await provenAsset.methods.balance_of_private(sender).simulate({ from: sender });
       const privateSendAmount = privateBalance / 10n;
       expect(privateSendAmount).toBeGreaterThan(0n);
-      const privateInteraction = provenAssets[0].methods.transfer(recipient, privateSendAmount);
+      const privateInteraction = provenAsset.methods.transfer(recipient, privateSendAmount);
 
-      const publicBalance = await provenAssets[1].methods.balance_of_public(sender).simulate({ from: sender });
+      const publicBalance = await provenAsset.methods.balance_of_public(sender).simulate({ from: sender });
       const publicSendAmount = publicBalance / 10n;
       expect(publicSendAmount).toBeGreaterThan(0n);
-      const publicInteraction = provenAssets[1].methods.transfer_in_public(sender, recipient, publicSendAmount, 0);
+      const publicInteraction = provenAsset.methods.transfer_in_public(sender, recipient, publicSendAmount, 0);
 
       // Prove them
       logger.info(`Proving txs`);
       const [publicProvenTx, privateProvenTx] = await Promise.all([
-        publicInteraction.prove({ from: sender }),
-        privateInteraction.prove({ from: sender }),
+        proveInteraction(provenWallet, publicInteraction, { from: sender }),
+        proveInteraction(provenWallet, privateInteraction, { from: sender }),
       ]);
 
       // Verify them
@@ -131,8 +137,8 @@ describe('full_prover', () => {
       await cheatCodes.rollup.advanceToNextEpoch();
 
       const rewardsBeforeCoinbase = await rollup.getSequencerRewards(COINBASE_ADDRESS);
-      const rewardsBeforeProver = await rollup.getSpecificProverRewardsForEpoch(epoch, t.proverAddress);
-      const oldProvenBlockNumber = await rollup.getProvenBlockNumber();
+      const rewardsBeforeProver = await rollup.getSpecificProverRewardsForEpoch(BigInt(epoch), t.proverAddress);
+      const oldProvenCheckpointNumber = await rollup.getProvenCheckpointNumber();
 
       // And wait for the first pair of txs to be proven
       logger.info(`Awaiting proof for the previous epoch`);
@@ -143,26 +149,27 @@ describe('full_prover', () => {
         }),
       );
 
-      const newProvenBlockNumber = await rollup.getProvenBlockNumber();
-      expect(newProvenBlockNumber).toBeGreaterThan(oldProvenBlockNumber);
-      expect(await rollup.getBlockNumber()).toBe(newProvenBlockNumber);
+      const newProvenCheckpointNumber = await rollup.getProvenCheckpointNumber();
+      expect(newProvenCheckpointNumber).toBeGreaterThan(oldProvenCheckpointNumber);
+      expect(await rollup.getCheckpointNumber()).toBe(newProvenCheckpointNumber);
 
       logger.info(`checking rewards for coinbase: ${COINBASE_ADDRESS.toString()}`);
       const rewardsAfterCoinbase = await rollup.getSequencerRewards(COINBASE_ADDRESS);
       expect(rewardsAfterCoinbase).toBeGreaterThan(rewardsBeforeCoinbase);
 
-      const rewardsAfterProver = await rollup.getSpecificProverRewardsForEpoch(epoch, t.proverAddress);
+      const rewardsAfterProver = await rollup.getSpecificProverRewardsForEpoch(BigInt(epoch), t.proverAddress);
       expect(rewardsAfterProver).toBeGreaterThan(rewardsBeforeProver);
 
-      const blockReward = await rollup.getBlockReward();
+      const reward = await rollup.getCheckpointReward();
+      const newProvenBlockNumber = Number(newProvenCheckpointNumber);
       const fees = (
         await Promise.all([
-          t.aztecNode.getBlock(Number(newProvenBlockNumber - 1n)),
-          t.aztecNode.getBlock(Number(newProvenBlockNumber)),
+          t.aztecNode.getBlock(BlockNumber(newProvenBlockNumber - 1)),
+          t.aztecNode.getBlock(BlockNumber(newProvenBlockNumber)),
         ])
       ).map(b => b!.header.totalFees.toBigInt());
 
-      const totalRewards = fees.map(fee => fee + blockReward).reduce((acc, reward) => acc + reward, 0n);
+      const totalRewards = fees.map(fee => fee + reward).reduce((acc, reward) => acc + reward, 0n);
       const sequencerGain = rewardsAfterCoinbase - rewardsBeforeCoinbase;
       const proverGain = rewardsAfterProver - rewardsBeforeProver;
 
@@ -177,21 +184,21 @@ describe('full_prover', () => {
       return;
     }
     // Create the two transactions
-    const privateBalance = await provenAssets[0].methods.balance_of_private(sender).simulate({ from: sender });
+    const privateBalance = await provenAsset.methods.balance_of_private(sender).simulate({ from: sender });
     const privateSendAmount = privateBalance / 20n;
     expect(privateSendAmount).toBeGreaterThan(0n);
-    const firstPrivateInteraction = provenAssets[0].methods.transfer(recipient, privateSendAmount);
+    const firstPrivateInteraction = provenAsset.methods.transfer(recipient, privateSendAmount);
 
-    const publicBalance = await provenAssets[1].methods.balance_of_public(sender).simulate({ from: sender });
+    const publicBalance = await provenAsset.methods.balance_of_public(sender).simulate({ from: sender });
     const publicSendAmount = publicBalance / 10n;
     expect(publicSendAmount).toBeGreaterThan(0n);
-    const publicInteraction = provenAssets[1].methods.transfer_in_public(sender, recipient, publicSendAmount, 0);
+    const publicInteraction = provenAsset.methods.transfer_in_public(sender, recipient, publicSendAmount, 0);
 
     // Prove them
     logger.info(`Proving txs`);
     const [publicProvenTx, firstPrivateProvenTx] = await Promise.all([
-      publicInteraction.prove({ from: sender }),
-      firstPrivateInteraction.prove({ from: sender }),
+      proveInteraction(provenWallet, publicInteraction, { from: sender }),
+      proveInteraction(provenWallet, firstPrivateInteraction, { from: sender }),
     ]);
 
     // Sends the txs to node and awaits them to be mined separately, so they land on different blocks,
@@ -204,11 +211,13 @@ describe('full_prover', () => {
     // Create and send a set of 3 txs for the second block,
     // so we end up with three blocks and have merge and block-merge circuits
     const secondBlockInteractions = [
-      provenAssets[0].methods.transfer(recipient, privateSendAmount),
-      provenAssets[0].methods.set_admin(sender),
-      provenAssets[1].methods.transfer_in_public(sender, recipient, publicSendAmount, 0),
+      provenAsset.methods.transfer(recipient, privateSendAmount),
+      provenAsset.methods.set_admin(sender),
+      provenAsset.methods.transfer_in_public(sender, recipient, publicSendAmount, 0),
     ];
-    const secondBlockProvenTxs = await Promise.all(secondBlockInteractions.map(p => p.prove({ from: sender })));
+    const secondBlockProvenTxs = await Promise.all(
+      secondBlockInteractions.map(p => proveInteraction(provenWallet, p, { from: sender })),
+    );
     const secondBlockTxs = await Promise.all(secondBlockProvenTxs.map(p => p.send()));
     await Promise.all(secondBlockTxs.map(t => t.wait({ timeout: 300, interval: 10 })));
 
@@ -306,9 +315,8 @@ describe('full_prover', () => {
       // Create and prove a tx
       logger.info(`Creating and proving tx`);
       const sendAmount = 1n;
-      const interaction = provenAssets[0].methods.transfer(recipient, sendAmount);
-      const provenTx = await interaction.prove({ from: sender });
-      const wallet = (provenTx as any).wallet;
+      const interaction = provenAsset.methods.transfer(recipient, sendAmount);
+      const provenTx = await proveInteraction(provenWallet, interaction, { from: sender });
 
       // Verify the tx proof
       logger.info(`Verifying the valid tx proof`);
@@ -320,9 +328,9 @@ describe('full_prover', () => {
       const data = provenTx.data;
       const invalidTxs = await Promise.all(
         Array.from({ length: NUM_INVALID_TXS }, async (_, i) => {
-          // Use a random ClientIvcProof and alter the public tx data to generate a unique invalid tx hash
+          // Use a random ChonkProof and alter the public tx data to generate a unique invalid tx hash
           const invalidProvenTx = new ProvenTx(
-            wallet,
+            aztecNode,
             await Tx.create({
               data: new PrivateKernelTailCircuitPublicInputs(
                 data.constants,
@@ -332,7 +340,7 @@ describe('full_prover', () => {
                 data.forPublic,
                 data.forRollup,
               ),
-              clientIvcProof: ClientIvcProof.random(),
+              chonkProof: ChonkProof.random(),
               contractClassLogFields: provenTx.contractClassLogFields,
               publicFunctionCalldata: provenTx.publicFunctionCalldata,
             }),

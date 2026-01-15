@@ -17,7 +17,7 @@ import {Proposal} from "@aztec/governance/interfaces/IGovernance.sol";
 import {ProposalLib} from "@aztec/governance/libraries/ProposalLib.sol";
 import {GovernanceProposer} from "@aztec/governance/proposer/GovernanceProposer.sol";
 import {G1Point, G2Point} from "@aztec/shared/libraries/BN254Lib.sol";
-import {CompressedTimeMath, CompressedTimestamp} from "@aztec/shared/libraries/CompressedTimeMath.sol";
+import {CompressedTimeMath, CompressedTimestamp, CompressedEpoch} from "@aztec/shared/libraries/CompressedTimeMath.sol";
 import {IERC20} from "@oz/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@oz/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@oz/utils/math/Math.sol";
@@ -26,7 +26,7 @@ import {SafeCast} from "@oz/utils/math/SafeCast.sol";
 // None -> Does not exist in our setup
 // Validating -> Participating as validator
 // Zombie -> Not participating as validator, but have funds in setup,
-// 			 hit if slashes and going below the minimum
+//     hit if slashes and going below the minimum
 // Exiting -> In the process of exiting the system
 enum Status {
   NONE,
@@ -78,13 +78,15 @@ struct AttesterView {
 struct StakingStorage {
   IERC20 stakingAsset;
   address slasher;
+  uint96 localEjectionThreshold;
   GSE gse;
   CompressedTimestamp exitDelay;
   mapping(address attester => Exit) exits;
   CompressedStakingQueueConfig queueConfig;
   StakingQueue entryQueue;
-  Epoch nextFlushableEpoch;
-  uint256 localEjectionThreshold;
+  CompressedEpoch nextFlushableEpoch;
+  uint32 availableValidatorFlushes;
+  bool isBootstrapped;
 }
 
 library StakingLib {
@@ -96,6 +98,8 @@ library StakingLib {
   using StakingQueueConfigLib for StakingQueueConfig;
   using CompressedTimeMath for CompressedTimestamp;
   using CompressedTimeMath for Timestamp;
+  using CompressedTimeMath for CompressedEpoch;
+  using CompressedTimeMath for Epoch;
 
   bytes32 private constant STAKING_SLOT = keccak256("aztec.core.staking.storage");
 
@@ -114,7 +118,7 @@ library StakingLib {
     store.slasher = _slasher;
     store.queueConfig = _config.compress();
     store.entryQueue.init();
-    store.localEjectionThreshold = _localEjectionThreshold;
+    store.localEjectionThreshold = _localEjectionThreshold.toUint96();
   }
 
   function setSlasher(address _slasher) internal {
@@ -130,7 +134,7 @@ library StakingLib {
     StakingStorage storage store = getStorage();
 
     uint256 oldLocalEjectionThreshold = store.localEjectionThreshold;
-    store.localEjectionThreshold = _localEjectionThreshold;
+    store.localEjectionThreshold = _localEjectionThreshold.toUint96();
 
     emit IStakingCore.LocalEjectionThresholdUpdated(oldLocalEjectionThreshold, _localEjectionThreshold);
   }
@@ -298,16 +302,27 @@ library StakingLib {
     uint256 amount = store.gse.ACTIVATION_THRESHOLD();
 
     store.stakingAsset.safeTransferFrom(msg.sender, address(this), amount);
-    store.entryQueue.enqueue(
-      _attester, _withdrawer, _publicKeyInG1, _publicKeyInG2, _proofOfPossession, _moveWithLatestRollup
-    );
+    store.entryQueue
+      .enqueue(_attester, _withdrawer, _publicKeyInG1, _publicKeyInG2, _proofOfPossession, _moveWithLatestRollup);
     emit IStakingCore.ValidatorQueued(_attester, _withdrawer);
+  }
+
+  function updateAndGetAvailableFlushes() internal returns (uint256) {
+    (uint256 flushes, Epoch currentEpoch, bool shouldUpdateState) = _calculateAvailableFlushes();
+
+    if (shouldUpdateState) {
+      StakingStorage storage store = getStorage();
+      store.nextFlushableEpoch = (currentEpoch + Epoch.wrap(1)).compress();
+      store.availableValidatorFlushes = flushes.toUint32();
+    }
+
+    return flushes;
   }
 
   /**
    * @notice Processes the validator entry queue to add new validators to the active set
-   * @dev Processes up to _maxAddableValidators entries from the queue, attempting to deposit each validator into
-   *      the Governance Staking Escrow (GSE).
+   * @dev Processes up to min(maxAddableValidators, _toAdd) entries from the queue,
+   *      attempting to deposit each validator into the Governance Staking Escrow (GSE).
    *
    *      For each validator:
    *      - Dequeues their entry from the queue
@@ -316,48 +331,50 @@ library StakingLib {
    *      - On failure: refunds their stake and emits FailedDeposit event
    *
    *      The function will revert if:
-   *      - The current epoch is before nextFlushableEpoch (max 1 flush per epoch). This limit:
-   *        1. Controls validator set growth by only allowing a fixed number of additions per epoch (we can flush at
-   *           most maxQueueFlushSize validators at once - hence the limit)
-   *        2. Aligns with committee selection which happens once per epoch anyway
-   *        3. Groups validator additions into epoch-sized chunks for efficient binary searches (fewer snapshots in
-   *           GSE)
    *      - A deposit fails due to out of gas (to prevent queue draining attacks)
    *
    *      The function approves the GSE contract to spend the total stake amount needed for all deposits,
    *      then revokes the approval after processing is complete.
+   *      It also updates the available validator flushes
    *
+   * @param _toAdd - The max number the caller will try to add
    */
-  function flushEntryQueue() internal {
-    uint256 maxAddableValidators = getEntryQueueFlushSize();
+  function flushEntryQueue(uint256 _toAdd) internal {
+    uint256 maxAddableValidators = updateAndGetAvailableFlushes();
+
     if (maxAddableValidators == 0) {
       return;
     }
 
-    Epoch currentEpoch = TimeLib.epochFromTimestamp(Timestamp.wrap(block.timestamp));
     StakingStorage storage store = getStorage();
-    require(store.nextFlushableEpoch <= currentEpoch, Errors.Staking__QueueAlreadyFlushed(currentEpoch));
-    store.nextFlushableEpoch = currentEpoch + Epoch.wrap(1);
-    uint256 amount = store.gse.ACTIVATION_THRESHOLD();
 
     uint256 queueLength = store.entryQueue.length();
-    uint256 numToDequeue = Math.min(maxAddableValidators, queueLength);
+    uint256 numToDequeue = Math.min(Math.min(maxAddableValidators, queueLength), _toAdd);
+
+    if (numToDequeue == 0) {
+      return;
+    }
+
     // Approve the GSE to spend the total stake amount needed for all deposits.
+    uint256 amount = store.gse.ACTIVATION_THRESHOLD();
     store.stakingAsset.approve(address(store.gse), amount * numToDequeue);
+    uint256 depositCount = 0;
     for (uint256 i = 0; i < numToDequeue; i++) {
       DepositArgs memory args = store.entryQueue.dequeue();
-      (bool success, bytes memory data) = address(store.gse).call(
-        abi.encodeWithSelector(
-          IGSECore.deposit.selector,
-          args.attester,
-          args.withdrawer,
-          args.publicKeyInG1,
-          args.publicKeyInG2,
-          args.proofOfPossession,
-          args.moveWithLatestRollup
-        )
-      );
+      (bool success, bytes memory data) = address(store.gse)
+        .call(
+          abi.encodeWithSelector(
+            IGSECore.deposit.selector,
+            args.attester,
+            args.withdrawer,
+            args.publicKeyInG1,
+            args.publicKeyInG2,
+            args.proofOfPossession,
+            args.moveWithLatestRollup
+          )
+        );
       if (success) {
+        depositCount++;
         emit IStakingCore.Deposit(
           args.attester, args.withdrawer, args.publicKeyInG1, args.publicKeyInG2, args.proofOfPossession, amount
         );
@@ -376,6 +393,17 @@ library StakingLib {
       }
     }
     store.stakingAsset.approve(address(store.gse), 0);
+
+    store.availableValidatorFlushes -= depositCount.toUint32();
+
+    // If we have reached the bootstrap size, mark it as bootstrapped such that we don't re-enter it.
+    if (
+      !store.isBootstrapped
+        && getAttesterCountAtTime(Timestamp.wrap(block.timestamp))
+          >= store.queueConfig.decompress().bootstrapValidatorSetSize
+    ) {
+      store.isBootstrapped = true;
+    }
   }
 
   /**
@@ -442,7 +470,7 @@ library StakingLib {
   }
 
   function getNextFlushableEpoch() internal view returns (Epoch) {
-    return getStorage().nextFlushableEpoch;
+    return getStorage().nextFlushableEpoch.decompress();
   }
 
   function getEntryQueueLength() internal view returns (uint256) {
@@ -467,6 +495,10 @@ library StakingLib {
 
   function getAttesterAtIndex(uint256 _index) internal view returns (address) {
     return getStorage().gse.getAttesterFromIndexAtTime(address(this), _index, Timestamp.wrap(block.timestamp));
+  }
+
+  function getEntryQueueAt(uint256 _index) internal view returns (DepositArgs memory) {
+    return getStorage().entryQueue.at(_index);
   }
 
   function getAttesterFromIndexAtTime(uint256 _index, Timestamp _timestamp) internal view returns (address) {
@@ -526,40 +558,49 @@ library StakingLib {
    *
    *      All phases are subject to a hard cap of `maxQueueFlushSize`.
    *
-   *      The motivation for floodgates is that the whole system starts producing blocks with what is considered
+   *      The motivation for floodgates is that the whole system starts producing checkpoints with what is considered
    *      a sufficiently decentralized set of validators.
    *
    *      Note that Governance has the ability to close the validator set for this instance by setting
    *      `normalFlushSizeMin` to zero and `normalFlushSizeQuotient` to a very high value. If this is done, this
    *      function will always return zero and no new validator can enter.
    *
+   * @param _activeAttesterCount - The number of active attesters
    * @return - The maximum number of validators that could be flushed from the entry queue.
    */
-  function getEntryQueueFlushSize() internal view returns (uint256) {
+  function getEntryQueueFlushSize(uint256 _activeAttesterCount) internal view returns (uint256) {
     StakingStorage storage store = getStorage();
     StakingQueueConfig memory config = store.queueConfig.decompress();
 
-    uint256 activeAttesterCount = getAttesterCountAtTime(Timestamp.wrap(block.timestamp));
     uint256 queueSize = store.entryQueue.length();
 
     // Only if there is bootstrap values configured will we look into bootstrap or growth phases.
-    if (config.bootstrapValidatorSetSize > 0) {
+    if (config.bootstrapValidatorSetSize > 0 && !store.isBootstrapped) {
       // If bootstrap:
-      if (activeAttesterCount == 0 && queueSize < config.bootstrapValidatorSetSize) {
+      if (_activeAttesterCount == 0 && queueSize < config.bootstrapValidatorSetSize) {
         return 0;
       }
 
       // If growth:
-      if (activeAttesterCount < config.bootstrapValidatorSetSize) {
-        return Math.min(config.bootstrapFlushSize, config.maxQueueFlushSize);
+      if (_activeAttesterCount < config.bootstrapValidatorSetSize) {
+        return config.bootstrapFlushSize;
       }
     }
 
     // If normal:
     return Math.min(
-      Math.max(activeAttesterCount / config.normalFlushSizeQuotient, config.normalFlushSizeMin),
+      Math.max(_activeAttesterCount / config.normalFlushSizeQuotient, config.normalFlushSizeMin),
       config.maxQueueFlushSize
     );
+  }
+
+  function getAvailableValidatorFlushes() internal view returns (uint256) {
+    (uint256 flushes,,) = _calculateAvailableFlushes();
+    return flushes;
+  }
+
+  function getCachedAvailableValidatorFlushes() internal view returns (uint256) {
+    return getStorage().availableValidatorFlushes;
   }
 
   function getStorage() internal pure returns (StakingStorage storage storageStruct) {
@@ -567,5 +608,23 @@ library StakingLib {
     assembly {
       storageStruct.slot := position
     }
+  }
+
+  function _calculateAvailableFlushes()
+    private
+    view
+    returns (uint256 flushes, Epoch currentEpoch, bool shouldUpdateState)
+  {
+    StakingStorage storage store = getStorage();
+    currentEpoch = TimeLib.epochFromTimestamp(Timestamp.wrap(block.timestamp));
+
+    if (store.nextFlushableEpoch.decompress() > currentEpoch) {
+      return (store.availableValidatorFlushes, currentEpoch, false);
+    }
+
+    uint256 activeAttesterCount = getAttesterCountAtTime(Timestamp.wrap(block.timestamp));
+    uint256 newFlushes = getEntryQueueFlushSize(activeAttesterCount);
+
+    return (newFlushes, currentEpoch, true);
   }
 }

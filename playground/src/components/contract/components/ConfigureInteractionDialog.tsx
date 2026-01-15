@@ -1,7 +1,8 @@
-import DialogTitle from '@mui/material/DialogTitle';
-import Dialog from '@mui/material/Dialog';
-import { AuthWitness, ContractFunctionInteraction, type SendMethodOptions } from '@aztec/aztec.js';
+import { AuthWitness } from '@aztec/aztec.js/authorization';
+import { type SendInteractionOptions, ContractFunctionInteraction } from '@aztec/aztec.js/contracts';
 import Button from '@mui/material/Button';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
 import TextField from '@mui/material/TextField';
 import { useContext, useEffect, useState } from 'react';
 import { AztecContext } from '../../../aztecContext';
@@ -21,7 +22,7 @@ interface ConfigureInteractionDialogProps {
   name: string;
   interaction: ContractFunctionInteraction;
   open: boolean;
-  onClose: (name?: string, tx?: ContractFunctionInteraction, opts?: SendMethodOptions) => void;
+  onClose: (name?: string, tx?: ContractFunctionInteraction, opts?: SendInteractionOptions) => void;
 }
 
 export function ConfigureInteractionDialog({ name, interaction, open, onClose }: ConfigureInteractionDialogProps) {
@@ -102,9 +103,7 @@ export function ConfigureInteractionDialog({ name, interaction, open, onClose }:
         <Box sx={{ flexGrow: 1 }} />
 
         <DialogActions>
-          <Button disabled={!feePaymentMethod} onClick={send}>
-            Send
-          </Button>
+          <Button onClick={send}>Send</Button>
           <Button color="error" onClick={handleClose}>
             Cancel
           </Button>

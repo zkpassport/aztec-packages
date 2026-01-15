@@ -3,7 +3,7 @@
 #include <cstddef>
 
 #include "barretenberg/crypto/merkle_tree/memory_tree.hpp"
-#include "barretenberg/vm2/simulation/lib/db_interfaces.hpp"
+#include "barretenberg/vm2/simulation/interfaces/db.hpp"
 
 namespace bb::avm2::simulation {
 
@@ -131,7 +131,7 @@ AppendOnlyTreeSnapshot IndexedMemoryTree<LeafType, HashingPolicy>::get_snapshot(
 {
     return AppendOnlyTreeSnapshot{
         .root = tree.root(),
-        .nextAvailableLeafIndex = leaves.size(),
+        .next_available_leaf_index = leaves.size(),
     };
 }
 

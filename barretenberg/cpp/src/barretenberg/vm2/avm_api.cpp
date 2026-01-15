@@ -13,39 +13,41 @@ using namespace bb::avm2::simulation;
 std::pair<AvmAPI::AvmProof, AvmAPI::AvmVerificationKey> AvmAPI::prove(const AvmAPI::ProvingInputs& inputs)
 {
     // Simulate.
-    info("Simulating...");
-    AvmSimulationHelper simulation_helper(inputs.hints);
-    auto events = AVM_TRACK_TIME_V("simulation/all", simulation_helper.simulate());
+    vinfo("Simulating...");
+    AvmSimulationHelper simulation_helper;
+
+    auto events = AVM_TRACK_TIME_V("simulation/all", simulation_helper.simulate_for_witgen(inputs.hints));
 
     // Generate trace.
-    info("Generating trace...");
+    vinfo("Generating trace...");
     AvmTraceGenHelper tracegen_helper;
     auto trace =
-        AVM_TRACK_TIME_V("tracegen/all", tracegen_helper.generate_trace(std::move(events), inputs.publicInputs));
+        AVM_TRACK_TIME_V("tracegen/all", tracegen_helper.generate_trace(std::move(events), inputs.public_inputs));
 
     // Prove.
-    info("Proving...");
+    vinfo("Proving...");
     AvmProvingHelper proving_helper;
     auto [proof, vk] = AVM_TRACK_TIME_V("proving/all", proving_helper.prove(std::move(trace)));
 
-    info("Done!");
+    vinfo("Done!");
     return { std::move(proof), std::move(vk) };
 }
 
 bool AvmAPI::check_circuit(const AvmAPI::ProvingInputs& inputs)
 {
     // Simulate.
-    info("Simulating...");
-    AvmSimulationHelper simulation_helper(inputs.hints);
-    auto events = AVM_TRACK_TIME_V("simulation/all", simulation_helper.simulate());
+    vinfo("Simulating...");
+    AvmSimulationHelper simulation_helper;
+
+    auto events = AVM_TRACK_TIME_V("simulation/all", simulation_helper.simulate_for_witgen(inputs.hints));
 
     // Generate trace.
     // In contrast to proving, we do this step by step since it's usually more useful to debug
     // before trying to run the interaction builders.
-    info("Generating trace...");
+    vinfo("Generating trace...");
     AvmTraceGenHelper tracegen_helper;
     tracegen::TraceContainer trace;
-    AVM_TRACK_TIME("tracegen/all", tracegen_helper.fill_trace_columns(trace, std::move(events), inputs.publicInputs));
+    AVM_TRACK_TIME("tracegen/all", tracegen_helper.fill_trace_columns(trace, std::move(events), inputs.public_inputs));
 
     // Go into interactive debug mode if requested.
     if (getenv("AVM_DEBUG") != nullptr) {
@@ -56,16 +58,27 @@ bool AvmAPI::check_circuit(const AvmAPI::ProvingInputs& inputs)
     AVM_TRACK_TIME("tracegen/all", tracegen_helper.fill_trace_interactions(trace));
 
     // Check circuit.
-    info("Checking circuit...");
+    vinfo("Checking circuit...");
     AvmProvingHelper proving_helper;
     return proving_helper.check_circuit(std::move(trace));
 }
 
 bool AvmAPI::verify(const AvmProof& proof, const PublicInputs& pi, const AvmVerificationKey& vk_data)
 {
-    info("Verifying...");
+    vinfo("Verifying...");
     AvmProvingHelper proving_helper;
     return AVM_TRACK_TIME_V("verifing/all", proving_helper.verify(proof, pi, vk_data));
+}
+
+AvmAPI::AvmVerificationKey AvmAPI::get_verification_key()
+{
+    vinfo("Generating trace...");
+    AvmTraceGenHelper tracegen_helper;
+    auto trace = tracegen_helper.generate_precomputed_columns();
+
+    vinfo("Computing verification key...");
+    AvmProvingHelper proving_helper;
+    return proving_helper.compute_verification_key(trace);
 }
 
 } // namespace bb::avm2

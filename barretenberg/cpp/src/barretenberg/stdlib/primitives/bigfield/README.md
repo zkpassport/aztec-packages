@@ -347,13 +347,13 @@ This means that the carries $\textcolor{skyblue}{C_{\textsf{low}}}$ and $\textco
 > X_{\textsf{high}} = C_{\textsf{high}} \rmul \const{2^{2L}}
 > =&\ C_{\textsf{low}} \ \radd \
 > \color{brown}{\boxed{
-> (a_0 \rmul b_2 \ \radd \ a_2 \rmul b_0 - r_2) \ \radd \ (a_0 \rmul b_3 \ \radd \ a_3 \rmul b_0 \ \rsub \ r_3) \rmul \const{2^L}
+> (a_0 \rmul b_2 \ \radd \ a_2 \rmul b_0) \ \radd \ (a_0 \rmul b_3 \ \radd \ a_3 \rmul b_0 \ \rsub \ r_3) \rmul \const{2^L}
 > }}
 > \longleftarrow h_0
 > \\
 > &\ \ \radd \
 > \color{brown}{\boxed{
-> (a_1 \rmul b_1) \ \radd \ (a_1 \rmul b_2 \ \radd \ a_2 \rmul b_1) \rmul \const{2^L}
+> (a_1 \rmul b_1 \ \rsub \ r_2) \ \radd \ (a_1 \rmul b_2 \ \radd \ a_2 \rmul b_1) \rmul \const{2^L}
 > }}
 > \\
 > &\ \ \radd \
@@ -374,8 +374,8 @@ This means that the carries $\textcolor{skyblue}{C_{\textsf{low}}}$ and $\textco
 > | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 > | bigfield mult | $\ell_0 = \color{brown}{(a_0 \rmul b_0 \ \rsub \ r_0) \ \radd \ (a_0 \rmul b_1 \ \radd \ a_1 \rmul b_0) \rmul \const{2^L}}$                                                                                |
 > | add           | $C_{\textsf{low}} \rmul \const{2^{2L}} = \color{brown}{\ell_0} + \color{violet}{q_0 \rmul \const{(p_0' + 2^L \cdot p_1')} \ \radd \ q_1 \rmul \const{(2^L \cdot p_0')} \ \rsub \ r_1 \rmul \const{2^{L}}}$ |
-> | bigfield mult | $h_0 = \color{brown}{(a_0 \rmul b_2 \ \radd \ a_2 \rmul b_0 - r_2) \ \radd \ (a_0 \rmul b_3 \ \radd \ a_3 \rmul b_0 \ \rsub \ r_3) \rmul \const{2^L}}$                                                     |
-> | bigfield mult | $h_1 = \color{brown}{h_0 + (a_1 \rmul b_1) \ \radd \ (a_1 \rmul b_2 \ \radd \ a_2 \rmul b_1) \rmul \const{2^L}}$                                                                                           |
+> | bigfield mult | $h_0 = \color{brown}{(a_0 \rmul b_2 \ \radd \ a_2 \rmul b_0) \ \radd \ (a_0 \rmul b_3 \ \radd \ a_3 \rmul b_0 \ \rsub \ r_3) \rmul \const{2^L}}$                                                     |
+> | bigfield mult | $h_1 = \color{brown}{h_0 + (a_1 \rmul b_1 \ \rsub \ r_2) \ \radd \ (a_1 \rmul b_2 \ \radd \ a_2 \rmul b_1) \rmul \const{2^L}}$                                                                                           |
 > | add           | $h_2 = h_1 \ \radd \ C_{\textsf{low}} \ \radd \  \color{violet}{q_3 \rmul \const{(2^L \cdot p_0')} \ \radd \ q_2 \rmul \const{(p_0' + 2^L \cdot p_1')}}$                                                   |
 > | add           | $C_{\textsf{high}} \rmul \const{2^{2L}} = h_2 \ \radd \  \color{violet}{q_0 \rmul \const{(p_2' + 2^L \cdot p_3')} \ \radd \ q_1 \rmul \const{(p_1' + 2^L \cdot p_2')}}$                                    |
 >
@@ -413,22 +413,22 @@ $$
 >
 > $$
 > \begin{aligned}
-> \textcolor{orange}{D_{\textsf{lo}}} &= (2^{Q} - 1)^2 + 2 \cdot (2^{Q} - 1)^2 \cdot 2^L \ < \ 2^{2Q + L + 1}, \\
-> \textcolor{orange}{D_{\textsf{hi}}} &= 3 \cdot (2^{Q} - 1)^2 + 4 \cdot (2^{Q} - 1)^2 \cdot 2^L \ < \ 2^{2Q + L + 2}.
+> \textcolor{orange}{D_{\textsf{lo}}} &= (2^{Q} - 1)^2 + 2 \cdot (2^{Q} - 1)^2 \cdot 2^L \ < \ 2^{2Q + L + 2}, \\
+> \textcolor{orange}{D_{\textsf{hi}}} &= 3 \cdot (2^{Q} - 1)^2 + 4 \cdot (2^{Q} - 1)^2 \cdot 2^L \ < \ 2^{2Q + L + 3}.
 > \end{aligned}
 > $$
 >
 > Clearly, maximum value of $\textcolor{orange}{D_{\textsf{hi}}}$ determines the overall maximum of the two outputs of multiplication:
 >
 > $$
-> \textsf{max}(\textcolor{orange}{D_{\textsf{lo}}}, \textcolor{orange}{D_{\textsf{hi}}}) < 2^{2Q + L + 2}.
+> \textsf{max}(\textcolor{orange}{D_{\textsf{lo}}}, \textcolor{orange}{D_{\textsf{hi}}}) < 2^{2Q + L + 3}.
 > $$
 >
 > This is the maximum value of the resulting limbs of a single product $d = a \cdot b$. Suppose we have $2^k$ such products, then the maximum value of the limbs of the sum of these products would be:
 >
 > $$
 > \begin{aligned}
-> \sum_{i=1}^{2^k} \textcolor{orange}{D_{\textsf{hi}, i}} & \ < \ 2^{k + 2Q + L + 2}.
+> \sum_{i=1}^{2^k} \textcolor{orange}{D_{\textsf{hi}, i}} & \ < \ 2^{k + 2Q + L + 3}.
 > \end{aligned}
 > $$
 >
@@ -436,11 +436,11 @@ $$
 >
 > $$
 > \begin{aligned}
-> 2^{k + 2Q + L + 2} &< n \quad \implies \quad \boxed{Q < \frac{\text{log}_2(n) - L - k - 2}{2}}.
+> 2^{k + 2Q + L + 3} &< n \quad \implies \quad \boxed{Q < \frac{\text{log}_2(n) - L - k - 3}{2}}.
 > \end{aligned}
 > $$
 >
-> This means that the maximum limb size that must be allowed is $Q = \left\lfloor\frac{253.5 - 68 - 10 - 2}{2}\right\rfloor = 86$.
+> This means that the maximum limb size that must be allowed is $Q = \left\lfloor\frac{253.5 - 68 - 10 - 3}{2}\right\rfloor = 86$.
 >
 > .
 

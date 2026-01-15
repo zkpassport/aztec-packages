@@ -8,7 +8,7 @@ import {
   type TestPrivateInsertions,
 } from '@aztec/simulator/public/fixtures';
 import type { PublicTxResult } from '@aztec/simulator/server';
-import { type AvmCircuitInputs, AvmCircuitPublicInputs } from '@aztec/stdlib/avm';
+import { AvmCircuitInputs, AvmCircuitPublicInputs, PublicSimulatorConfig } from '@aztec/stdlib/avm';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import type { MerkleTreeWriteOperations } from '@aztec/stdlib/interfaces/server';
 import type { GlobalVariables } from '@aztec/stdlib/tx';
@@ -27,7 +27,7 @@ import {
   verifyAvmProof,
 } from '../bb/execute.js';
 
-const BB_PATH = path.resolve('../../barretenberg/cpp/build/bin/bb');
+const BB_PATH = path.resolve('../../barretenberg/cpp/build/bin/bb-avm');
 
 // An InterceptingLogger that records all log messages and forwards them to a wrapped logger.
 class InterceptingLogger implements Logger {
@@ -88,34 +88,45 @@ class InterceptingLogger implements Logger {
   }
 }
 
+// Config with collectHints enabled for proving tests
+const provingConfig: PublicSimulatorConfig = PublicSimulatorConfig.from({
+  skipFeeEnforcement: false,
+  collectCallMetadata: true, // For results.
+  collectDebugLogs: false,
+  collectHints: true, // Required for proving!
+  collectPublicInputs: true, // Required for proving!
+  collectStatistics: false,
+});
+
 export class AvmProvingTester extends PublicTxSimulationTester {
+  private bbWorkingDirectory: string = '';
+
   constructor(
-    private bbWorkingDirectory: string,
     private checkCircuitOnly: boolean,
     contractDataSource: SimpleContractDataSource,
     merkleTrees: MerkleTreeWriteOperations,
     globals?: GlobalVariables,
     metrics?: TestExecutorMetrics,
   ) {
-    super(merkleTrees, contractDataSource, globals, metrics);
+    // simulator factory is undefined because for proving, we use the default C++ simulator
+    super(merkleTrees, contractDataSource, globals, metrics, /*simulatorFactory=*/ undefined, provingConfig);
   }
 
-  static async new(checkCircuitOnly: boolean = false, globals?: GlobalVariables, metrics?: TestExecutorMetrics) {
-    const bbWorkingDirectory = await fs.mkdtemp(path.join(tmpdir(), 'bb-'));
-
+  static async new(
+    worldStateService: NativeWorldStateService, // make sure to close this later
+    checkCircuitOnly: boolean = false,
+    globals?: GlobalVariables,
+    metrics?: TestExecutorMetrics,
+  ) {
     const contractDataSource = new SimpleContractDataSource();
-    const merkleTrees = await (await NativeWorldStateService.tmp()).fork();
-    return new AvmProvingTester(
-      bbWorkingDirectory,
-      checkCircuitOnly,
-      contractDataSource,
-      merkleTrees,
-      globals,
-      metrics,
-    );
+    const merkleTrees = await worldStateService.fork();
+    return new AvmProvingTester(checkCircuitOnly, contractDataSource, merkleTrees, globals, metrics);
   }
 
   async prove(avmCircuitInputs: AvmCircuitInputs, txLabel: string = 'unlabeledTx'): Promise<BBResult> {
+    // We use a new working directory for each proof.
+    this.bbWorkingDirectory = await fs.mkdtemp(path.join(tmpdir(), 'bb-'));
+
     const interceptingLogger = new InterceptingLogger(this.logger);
 
     // Then we prove.
@@ -150,6 +161,11 @@ export class AvmProvingTester extends PublicTxSimulationTester {
         times[match[1]] = parseInt(match[2]);
       }
     });
+
+    // Throw if logs did not contain any times.
+    if (Object.keys(times).length === 0) {
+      throw new Error('AVM stdout did not contain any proving times in the stats!');
+    }
 
     // Hack to make labels match.
     const txLabelWithCount = `${txLabel}/${this.txCount - 1}`;
@@ -204,7 +220,9 @@ export class AvmProvingTester extends PublicTxSimulationTester {
     feePayer = sender,
     privateInsertions?: TestPrivateInsertions,
     txLabel: string = 'unlabeledTx',
+    disableRevertCheck: boolean = false,
   ): Promise<PublicTxResult> {
+    const simTimer = new Timer();
     const simRes = await this.simulateTx(
       sender,
       setupCalls,
@@ -214,11 +232,16 @@ export class AvmProvingTester extends PublicTxSimulationTester {
       privateInsertions,
       txLabel,
     );
-    expect(simRes.revertCode.isOK()).toBe(expectRevert ? false : true);
+    const simDuration = simTimer.ms();
+    this.logger.info(`Simulation took ${simDuration} ms for tx ${txLabel}`);
+
+    if (!disableRevertCheck) {
+      expect(simRes.revertCode.isOK()).toBe(expectRevert ? false : true);
+    }
 
     const opString = this.checkCircuitOnly ? 'Check circuit' : 'Proving and verification';
 
-    const avmCircuitInputs = simRes.avmProvingRequest.inputs;
+    const avmCircuitInputs = new AvmCircuitInputs(simRes.hints!, simRes.publicInputs!);
     const timer = new Timer();
     await this.proveVerify(avmCircuitInputs, txLabel);
     this.logger.info(`${opString} took ${timer.ms()} ms for tx ${txLabel}`);
@@ -240,10 +263,11 @@ export class AvmProvingTester extends PublicTxSimulationTester {
       setupCalls ?? [],
       appCalls ?? [],
       teardownCall,
-      /*expectRevert=*/ false,
+      undefined,
       feePayer,
       privateInsertions,
       txLabel,
+      true,
     );
   }
 

@@ -1,17 +1,18 @@
-import { MerkleTreeId, elapsed } from '@aztec/aztec.js';
+import { MerkleTreeId } from '@aztec/aztec.js/trees';
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { merge, pick } from '@aztec/foundation/collection';
-import type { Fr } from '@aztec/foundation/fields';
+import type { Fr } from '@aztec/foundation/curves/bn254';
 import { createLogger } from '@aztec/foundation/log';
 import { retryUntil } from '@aztec/foundation/retry';
 import { bufferToHex } from '@aztec/foundation/string';
-import { DateProvider, Timer } from '@aztec/foundation/timer';
+import { DateProvider, Timer, elapsed } from '@aztec/foundation/timer';
 import { getDefaultAllowedSetupFunctions } from '@aztec/p2p/msg_validators';
 import { LightweightBlockFactory } from '@aztec/prover-client/block-factory';
 import {
   GuardedMerkleTreeOperations,
   PublicContractsDB,
   PublicProcessor,
-  TelemetryPublicTxSimulator,
+  createPublicTxSimulatorForBlockBuilding,
 } from '@aztec/simulator/server';
 import type { ContractDataSource } from '@aztec/stdlib/contract';
 import { type L1RollupConstants, getTimestampForSlot } from '@aztec/stdlib/epoch-helpers';
@@ -46,7 +47,7 @@ export async function buildBlock(
 ): Promise<BuildBlockResult> {
   const blockBuildingTimer = new Timer();
   const blockNumber = newGlobalVariables.blockNumber;
-  const slot = newGlobalVariables.slotNumber.toBigInt();
+  const slot = newGlobalVariables.slotNumber;
   const msgCount = l1ToL2Messages.length;
   const stateReference = await worldStateFork.getStateReference();
   const archiveTree = await worldStateFork.getTreeInfo(MerkleTreeId.ARCHIVE);
@@ -120,13 +121,10 @@ export class FullNodeBlockBuilder implements IFullNodeBlockBuilder {
     const contractsDB = new PublicContractsDB(this.contractDataSource);
     const guardedFork = new GuardedMerkleTreeOperations(fork);
 
-    const publicTxSimulator = new TelemetryPublicTxSimulator(
+    const publicTxSimulator = createPublicTxSimulatorForBlockBuilding(
       guardedFork,
       contractsDB,
       globalVariables,
-      /*doMerkleOperations=*/ true,
-      /*skipFeeEnforcement=*/ true,
-      /*clientInitiatedSimulation=*/ false,
       this.telemetryClient,
     );
 
@@ -154,7 +152,7 @@ export class FullNodeBlockBuilder implements IFullNodeBlockBuilder {
     };
   }
 
-  private async syncToPreviousBlock(parentBlockNumber: number, timeout: number | undefined) {
+  private async syncToPreviousBlock(parentBlockNumber: BlockNumber, timeout: number | undefined) {
     await retryUntil(
       () => this.worldState.syncImmediate(parentBlockNumber, true).then(syncedTo => syncedTo >= parentBlockNumber),
       'sync to previous block',
@@ -171,7 +169,7 @@ export class FullNodeBlockBuilder implements IFullNodeBlockBuilder {
     opts: PublicProcessorLimits,
     suppliedFork?: MerkleTreeWriteOperations,
   ): Promise<BuildBlockResult> {
-    const parentBlockNumber = globalVariables.blockNumber - 1;
+    const parentBlockNumber = BlockNumber(globalVariables.blockNumber - 1);
     const syncTimeout = opts.deadline ? (opts.deadline.getTime() - this.dateProvider.now()) / 1000 : undefined;
     await this.syncToPreviousBlock(parentBlockNumber, syncTimeout);
     const fork = suppliedFork ?? (await this.worldState.fork(parentBlockNumber));
@@ -210,7 +208,7 @@ export class FullNodeBlockBuilder implements IFullNodeBlockBuilder {
     }
   }
 
-  getFork(blockNumber: number): Promise<MerkleTreeWriteOperations> {
+  getFork(blockNumber: BlockNumber): Promise<MerkleTreeWriteOperations> {
     return this.worldState.fork(blockNumber);
   }
 }

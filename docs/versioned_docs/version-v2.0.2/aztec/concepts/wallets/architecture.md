@@ -12,7 +12,7 @@ Architecture-wise, a wallet is an instance of an **Private Execution Environment
 The PXE also communicates with an **Aztec Node** for retrieving public information or broadcasting transactions.
 Note that the PXE requires a local database for keeping private state, and is also expected to be continuously syncing new blocks for trial-decryption of user notes.
 
-Additionally, a wallet must be able to handle one or more account contract implementation. When a user creates a new account, the account is represented onchain by an account contract. The wallet is responsible for deploying and interacting with this contract. A wallet may support multiple flavours of accounts, such as an account that uses ECDSA signatures, or one that relies on WebAuthn, or one that requires multi-factor authentication. For a user, the choice of what account implementation to use is then determined by the wallet they interact with.
+Additionally, a wallet must be able to handle one or more account contract implementation. When a user creates a new account, the account is represented on-chain by an account contract. The wallet is responsible for deploying and interacting with this contract. A wallet may support multiple flavours of accounts, such as an account that uses ECDSA signatures, or one that relies on WebAuthn, or one that requires multi-factor authentication. For a user, the choice of what account implementation to use is then determined by the wallet they interact with.
 
 In code, this translates to a wallet implementing an **AccountInterface** interface that defines [how to create an _execution request_ out of an array of _function calls_](./index.md#transaction-lifecycle) for the specific implementation of an account contract and [how to generate an _auth witness_](./index.md#authorizing-actions) for authorizing actions on behalf of the user. Think of this interface as the Javascript counterpart of an account contract, or the piece of code that knows how to format a transaction and authenticate an action based on the rules defined by the user's account contract implementation.
 
@@ -20,14 +20,13 @@ In code, this translates to a wallet implementing an **AccountInterface** interf
 
 The account interface is used for creating an _execution request_ out of one or more _function calls_ requested by a dapp, as well as creating an _auth witness_ for a given message hash. Account contracts are expected to handle multiple function calls per transaction, since dapps may choose to batch multiple actions into a single request to the wallet.
 
-```typescript title="account-interface" showLineNumbers
+```typescript title="account-interface" showLineNumbers 
+
 /**
  * Handler for interfacing with an account. Knows how to create transaction execution
  * requests and authorize actions for its corresponding account.
  */
-export interface AccountInterface
-  extends EntrypointInterface,
-    AuthWitnessProvider {
+export interface AccountInterface extends EntrypointInterface, AuthWitnessProvider {
   /** Returns the complete address for this account. */
   getCompleteAddress(): CompleteAddress;
 
@@ -41,14 +40,14 @@ export interface AccountInterface
   getVersion(): Fr;
 }
 ```
-
 > <sup><sub><a href="https://github.com/AztecProtocol/aztec-packages/blob/v2.0.2/yarn-project/aztec.js/src/account/interface.ts#L6-L25" target="_blank" rel="noopener noreferrer">Source code: yarn-project/aztec.js/src/account/interface.ts#L6-L25</a></sub></sup>
+
 
 ## PXE interface
 
 A wallet exposes the PXE interface to dapps by running a PXE instance. The PXE requires a keystore and a database implementation for storing keys, private state, and recipient encryption public keys.
 
-```typescript title="pxe-interface" showLineNumbers
+```typescript title="pxe-interface" showLineNumbers 
 /**
  * Private eXecution Environment (PXE) runs locally for each user, providing functionality for all the operations
  * needed to interact with the Aztec network, including account management, private data management,
@@ -81,10 +80,7 @@ export interface PXE {
    * @param partialAddress - The partial address of the account contract corresponding to the account being registered.
    * @returns The complete address of the account.
    */
-  registerAccount(
-    secretKey: Fr,
-    partialAddress: PartialAddress
-  ): Promise<CompleteAddress>;
+  registerAccount(secretKey: Fr, partialAddress: PartialAddress): Promise<CompleteAddress>;
 
   /**
    * Retrieves the user accounts registered on this PXE Service.
@@ -129,10 +125,7 @@ export interface PXE {
    *
    * @param contract - A contract instance to register, with an optional artifact which can be omitted if the contract class has already been registered.
    */
-  registerContract(contract: {
-    instance: ContractInstanceWithAddress;
-    artifact?: ContractArtifact;
-  }): Promise<void>;
+  registerContract(contract: { instance: ContractInstanceWithAddress; artifact?: ContractArtifact }): Promise<void>;
 
   /**
    * Updates a deployed contract in the PXE Service. This is used to update the contract artifact when
@@ -143,10 +136,7 @@ export interface PXE {
    * @throws If the artifact's contract class is not found in the PXE or if the contract class is different from
    * the current one (current one from the point of view of the node to which the PXE is connected).
    */
-  updateContract(
-    contractAddress: AztecAddress,
-    artifact: ContractArtifact
-  ): Promise<void>;
+  updateContract(contractAddress: AztecAddress, artifact: ContractArtifact): Promise<void>;
 
   /**
    * Retrieves the addresses of contracts added to this PXE Service.
@@ -165,10 +155,7 @@ export interface PXE {
    * @throws If contract code not found, or public simulation reverts.
    * Also throws if simulatePublic is true and public simulation reverts.
    */
-  proveTx(
-    txRequest: TxExecutionRequest,
-    privateExecutionResult?: PrivateExecutionResult
-  ): Promise<TxProvingResult>;
+  proveTx(txRequest: TxExecutionRequest, privateExecutionResult?: PrivateExecutionResult): Promise<TxProvingResult>;
 
   /**
    * Simulates a transaction based on the provided preauthenticated execution request.
@@ -197,7 +184,7 @@ export interface PXE {
     skipTxValidation?: boolean,
     skipFeeEnforcement?: boolean,
     overrides?: SimulationOverrides,
-    scopes?: AztecAddress[]
+    scopes?: AztecAddress[],
   ): Promise<TxSimulationResult>;
 
   /**
@@ -211,9 +198,9 @@ export interface PXE {
    */
   profileTx(
     txRequest: TxExecutionRequest,
-    profileMode: "gates" | "execution-steps" | "full",
+    profileMode: 'gates' | 'execution-steps' | 'full',
     skipProofGeneration?: boolean,
-    msgSender?: AztecAddress
+    msgSender?: AztecAddress,
   ): Promise<TxProfileResult>;
 
   /**
@@ -271,7 +258,7 @@ export interface PXE {
   getL1ToL2MembershipWitness(
     contractAddress: AztecAddress,
     messageHash: Fr,
-    secret: Fr
+    secret: Fr,
   ): Promise<[bigint, SiblingPath<typeof L1_TO_L2_MSG_TREE_HEIGHT>]>;
 
   /**
@@ -280,10 +267,7 @@ export interface PXE {
    * @param l2Tol1Message - The message to search for
    * @returns The membership witness for the message
    */
-  getL2ToL1MembershipWitness(
-    blockNumber: number,
-    l2Tol1Message: Fr
-  ): Promise<[bigint, SiblingPath<number>]>;
+  getL2ToL1MembershipWitness(blockNumber: number, l2Tol1Message: Fr): Promise<[bigint, SiblingPath<number>]>;
 
   /**
    * Get the given block.
@@ -316,7 +300,7 @@ export interface PXE {
     to: AztecAddress,
     authwits?: AuthWitness[],
     from?: AztecAddress,
-    scopes?: AztecAddress[]
+    scopes?: AztecAddress[],
   ): Promise<UtilitySimulationResult>;
 
   /**
@@ -331,9 +315,7 @@ export interface PXE {
    * @param filter - The filter to apply to the logs.
    * @returns The requested logs.
    */
-  getContractClassLogs(
-    filter: LogFilter
-  ): Promise<GetContractClassLogsResponse>;
+  getContractClassLogs(filter: LogFilter): Promise<GetContractClassLogsResponse>;
 
   /**
    * Fetches the current block number.
@@ -386,10 +368,7 @@ export interface PXE {
    * during a public deployment. We probably want a nicer and more general API for this, but it'll have to
    * do for the time being.
    */
-  getContractClassMetadata(
-    id: Fr,
-    includeArtifact?: boolean
-  ): Promise<ContractClassMetadata>;
+  getContractClassMetadata(id: Fr, includeArtifact?: boolean): Promise<ContractClassMetadata>;
 
   /**
    * Returns the private events given search parameters.
@@ -405,7 +384,7 @@ export interface PXE {
     eventMetadata: EventMetadataDefinition,
     from: number,
     numBlocks: number,
-    recipients: AztecAddress[]
+    recipients: AztecAddress[],
   ): Promise<T[]>;
 
   /**
@@ -415,12 +394,8 @@ export interface PXE {
    * @param limit - The amount of blocks to search.
    * @returns - The deserialized events.
    */
-  getPublicEvents<T>(
-    eventMetadata: EventMetadataDefinition,
-    from: number,
-    limit: number
-  ): Promise<T[]>;
+  getPublicEvents<T>(eventMetadata: EventMetadataDefinition, from: number, limit: number): Promise<T[]>;
 }
 ```
-
 > <sup><sub><a href="https://github.com/AztecProtocol/aztec-packages/blob/v2.0.2/yarn-project/stdlib/src/interfaces/pxe.ts#L50-L399" target="_blank" rel="noopener noreferrer">Source code: yarn-project/stdlib/src/interfaces/pxe.ts#L50-L399</a></sub></sup>
+

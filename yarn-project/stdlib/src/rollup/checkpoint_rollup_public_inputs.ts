@@ -1,7 +1,7 @@
-import { BlobAccumulatorPublicInputs, FinalBlobBatchingChallenges } from '@aztec/blob-lib';
+import { BlobAccumulator, FinalBlobBatchingChallenges } from '@aztec/blob-lib/types';
 import { AZTEC_MAX_EPOCH_DURATION } from '@aztec/constants';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import { bufferSchemaFor } from '@aztec/foundation/schemas';
 import { BufferReader, type Tuple, serializeToBuffer, serializeToFields } from '@aztec/foundation/serialize';
 import { bufferToHex, hexToBuffer } from '@aztec/foundation/string';
@@ -38,11 +38,11 @@ export class CheckpointRollupPublicInputs {
     /**
      * Accumulated opening proofs for all blobs before this checkpoint range.
      */
-    public startBlobAccumulator: BlobAccumulatorPublicInputs,
+    public startBlobAccumulator: BlobAccumulator,
     /**
      * Accumulated opening proofs for all blobs after applying this checkpoint range.
      */
-    public endBlobAccumulator: BlobAccumulatorPublicInputs,
+    public endBlobAccumulator: BlobAccumulator,
     /**
      * Final values z and gamma, shared across the epoch.
      */
@@ -57,8 +57,8 @@ export class CheckpointRollupPublicInputs {
       reader.readObject(AppendOnlyTreeSnapshot),
       reader.readArray(AZTEC_MAX_EPOCH_DURATION, Fr),
       reader.readArray(AZTEC_MAX_EPOCH_DURATION, FeeRecipient),
-      reader.readObject(BlobAccumulatorPublicInputs),
-      reader.readObject(BlobAccumulatorPublicInputs),
+      reader.readObject(BlobAccumulator),
+      reader.readObject(BlobAccumulator),
       reader.readObject(FinalBlobBatchingChallenges),
     );
   }
@@ -116,6 +116,10 @@ export class FeeRecipient {
 
   toFields() {
     return serializeToFields(...FeeRecipient.getFields(this));
+  }
+
+  static empty() {
+    return new FeeRecipient(EthAddress.ZERO, Fr.ZERO);
   }
 
   isEmpty() {

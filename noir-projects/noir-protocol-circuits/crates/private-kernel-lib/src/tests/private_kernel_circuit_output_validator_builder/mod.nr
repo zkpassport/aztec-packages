@@ -4,16 +4,11 @@ mod validate_propagated_from_previous_kernel;
 mod validate_propagated_from_private_call;
 mod validate_propagated_from_private_call_to_init;
 
-use crate::components::{
-    private_kernel_circuit_output_validator::PrivateKernelCircuitOutputValidator,
-    private_kernel_circuit_public_inputs_composer::create_protocol_nullifier,
-};
+use crate::components::private_kernel_circuit_output_validator::PrivateKernelCircuitOutputValidator;
 use dep::types::{
-    abis::{
-        private_call_request::PrivateCallRequest, side_effect::OrderedValue,
-        transaction::tx_request::TxRequest,
-    },
+    abis::{private_call_request::PrivateCallRequest, transaction::tx_request::TxRequest},
     constants::PRIVATE_KERNEL_INIT_INDEX,
+    hash::create_protocol_nullifier,
     tests::fixture_builder::FixtureBuilder,
     traits::Empty,
 };
@@ -24,6 +19,7 @@ pub struct PrivateKernelCircuitOutputValidatorBuilder {
     output: FixtureBuilder,
     tx_request: TxRequest,
     first_nullifier_hint: Field,
+    revertible_counter_hint: u32,
     is_private_only: bool,
 }
 
@@ -35,8 +31,11 @@ impl PrivateKernelCircuitOutputValidatorBuilder {
         let tx_request = output.build_tx_request();
 
         output.claimed_first_nullifier = 27;
+        output.claimed_revertible_counter = 42;
 
         previous_kernel.claimed_first_nullifier = 27;
+        previous_kernel.claimed_revertible_counter = 42;
+
         previous_kernel = previous_kernel.in_vk_tree(PRIVATE_KERNEL_INIT_INDEX);
 
         PrivateKernelCircuitOutputValidatorBuilder {
@@ -45,6 +44,7 @@ impl PrivateKernelCircuitOutputValidatorBuilder {
             output,
             tx_request,
             first_nullifier_hint: 27,
+            revertible_counter_hint: 42,
             is_private_only: false,
         }
     }
@@ -54,8 +54,8 @@ impl PrivateKernelCircuitOutputValidatorBuilder {
         self.output.nullifiers.push(protocol_nullifier);
         self.previous_kernel.nullifiers.push(protocol_nullifier);
 
-        self.previous_kernel.claimed_first_nullifier = protocol_nullifier.value();
-        self.output.claimed_first_nullifier = protocol_nullifier.value();
+        self.previous_kernel.claimed_first_nullifier = protocol_nullifier.innermost().value;
+        self.output.claimed_first_nullifier = protocol_nullifier.innermost().value;
         // First nullifier hint of zero signals that the protocol nullifier will be used as the first nullifier.
         self.first_nullifier_hint = 0;
     }
@@ -78,10 +78,11 @@ impl PrivateKernelCircuitOutputValidatorBuilder {
         PrivateKernelCircuitOutputValidator::new(output).validate_as_first_call(
             self.tx_request,
             private_call,
-            FixtureBuilder::vk_tree_root(),
-            self.private_call.protocol_contract_tree_root,
+            self.private_call.vk_tree_root,
+            self.private_call.protocol_contracts,
             self.is_private_only,
             self.first_nullifier_hint,
+            self.revertible_counter_hint,
         );
     }
 

@@ -1,5 +1,5 @@
-import { createExtendedL1Client, getPublicClient } from '@aztec/ethereum';
-import { Fr } from '@aztec/foundation/fields';
+import { createExtendedL1Client, getPublicClient } from '@aztec/ethereum/client';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 
 import type { Anvil } from '@viem/anvil';
@@ -21,7 +21,7 @@ describe('Governance', () => {
   let walletClient: ExtendedViemWalletClient;
 
   let vkTreeRoot: Fr;
-  let protocolContractTreeRoot: Fr;
+  let protocolContractsHash: Fr;
   let governanceAddress: `0x${string}`;
 
   beforeAll(async () => {
@@ -29,7 +29,7 @@ describe('Governance', () => {
     // this is the 6th address that gets funded by the junk mnemonic
     privateKey = privateKeyToAccount('0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba');
     vkTreeRoot = Fr.random();
-    protocolContractTreeRoot = Fr.random();
+    protocolContractsHash = Fr.random();
 
     ({ anvil, rpcUrl } = await startAnvil());
 
@@ -40,7 +40,7 @@ describe('Governance', () => {
       ...DefaultL1ContractsConfig,
       salt: undefined,
       vkTreeRoot,
-      protocolContractTreeRoot,
+      protocolContractsHash,
       genesisArchiveRoot: Fr.random(),
       realVerifier: false,
     });

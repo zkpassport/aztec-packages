@@ -5,7 +5,7 @@ import {
   archiverConfigMappings,
   getArchiverConfigFromEnv,
 } from '@aztec/archiver';
-import { createLogger } from '@aztec/aztec.js';
+import { createLogger } from '@aztec/aztec.js/log';
 import { type BlobSinkConfig, blobSinkConfigMapping, createBlobSinkClient } from '@aztec/blob-sink/client';
 import { getL1Config } from '@aztec/cli/config';
 import type { NamespacedApiHandlers } from '@aztec/foundation/json-rpc/server';
@@ -32,7 +32,7 @@ export async function startArchiver(
   );
 
   let archiverConfig = { ...envConfig, ...cliOptions };
-  archiverConfig.dataStoreMapSizeKB = archiverConfig.archiverStoreMapSizeKb ?? archiverConfig.dataStoreMapSizeKB;
+  archiverConfig.dataStoreMapSizeKb = archiverConfig.archiverStoreMapSizeKb ?? archiverConfig.dataStoreMapSizeKb;
 
   if (!archiverConfig.l1Contracts.registryAddress || archiverConfig.l1Contracts.registryAddress.isZero()) {
     throw new Error('L1 registry address is required to start an Archiver');
@@ -51,7 +51,7 @@ export async function startArchiver(
   const store = await createStore('archiver', KVArchiverDataStore.SCHEMA_VERSION, archiverConfig, storeLog);
   const archiverStore = new KVArchiverDataStore(store, archiverConfig.maxLogs);
 
-  const telemetry = initTelemetryClient(getTelemetryClientConfig());
+  const telemetry = await initTelemetryClient(getTelemetryClientConfig());
   const blobSinkClient = createBlobSinkClient(archiverConfig, { logger: createLogger('archiver:blob-sink:client') });
   const archiver = await Archiver.createAndSync(archiverConfig, archiverStore, { telemetry, blobSinkClient }, true);
   services.archiver = [archiver, ArchiverApiSchema];

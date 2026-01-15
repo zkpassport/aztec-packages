@@ -10,7 +10,7 @@ import {
 } from '@aztec/foundation/config';
 import { EthAddress } from '@aztec/foundation/eth-address';
 
-import { type L1TxUtilsConfig, l1TxUtilsConfigMappings } from './l1_tx_utils.js';
+import { type L1TxUtilsConfig, l1TxUtilsConfigMappings } from './l1_tx_utils/index.js';
 
 export type GenesisStateConfig = {
   /** Whether to populate the genesis state with initial fee juice for the test accounts */
@@ -29,7 +29,9 @@ export type L1ContractsConfig = {
   /** The target validator committee size. */
   aztecTargetCommitteeSize: number;
   /** The number of epochs to lag behind the current epoch for validator selection. */
-  lagInEpochs: number;
+  lagInEpochsForValidatorSet: number;
+  /** The number of epochs to lag behind the current epoch for randao selection. */
+  lagInEpochsForRandao: number;
   /** The number of epochs after an epoch ends that proofs are still accepted. */
   aztecProofSubmissionEpochs: number;
   /** The deposit amount for a validator */
@@ -77,7 +79,8 @@ export const DefaultL1ContractsConfig = {
   aztecSlotDuration: 36,
   aztecEpochDuration: 32,
   aztecTargetCommitteeSize: 48,
-  lagInEpochs: 2,
+  lagInEpochsForValidatorSet: 2,
+  lagInEpochsForRandao: 2, // For PROD, this value should be > lagInEpochsForValidatorSet
   aztecProofSubmissionEpochs: 1, // you have a full epoch to submit a proof after the epoch to prove ends
   activationThreshold: 100n * 10n ** 18n,
   ejectionThreshold: 50n * 10n ** 18n,
@@ -90,7 +93,7 @@ export const DefaultL1ContractsConfig = {
   slashingExecutionDelayInRounds: 0, // round N may be submitted in round N + 1
   slashingVetoer: EthAddress.ZERO,
   governanceProposerRoundSize: 300,
-  manaTarget: BigInt(1e10),
+  manaTarget: BigInt(100e6),
   provingCostPerMana: BigInt(100),
   exitDelaySeconds: 2 * 24 * 60 * 60,
   slasherFlavor: 'tally' as const,
@@ -138,7 +141,7 @@ const TestnetGovernanceConfiguration = {
   gracePeriod: 1n * 24n * 60n * 60n, // 1 day
   quorum: 2n * 10n ** 17n, // 20%
   requiredYeaMargin: 1n * 10n ** 17n, // 10%
-  minimumVotes: 1250n * 200_000n * 10n ** 18n,
+  minimumVotes: 100n * 200_000n * 10n ** 18n,
 };
 
 const StagingIgnitionGovernanceConfiguration = {
@@ -156,9 +159,28 @@ const StagingIgnitionGovernanceConfiguration = {
   minimumVotes: 1250n * 200_000n * 10n ** 18n,
 };
 
+const MainnetGovernanceConfiguration = {
+  proposeConfig: {
+    lockDelay: 90n * 24n * 60n * 60n,
+    lockAmount: 258_750_000n * 10n ** 18n,
+  },
+
+  votingDelay: 3n * 24n * 60n * 60n,
+  votingDuration: 7n * 24n * 60n * 60n,
+  executionDelay: 7n * 24n * 60n * 60n,
+  gracePeriod: 7n * 24n * 60n * 60n,
+  quorum: 2n * 10n ** 17n, // 20%
+  requiredYeaMargin: 33n * 10n ** 16n, // 33%
+  minimumVotes: 1000n * 200_000n * 10n ** 18n,
+};
+
 export const getGovernanceConfiguration = (networkName: NetworkNames) => {
   switch (networkName) {
     case 'local':
+      return LocalGovernanceConfiguration;
+    case 'next-net':
+      return LocalGovernanceConfiguration;
+    case 'devnet':
       return LocalGovernanceConfiguration;
     case 'staging-public':
       return StagingPublicGovernanceConfiguration;
@@ -166,6 +188,8 @@ export const getGovernanceConfiguration = (networkName: NetworkNames) => {
       return TestnetGovernanceConfiguration;
     case 'staging-ignition':
       return StagingIgnitionGovernanceConfiguration;
+    case 'mainnet':
+      return MainnetGovernanceConfiguration;
     default:
       throw new Error(`Unrecognized network name: ${networkName}`);
   }
@@ -179,16 +203,27 @@ const DefaultRewardConfig = {
   sequencerBps: 8000,
   rewardDistributor: EthAddress.ZERO.toString(),
   booster: EthAddress.ZERO.toString(),
-  blockReward: 500n * 10n ** 18n,
+  checkpointReward: 500n * 10n ** 18n,
+};
+
+const MainnetRewardConfig = {
+  sequencerBps: 7_000,
+  rewardDistributor: EthAddress.ZERO.toString(),
+  booster: EthAddress.ZERO.toString(),
+  checkpointReward: 400n * 10n ** 18n,
 };
 
 export const getRewardConfig = (networkName: NetworkNames) => {
   switch (networkName) {
     case 'local':
+    case 'devnet':
+    case 'next-net':
     case 'staging-public':
     case 'testnet':
     case 'staging-ignition':
       return DefaultRewardConfig;
+    case 'mainnet':
+      return MainnetRewardConfig;
     default:
       throw new Error(`Unrecognized network name: ${networkName}`);
   }
@@ -198,11 +233,11 @@ export const getRewardBoostConfig = () => {
   // The reward configuration is specified with a precision of 1e5, and we use the same across
   // all networks.
   return {
-    increment: 125000, // 1.25
-    maxScore: 15000000, // 150
-    a: 1000, // 0.01
-    k: 1000000, // 10
-    minimum: 100000, // 1
+    increment: 125_000, // 1.25
+    maxScore: 15_000_000, // 150
+    a: 1_000, // 0.01
+    k: 1_000_000, // 10
+    minimum: 100_000, // 1
   };
 };
 
@@ -210,32 +245,48 @@ export const getRewardBoostConfig = () => {
 const LocalEntryQueueConfig = {
   bootstrapValidatorSetSize: 0n,
   bootstrapFlushSize: 0n,
-  normalFlushSizeMin: 48n, // will effectively be bounded by maxQueueFlushSize
+  normalFlushSizeMin: 48n,
   normalFlushSizeQuotient: 2n,
   maxQueueFlushSize: 32n,
 };
 
 const StagingPublicEntryQueueConfig = {
   bootstrapValidatorSetSize: 48n,
-  bootstrapFlushSize: 48n, // will effectively be bounded by maxQueueFlushSize
+  bootstrapFlushSize: 32n, // will effectively be bounded by maxQueueFlushSize
+  normalFlushSizeMin: 32n,
+  normalFlushSizeQuotient: 2475n,
+  maxQueueFlushSize: 32n, // Limited to 32 so flush cost are kept below 15M gas.
+};
+
+const StagingPublicEntryQueueConfig = {
+  bootstrapValidatorSetSize: 48n,
+  bootstrapFlushSize: 48n,
   normalFlushSizeMin: 1n,
   normalFlushSizeQuotient: 2475n,
   maxQueueFlushSize: 32n, // Limited to 32 so flush cost are kept below 15M gas.
 };
 
 const TestnetEntryQueueConfig = {
-  bootstrapValidatorSetSize: 750n,
-  bootstrapFlushSize: 32n,
-  normalFlushSizeMin: 32n,
-  normalFlushSizeQuotient: 2475n,
-  maxQueueFlushSize: 32n,
+  bootstrapValidatorSetSize: 256n,
+  bootstrapFlushSize: 256n,
+  normalFlushSizeMin: 4n,
+  normalFlushSizeQuotient: 2048n,
+  maxQueueFlushSize: 8n,
 };
 
 const StagingIgnitionEntryQueueConfig = {
-  bootstrapValidatorSetSize: 1250n,
-  bootstrapFlushSize: 8n,
+  bootstrapValidatorSetSize: 48n,
+  bootstrapFlushSize: 48n,
   normalFlushSizeMin: 1n,
   normalFlushSizeQuotient: 2048n,
+  maxQueueFlushSize: 24n,
+};
+
+const MainnetEntryQueueConfig = {
+  bootstrapValidatorSetSize: 1_000n,
+  bootstrapFlushSize: 1_000n,
+  normalFlushSizeMin: 1n,
+  normalFlushSizeQuotient: 2_048n,
   maxQueueFlushSize: 8n,
 };
 
@@ -243,12 +294,18 @@ export const getEntryQueueConfig = (networkName: NetworkNames) => {
   switch (networkName) {
     case 'local':
       return LocalEntryQueueConfig;
+    case 'next-net':
+      return LocalEntryQueueConfig;
+    case 'devnet':
+      return LocalEntryQueueConfig;
     case 'staging-public':
       return StagingPublicEntryQueueConfig;
     case 'testnet':
       return TestnetEntryQueueConfig;
     case 'staging-ignition':
       return StagingIgnitionEntryQueueConfig;
+    case 'mainnet':
+      return MainnetEntryQueueConfig;
     default:
       throw new Error(`Unrecognized network name: ${networkName}`);
   }
@@ -275,10 +332,15 @@ export const l1ContractsConfigMappings: ConfigMappingsType<L1ContractsConfig> = 
     description: 'The target validator committee size.',
     ...numberConfigHelper(DefaultL1ContractsConfig.aztecTargetCommitteeSize),
   },
-  lagInEpochs: {
-    env: 'AZTEC_LAG_IN_EPOCHS',
+  lagInEpochsForValidatorSet: {
+    env: 'AZTEC_LAG_IN_EPOCHS_FOR_VALIDATOR_SET',
     description: 'The number of epochs to lag behind the current epoch for validator selection.',
-    ...numberConfigHelper(DefaultL1ContractsConfig.lagInEpochs),
+    ...numberConfigHelper(DefaultL1ContractsConfig.lagInEpochsForValidatorSet),
+  },
+  lagInEpochsForRandao: {
+    env: 'AZTEC_LAG_IN_EPOCHS_FOR_RANDAO',
+    description: 'The number of epochs to lag behind the current epoch for randao selection.',
+    ...numberConfigHelper(DefaultL1ContractsConfig.lagInEpochsForRandao),
   },
   aztecProofSubmissionEpochs: {
     env: 'AZTEC_PROOF_SUBMISSION_EPOCHS',

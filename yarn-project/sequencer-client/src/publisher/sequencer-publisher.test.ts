@@ -1,20 +1,18 @@
-import { Blob } from '@aztec/blob-lib';
+import { Blob, getBlobsPerL1Block, getPrefixedEthBlobCommitments } from '@aztec/blob-lib';
 import { HttpBlobSinkClient } from '@aztec/blob-sink/client';
 import { inboundTransform } from '@aztec/blob-sink/encoding';
 import type { EpochCache } from '@aztec/epoch-cache';
+import { type L1ContractsConfig, getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
 import {
   type EmpireSlashingProposerContract,
-  FormattedViemError,
-  type GasPrice,
   type GovernanceProposerContract,
-  type L1ContractsConfig,
-  type L1TxUtilsConfig,
   Multicall3,
-  RollupContract,
-  defaultL1TxUtilsConfig,
-  getL1ContractsConfigEnvVars,
-} from '@aztec/ethereum';
+  type RollupContract,
+} from '@aztec/ethereum/contracts';
+import { type GasPrice, type L1TxUtilsConfig, defaultL1TxUtilsConfig } from '@aztec/ethereum/l1-tx-utils';
 import type { L1TxUtilsWithBlobs } from '@aztec/ethereum/l1-tx-utils-with-blobs';
+import { FormattedViemError } from '@aztec/ethereum/utils';
+import { BlockNumber, EpochNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import { sleep } from '@aztec/foundation/sleep';
 import { TestDateProvider } from '@aztec/foundation/timer';
@@ -90,7 +88,7 @@ describe('SequencerPublisher', () => {
     mockBlobSinkServer = undefined;
     blobSinkClient = new HttpBlobSinkClient({ blobSinkUrl: BLOB_SINK_URL });
 
-    l2Block = await L2Block.random(42);
+    l2Block = await L2Block.random(BlockNumber(42));
 
     header = l2Block.getCheckpointHeader();
     archive = l2Block.archive.root.toBuffer();
@@ -119,7 +117,6 @@ describe('SequencerPublisher', () => {
         rollupAddress: EthAddress.ZERO.toString(),
         governanceProposerAddress: mockGovernanceProposerAddress,
       },
-      l1PublishRetryIntervalMS: 1,
       ethereumSlotDuration: getL1ContractsConfigEnvVars().ethereumSlotDuration,
 
       ...defaultL1TxUtilsConfig,
@@ -140,8 +137,8 @@ describe('SequencerPublisher', () => {
     slashFactoryContract = mock<SlashFactoryContract>();
 
     const epochCache = mock<EpochCache>();
-    epochCache.getEpochAndSlotNow.mockReturnValue({ epoch: 1n, slot: 2n, ts: 3n, now: 3n });
-    epochCache.getCommittee.mockResolvedValue({ committee: [], seed: 1n, epoch: 1n });
+    epochCache.getEpochAndSlotNow.mockReturnValue({ epoch: EpochNumber(1), slot: SlotNumber(2), ts: 3n, now: 3n });
+    epochCache.getCommittee.mockResolvedValue({ committee: [], seed: 1n, epoch: EpochNumber(1) });
 
     publisher = new SequencerPublisher(config, {
       blobSinkClient,
@@ -153,14 +150,14 @@ describe('SequencerPublisher', () => {
       slashFactoryContract,
       dateProvider: new TestDateProvider(),
       metrics: l1Metrics,
+      lastActions: {},
     });
 
-    (publisher as any)['l1TxUtils'] = l1TxUtils;
-    publisher as any;
+    publisher.l1TxUtils = l1TxUtils;
 
     l1TxUtils.sendAndMonitorTransaction.mockResolvedValue({
       receipt: proposeTxReceipt,
-      gasPrice: { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n },
+      state: { gasPrice: { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n } } as any,
     });
     (l1TxUtils as any).estimateGas.mockResolvedValue(GAS_GUESS);
     (l1TxUtils as any).simulate.mockResolvedValue({ gasUsed: 1_000_000n, result: '0x' });
@@ -173,7 +170,7 @@ describe('SequencerPublisher', () => {
 
     const currentL2Slot = publisher.getCurrentL2Slot();
 
-    l2Block = await L2Block.random(42, undefined, undefined, undefined, undefined, Number(currentL2Slot));
+    l2Block = await L2Block.random(BlockNumber(42), undefined, undefined, undefined, undefined, Number(currentL2Slot));
 
     header = l2Block.getCheckpointHeader();
     archive = l2Block.archive.root.toBuffer();
@@ -221,21 +218,11 @@ describe('SequencerPublisher', () => {
     });
   };
 
-  it('bundles propose and vote tx to l1', async () => {
-    const kzg = Blob.getViemKzgInstance();
-
-    const expectedBlobs = await Blob.getBlobsPerBlock(l2Block.body.toBlobFields());
-
-    // Expect the blob sink server to receive the blobs
-    await runBlobSinkServer(expectedBlobs);
-
-    expect(
-      await publisher.enqueueProposeL2Block(l2Block, CommitteeAttestationsAndSigners.empty(), Signature.empty()),
-    ).toEqual(true);
+  const mockGovernancePayload = () => {
     const govPayload = EthAddress.random();
     const voteSig = Signature.random();
     governanceProposerContract.getRoundInfo.mockResolvedValue({
-      lastSignalSlot: 1n,
+      lastSignalSlot: SlotNumber(1),
       payloadWithMostSignals: govPayload.toString(),
       executed: false,
     });
@@ -247,11 +234,27 @@ describe('SequencerPublisher', () => {
         args: [govPayload.toString(), voteSig.toViemSignature()],
       }),
     });
+    return { govPayload, voteSig };
+  };
+
+  it('bundles propose and vote tx to l1', async () => {
+    const expectedBlobs = getBlobsPerL1Block(l2Block.getCheckpointBlobFields());
+
+    // Expect the blob sink server to receive the blobs
+    await runBlobSinkServer(expectedBlobs);
+
+    expect(
+      await publisher.enqueueProposeL2Block(l2Block, CommitteeAttestationsAndSigners.empty(), Signature.empty()),
+    ).toEqual(true);
+
+    const { govPayload, voteSig } = mockGovernancePayload();
+
     rollup.getProposerAt.mockResolvedValueOnce(mockForwarderAddress);
+
     expect(
       await publisher.enqueueGovernanceCastSignal(
         govPayload,
-        2n,
+        SlotNumber(2),
         1n,
         EthAddress.fromString(testHarnessAttesterAccount.address),
         msg => testHarnessAttesterAccount.signTypedData(msg),
@@ -260,19 +263,17 @@ describe('SequencerPublisher', () => {
 
     forwardSpy.mockResolvedValue({
       receipt: proposeTxReceipt,
-      gasPrice: { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n },
       errorMsg: undefined,
     });
 
     await publisher.sendRequests();
     expect(forwardSpy).toHaveBeenCalledTimes(1);
-    const blobInput = Blob.getPrefixedEthBlobCommitments(expectedBlobs);
+    const blobInput = getPrefixedEthBlobCommitments(expectedBlobs);
 
     const args = [
       {
         header: header.toViem(),
         archive: toHex(archive),
-        stateReference: l2Block.header.state.toViem(),
         oracleInput: {
           feeAssetPriceModifier: 0n,
         },
@@ -303,18 +304,26 @@ describe('SequencerPublisher', () => {
         gasLimit: expect.any(BigInt),
         txTimeoutAt: undefined,
       },
-      { blobs: expectedBlobs.map(b => b.data), kzg },
+      expect.objectContaining({
+        blobs: expect.any(Array),
+      }),
       mockRollupAddress,
       expect.anything(), // the logger
     );
 
     expect(forwardSpy.mock.calls[0][2]?.gasLimit).toBeGreaterThan(2_000_000n);
+
+    // Verify blob data (Buffer comparison requires manual content check)
+    const actualBlobConfig = forwardSpy.mock.calls[0][3];
+    expect(actualBlobConfig!.blobs).toHaveLength(expectedBlobs.length);
+    expectedBlobs.forEach((expectedBlob, i) => {
+      expect(Buffer.from(actualBlobConfig!.blobs[i]).equals(expectedBlob.data)).toBe(true);
+    });
   });
 
   it('errors if forwarder tx fails', async () => {
     forwardSpy.mockRejectedValueOnce(new Error()).mockResolvedValueOnce({
       receipt: proposeTxReceipt,
-      gasPrice: { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n },
       errorMsg: undefined,
     });
 
@@ -345,7 +354,6 @@ describe('SequencerPublisher', () => {
   it('returns errorMsg if forwarder tx reverts', async () => {
     forwardSpy.mockResolvedValue({
       receipt: { ...proposeTxReceipt, status: 'reverted' },
-      gasPrice: { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n },
       errorMsg: 'Test error',
     });
 
@@ -400,7 +408,7 @@ describe('SequencerPublisher', () => {
           args: [EthAddress.random().toString()],
         }),
       },
-      lastValidL2Slot: 1n,
+      lastValidL2Slot: SlotNumber(1),
       checkSuccess: () => true,
     });
 

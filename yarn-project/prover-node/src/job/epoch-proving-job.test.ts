@@ -1,10 +1,13 @@
-import { BatchedBlob } from '@aztec/blob-lib';
+import { BatchedBlob } from '@aztec/blob-lib/types';
+import { BlockNumber, CheckpointNumber, EpochNumber } from '@aztec/foundation/branded-types';
 import { fromEntries, times, timesParallel } from '@aztec/foundation/collection';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import { toArray } from '@aztec/foundation/iterable';
 import { sleep } from '@aztec/foundation/sleep';
 import type { PublicProcessor, PublicProcessorFactory } from '@aztec/simulator/server';
-import { CommitteeAttestation, L2Block, type L2BlockSource, PublishedL2Block } from '@aztec/stdlib/block';
+import { PublicSimulatorConfig } from '@aztec/stdlib/avm';
+import { CommitteeAttestation, type L2BlockSource } from '@aztec/stdlib/block';
+import { Checkpoint, PublishedCheckpoint } from '@aztec/stdlib/checkpoint';
 import type { L1RollupConstants } from '@aztec/stdlib/epoch-helpers';
 import type { EpochProver, MerkleTreeWriteOperations, WorldStateSynchronizer } from '@aztec/stdlib/interfaces/server';
 import { Proof } from '@aztec/stdlib/proofs';
@@ -37,27 +40,28 @@ describe('epoch-proving-job', () => {
   let publicInputs: RootRollupPublicInputs;
   let proof: Proof;
   let batchedBlobInputs: BatchedBlob;
-  let blocks: L2Block[];
+  let checkpoints: Checkpoint[];
   let txs: Tx[];
   let initialHeader: BlockHeader;
   let epochNumber: number;
   let attestations: CommitteeAttestation[];
 
   // Constants
-  const NUM_BLOCKS = 3;
+  const NUM_CHECKPOINTS = 3;
+  const BLOCKS_PER_CHECKPOINT = 2;
   const TXS_PER_BLOCK = 2;
-  const NUM_TXS = NUM_BLOCKS * TXS_PER_BLOCK;
+  const NUM_BLOCKS = NUM_CHECKPOINTS * BLOCKS_PER_CHECKPOINT;
   const proverId = EthAddress.random();
 
   // Subject factory
-  const createJob = (opts: { deadline?: Date; parallelBlockLimit?: number } = {}) => {
+  const createJob = (opts: { deadline?: Date; parallelBlockLimit?: number; skipSubmitProof?: boolean } = {}) => {
     const txsMap = new Map<string, Tx>(txs.map(tx => [tx.getTxHash().toString(), tx]));
 
     const data: EpochProvingJobData = {
-      blocks,
+      checkpoints,
       txs: txsMap,
-      epochNumber: BigInt(epochNumber),
-      l1ToL2Messages: fromEntries(blocks.map(b => [b.number, []])),
+      epochNumber: EpochNumber(epochNumber),
+      l1ToL2Messages: fromEntries(checkpoints.map(c => [c.number, []])),
       previousBlockHeader: initialHeader,
       attestations,
     };
@@ -70,7 +74,7 @@ describe('epoch-proving-job', () => {
       l2BlockSource,
       metrics,
       opts.deadline,
-      { parallelBlockLimit: opts.parallelBlockLimit ?? 32 },
+      { parallelBlockLimit: opts.parallelBlockLimit ?? 32, skipSubmitProof: opts.skipSubmitProof },
     );
   };
 
@@ -98,16 +102,24 @@ describe('epoch-proving-job', () => {
     );
     epochNumber = 1;
     initialHeader = BlockHeader.empty();
-    blocks = await timesParallel(NUM_BLOCKS, i => L2Block.random(i + 1, TXS_PER_BLOCK));
+    checkpoints = await timesParallel(NUM_CHECKPOINTS, i =>
+      Checkpoint.random(CheckpointNumber(i + 1), {
+        numBlocks: BLOCKS_PER_CHECKPOINT,
+        startBlockNumber: i * BLOCKS_PER_CHECKPOINT + 1,
+        txsPerBlock: TXS_PER_BLOCK,
+      }),
+    );
     attestations = times(3, CommitteeAttestation.random);
 
-    const txHashes = times(NUM_TXS, i => blocks[i % NUM_BLOCKS].body.txEffects[i % TXS_PER_BLOCK].txHash);
+    const txHashes = checkpoints.map(c => c.blocks.map(b => b.body.txEffects.map(tx => tx.txHash))).flat(2);
     txs = txHashes.map(txHash => ({ txHash, getTxHash: () => txHash }) as Tx);
 
     l2BlockSource.getBlockHeader.mockResolvedValue(initialHeader);
     l2BlockSource.getL1Constants.mockResolvedValue({ ethereumSlotDuration: 0.1 } as L1RollupConstants);
-    l2BlockSource.getBlockHeadersForEpoch.mockResolvedValue(blocks.map(b => b.getBlockHeader()));
-    l2BlockSource.getPublishedBlocks.mockResolvedValue([{ block: blocks.at(-1)!, attestations } as PublishedL2Block]);
+    l2BlockSource.getBlockHeadersForEpoch.mockResolvedValue(checkpoints.map(c => c.blocks.map(b => b.header)).flat());
+    l2BlockSource.getPublishedCheckpoints.mockResolvedValue([
+      { checkpoint: checkpoints.at(-1)!, attestations } as PublishedCheckpoint,
+    ]);
     publicProcessorFactory.create.mockReturnValue(publicProcessor);
     db.getInitialHeader.mockReturnValue(initialHeader);
     worldState.fork.mockResolvedValue(db);
@@ -129,6 +141,16 @@ describe('epoch-proving-job', () => {
     expect(job.getState()).toEqual('completed');
     expect(db.close).toHaveBeenCalledTimes(NUM_BLOCKS);
     expect(publicProcessor.process).toHaveBeenCalledTimes(NUM_BLOCKS);
+    expect(publicProcessorFactory.create).toHaveBeenCalledTimes(NUM_BLOCKS);
+    expect(publicProcessorFactory.create.mock.calls.map(call => /* config */ call[2])).toEqual(
+      new Array(NUM_BLOCKS).fill(
+        PublicSimulatorConfig.from({
+          proverId: proverId.toField(),
+          collectHints: true,
+          collectPublicInputs: true,
+        }),
+      ),
+    );
     expect(publisher.submitEpochProof).toHaveBeenCalledWith(
       expect.objectContaining({ epochNumber, proof, publicInputs, attestations: attestations.map(a => a.toViem()) }),
     );
@@ -145,7 +167,7 @@ describe('epoch-proving-job', () => {
 
     const firstBlockProcessedTxs = publicProcessor.process.mock.calls[0][0] as Tx[];
     expect(firstBlockProcessedTxs.map(tx => tx.txHash.toString())).toEqual(
-      blocks[0].body.txEffects.map(tx => tx.txHash.toString()),
+      checkpoints[0].blocks[0].body.txEffects.map(tx => tx.txHash.toString()),
     );
   });
 
@@ -194,8 +216,7 @@ describe('epoch-proving-job', () => {
   });
 
   it('halts if a new block for the epoch is found', async () => {
-    const newBlocks = await timesParallel(NUM_BLOCKS + 1, i => L2Block.random(i + 1, TXS_PER_BLOCK));
-    const newHeaders = newBlocks.map(b => b.getBlockHeader());
+    const newHeaders = times(NUM_BLOCKS + 1, i => BlockHeader.random({ blockNumber: BlockNumber(i + 1) }));
     l2BlockSource.getBlockHeadersForEpoch.mockResolvedValue(newHeaders);
 
     const job = createJob();
@@ -204,5 +225,14 @@ describe('epoch-proving-job', () => {
     expect(job.getState()).toEqual('reorg');
     expect(publisher.submitEpochProof).not.toHaveBeenCalled();
     expect(prover.cancel).toHaveBeenCalled();
+  });
+
+  it('skips publishing when skipSubmitProof is enabled', async () => {
+    const job = createJob({ skipSubmitProof: true });
+    await job.run();
+
+    expect(job.getState()).toEqual('completed');
+    expect(prover.finalizeEpoch).toHaveBeenCalled();
+    expect(publisher.submitEpochProof).not.toHaveBeenCalled();
   });
 });

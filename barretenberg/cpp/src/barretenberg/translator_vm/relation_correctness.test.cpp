@@ -74,16 +74,18 @@ TEST_F(TranslatorRelationCorrectnessTests, TranslatorExtraRelationsCorrectness)
     prover_polynomials.accumulators_binary_limbs_3.at(Flavor::RESULT_ROW) = params.accumulated_result[3];
 
     // Check that Opcode Constraint relation is satisfied across each row of the prover polynomials
-    RelationChecker<Flavor>::check<TranslatorOpcodeConstraintRelation<FF>>(
+    auto translator_op_code_failures = RelationChecker<Flavor>::check<TranslatorOpcodeConstraintRelation<FF>>(
         prover_polynomials, params, "TranslatorOpcodeConstraintRelation");
-
+    EXPECT_TRUE(translator_op_code_failures.empty());
     // Check that Accumulator Transfer relation is satisfied across each row of the prover polynomials
-    RelationChecker<Flavor>::check<TranslatorAccumulatorTransferRelation<FF>>(
-        prover_polynomials, params, "TranslatorAccumulatorTransferRelation");
-
+    auto translator_accumulator_transfer_failures =
+        RelationChecker<Flavor>::check<TranslatorAccumulatorTransferRelation<FF>>(
+            prover_polynomials, params, "TranslatorAccumulatorTransferRelation");
+    EXPECT_TRUE(translator_accumulator_transfer_failures.empty());
     // Check that Zero Constraint relation is satisfied across each row of the prover polynomials
-    RelationChecker<Flavor>::check<TranslatorZeroConstraintsRelation<FF>>(
+    auto translator_zero_constraints_failures = RelationChecker<Flavor>::check<TranslatorZeroConstraintsRelation<FF>>(
         prover_polynomials, params, "TranslatorZeroConstraintsRelation");
+    EXPECT_TRUE(translator_zero_constraints_failures.empty());
 }
 /**
  * @brief Test the correctness of TranslatorFlavor's Decomposition Relation
@@ -526,7 +528,7 @@ TEST_F(TranslatorRelationCorrectnessTests, NonNative)
 
     // Copy values of wires used in the non-native field relation from the circuit builder
     for (size_t i = Builder::NUM_NO_OPS_START + Builder::NUM_RANDOM_OPS_START;
-         i < circuit_builder.num_gates - Builder::NUM_RANDOM_OPS_END;
+         i < circuit_builder.num_gates() - Builder::NUM_RANDOM_OPS_END;
          i++) {
         prover_polynomials.op.at(i) = circuit_builder.get_variable(circuit_builder.wires[circuit_builder.OP][i]);
         prover_polynomials.p_x_low_limbs.at(i) =

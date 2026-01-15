@@ -7,7 +7,8 @@
 #include "barretenberg/vm2/constraining/flavor_settings.hpp"
 #include "barretenberg/vm2/constraining/testing/check_relation.hpp"
 #include "barretenberg/vm2/generated/relations/execution.hpp"
-#include "barretenberg/vm2/simulation/gt.hpp"
+#include "barretenberg/vm2/simulation/gadgets/gt.hpp"
+#include "barretenberg/vm2/simulation/gadgets/note_hash_tree_check.hpp"
 #include "barretenberg/vm2/simulation/lib/merkle.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_field_gt.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_merkle_check.hpp"
@@ -44,6 +45,7 @@ using FF = AvmFlavorSettings::FF;
 using C = Column;
 using notehash_exists = bb::avm2::notehash_exists<FF>;
 using RawPoseidon2 = crypto::Poseidon2<crypto::Poseidon2Bn254ScalarFieldParams>;
+using execution = bb::avm2::execution<FF>;
 
 TEST(NoteHashExistsConstrainingTest, PositiveExists)
 {
@@ -106,8 +108,8 @@ TEST(NoteHashExistsConstrainingTest, NegativeNoteHashExistsSuccess)
         { C::execution_sel_opcode_error, 1 },
     } });
 
-    EXPECT_THROW_WITH_MESSAGE(check_relation<notehash_exists>(trace, notehash_exists::SR_NOTE_HASH_EXISTS_SUCCESS),
-                              "NOTE_HASH_EXISTS_SUCCESS");
+    EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_INFALLIBLE_OPCODES_SUCCESS),
+                              "INFALLIBLE_OPCODES_SUCCESS");
 }
 
 TEST(NoteHashExistsConstrainingTest, Interactions)
@@ -129,7 +131,7 @@ TEST(NoteHashExistsConstrainingTest, Interactions)
 
     AppendOnlyTreeSnapshot note_hash_tree_snapshot = AppendOnlyTreeSnapshot{
         .root = 42,
-        .nextAvailableLeafIndex = 128,
+        .next_available_leaf_index = 128,
     };
 
     greater_than.gt(NOTE_HASH_TREE_LEAF_COUNT, leaf_index);

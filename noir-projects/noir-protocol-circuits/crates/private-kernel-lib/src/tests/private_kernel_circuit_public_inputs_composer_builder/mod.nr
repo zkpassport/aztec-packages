@@ -17,6 +17,7 @@ pub struct PrivateKernelCircuitPublicInputsComposerBuilder {
     previous_kernel: FixtureBuilder,
     private_call: FixtureBuilder,
     first_nullifier_hint: Field,
+    revertible_counter_hint: u32,
 }
 
 impl PrivateKernelCircuitPublicInputsComposerBuilder {
@@ -33,6 +34,7 @@ impl PrivateKernelCircuitPublicInputsComposerBuilder {
             previous_kernel,
             private_call,
             first_nullifier_hint: 27,
+            revertible_counter_hint: 42,
         }
     }
 
@@ -48,10 +50,11 @@ impl PrivateKernelCircuitPublicInputsComposerBuilder {
         PrivateKernelCircuitPublicInputsComposer::new_from_tx_request(
             self.tx_request,
             private_call,
-            FixtureBuilder::vk_tree_root(),
-            self.private_call.protocol_contract_tree_root,
+            self.private_call.vk_tree_root,
+            self.private_call.protocol_contracts,
             is_private_only,
             self.first_nullifier_hint,
+            self.revertible_counter_hint,
         )
     }
 

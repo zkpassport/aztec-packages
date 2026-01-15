@@ -1,4 +1,7 @@
-import { AuthWitness, type AztecAddress, Contract, type Wallet } from '@aztec/aztec.js';
+import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { AuthWitness } from '@aztec/aztec.js/authorization';
+import { Contract } from '@aztec/aztec.js/contracts';
+import type { AztecNode } from '@aztec/aztec.js/node';
 import { prepTx } from '@aztec/cli/utils';
 import type { LogFn } from '@aztec/foundation/log';
 import { serializePrivateExecutionSteps } from '@aztec/stdlib/kernel';
@@ -8,9 +11,11 @@ import path from 'path';
 
 import type { CLIFeeArgs } from '../utils/options/fees.js';
 import { printProfileResult } from '../utils/profiling.js';
+import type { CLIWallet } from '../utils/wallet.js';
 
 export async function profile(
-  wallet: Wallet,
+  wallet: CLIWallet,
+  node: AztecNode,
   from: AztecAddress,
   functionName: string,
   functionArgsIn: any[],
@@ -23,11 +28,12 @@ export async function profile(
 ) {
   const { functionArgs, contractArtifact } = await prepTx(contractArtifactPath, functionName, functionArgsIn, log);
 
-  const contract = await Contract.at(contractAddress, contractArtifact, wallet);
+  const contract = Contract.at(contractAddress, contractArtifact, wallet);
   const call = contract.methods[functionName](...functionArgs);
 
+  const { paymentMethod, gasSettings } = await feeOpts.toUserFeeOptions(node, wallet, from);
   const result = await call.profile({
-    fee: await feeOpts.toUserFeeOptions(wallet, from),
+    fee: { gasSettings, paymentMethod },
     from,
     profileMode: 'full',
     authWitnesses,

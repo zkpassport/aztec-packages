@@ -1,3 +1,4 @@
+import { SlotNumber } from '@aztec/foundation/branded-types';
 import { type JsonRpcTestContext, createJsonRpcTestSetup } from '@aztec/foundation/json-rpc/test';
 
 import { BlockAttestation } from '../p2p/block_attestation.js';
@@ -26,7 +27,7 @@ describe('P2PApiSchema', () => {
   });
 
   it('getAttestationsForSlot', async () => {
-    const attestations = await context.client.getAttestationsForSlot(BigInt(1), 'proposalId');
+    const attestations = await context.client.getAttestationsForSlot(SlotNumber(1), 'proposalId');
     expect(attestations).toEqual([BlockAttestation.empty()]);
     expect(attestations[0]).toBeInstanceOf(BlockAttestation);
   });
@@ -55,6 +56,10 @@ describe('P2PApiSchema', () => {
     const peers = await context.client.getPeers(true);
     expect(peers).toEqual(peers);
   });
+
+  it('deleteAttestation', async () => {
+    await context.client.deleteAttestation(BlockAttestation.empty());
+  });
 });
 
 const peers: PeerInfo[] = [
@@ -64,8 +69,8 @@ const peers: PeerInfo[] = [
 ];
 
 class MockP2P implements P2PApi {
-  getAttestationsForSlot(slot: bigint, proposalId?: string): Promise<BlockAttestation[]> {
-    expect(slot).toEqual(1n);
+  getAttestationsForSlot(slot: SlotNumber, proposalId?: string): Promise<BlockAttestation[]> {
+    expect(slot).toEqual(SlotNumber(1));
     expect(proposalId).toEqual('proposalId');
     return Promise.resolve([BlockAttestation.empty()]);
   }
@@ -89,6 +94,11 @@ class MockP2P implements P2PApi {
 
   addAttestations(attestations: BlockAttestation[]): Promise<void> {
     expect(attestations).toEqual([BlockAttestation.empty(), BlockAttestation.empty()]);
+    return Promise.resolve();
+  }
+
+  deleteAttestation(attestation: BlockAttestation): Promise<void> {
+    expect(attestation).toEqual(BlockAttestation.empty());
     return Promise.resolve();
   }
 }

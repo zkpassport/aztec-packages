@@ -46,7 +46,7 @@ struct lookup_context_ctx_stack_call_settings_ {
         ColumnAndShifts::execution_public_data_tree_size,
         ColumnAndShifts::execution_written_public_data_slots_tree_root,
         ColumnAndShifts::execution_written_public_data_slots_tree_size,
-        ColumnAndShifts::execution_num_unencrypted_logs,
+        ColumnAndShifts::execution_num_unencrypted_log_fields,
         ColumnAndShifts::execution_num_l2_to_l1_messages
     };
     static constexpr std::array<ColumnAndShifts, LOOKUP_TUPLE_SIZE> DST_COLUMNS = {
@@ -74,7 +74,7 @@ struct lookup_context_ctx_stack_call_settings_ {
         ColumnAndShifts::context_stack_public_data_tree_size,
         ColumnAndShifts::context_stack_written_public_data_slots_tree_root,
         ColumnAndShifts::context_stack_written_public_data_slots_tree_size,
-        ColumnAndShifts::context_stack_num_unencrypted_logs,
+        ColumnAndShifts::context_stack_num_unencrypted_log_fields,
         ColumnAndShifts::context_stack_num_l2_to_l1_messages
     };
 };
@@ -89,7 +89,7 @@ struct lookup_context_ctx_stack_rollback_settings_ {
     static constexpr std::string_view NAME = "LOOKUP_CONTEXT_CTX_STACK_ROLLBACK";
     static constexpr std::string_view RELATION_NAME = "context";
     static constexpr size_t LOOKUP_TUPLE_SIZE = 26;
-    static constexpr Column SRC_SELECTOR = Column::execution_rollback_context;
+    static constexpr Column SRC_SELECTOR = Column::execution_nested_revert_or_error;
     static constexpr Column DST_SELECTOR = Column::context_stack_sel;
     static constexpr Column COUNTS = Column::lookup_context_ctx_stack_rollback_counts;
     static constexpr Column INVERSES = Column::lookup_context_ctx_stack_rollback_inv;
@@ -118,7 +118,7 @@ struct lookup_context_ctx_stack_rollback_settings_ {
         ColumnAndShifts::execution_prev_public_data_tree_size_shift,
         ColumnAndShifts::execution_prev_written_public_data_slots_tree_root_shift,
         ColumnAndShifts::execution_prev_written_public_data_slots_tree_size_shift,
-        ColumnAndShifts::execution_prev_num_unencrypted_logs_shift,
+        ColumnAndShifts::execution_prev_num_unencrypted_log_fields_shift,
         ColumnAndShifts::execution_prev_num_l2_to_l1_messages_shift
     };
     static constexpr std::array<ColumnAndShifts, LOOKUP_TUPLE_SIZE> DST_COLUMNS = {
@@ -146,7 +146,7 @@ struct lookup_context_ctx_stack_rollback_settings_ {
         ColumnAndShifts::context_stack_public_data_tree_size,
         ColumnAndShifts::context_stack_written_public_data_slots_tree_root,
         ColumnAndShifts::context_stack_written_public_data_slots_tree_size,
-        ColumnAndShifts::context_stack_num_unencrypted_logs,
+        ColumnAndShifts::context_stack_num_unencrypted_log_fields,
         ColumnAndShifts::context_stack_num_l2_to_l1_messages
     };
 };

@@ -1,9 +1,10 @@
+import { BlockNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { times } from '@aztec/foundation/collection';
 import { getDefaultConfig } from '@aztec/foundation/config';
 import { promiseWithResolvers } from '@aztec/foundation/promise';
 import { sleep } from '@aztec/foundation/sleep';
 import { TestDateProvider } from '@aztec/foundation/timer';
-import { L2Block } from '@aztec/stdlib/block';
+import { L2BlockNew } from '@aztec/stdlib/block';
 import { EmptyL1RollupConstants, type L1RollupConstants } from '@aztec/stdlib/epoch-helpers';
 import type { BlockProposal } from '@aztec/stdlib/p2p';
 import { Tx, TxArray, TxHash } from '@aztec/stdlib/tx';
@@ -35,7 +36,7 @@ describe('TxCollection', () => {
   let deadline: Date;
   let txs: Tx[];
   let txHashes: TxHash[];
-  let block: L2Block;
+  let block: L2BlockNew;
 
   const makeNode = (name: string) => {
     const node = mock<TxSource>();
@@ -44,10 +45,21 @@ describe('TxCollection', () => {
     return node;
   };
 
-  const makeTx = (txHash?: string | TxHash) => Tx.random({ txHash }) as Tx;
+  const makeTx = async (txHash?: string | TxHash) => {
+    const tx = Tx.random({ txHash }) as Tx;
+    await tx.recomputeHash();
+    return tx;
+  };
 
   const makeL2Block = (blockNumber = 1, slotNumber?: number) =>
-    L2Block.random(blockNumber, 0, 0, 0, undefined, slotNumber ?? blockNumber);
+    L2BlockNew.random(BlockNumber(blockNumber), {
+      txsPerBlock: 4,
+      txOptions: {
+        numPublicCallsPerTx: 3,
+        numPublicLogsPerCall: 1,
+      },
+      ...(slotNumber !== undefined ? { slotNumber: SlotNumber(slotNumber) } : {}),
+    });
 
   const setNodeTxs = (node: MockProxy<TxSource>, txs: Tx[]) => {
     node.getTxsByHash.mockImplementation(async hashes => {
@@ -115,7 +127,7 @@ describe('TxCollection', () => {
       txCollectionFastNodeIntervalMs: 100,
     };
 
-    txs = [makeTx(), makeTx(), makeTx()];
+    txs = await Promise.all([makeTx(), makeTx(), makeTx()]);
     txHashes = txs.map(tx => tx.txHash);
     block = await makeL2Block();
     deadline = new Date(dateProvider.now() + 60 * 60 * 1000);
@@ -168,7 +180,7 @@ describe('TxCollection', () => {
     });
 
     it('collects tx from nodes in batches', async () => {
-      txs = times(8, () => makeTx());
+      txs = await Promise.all(times(8, () => makeTx()));
       txHashes = txs.map(tx => tx.txHash);
       txCollection.startCollecting(block, txHashes);
 
@@ -322,12 +334,12 @@ describe('TxCollection', () => {
       expect(nodes[0].getTxsByHash).toHaveBeenCalledWith(txHashes);
 
       jest.clearAllMocks();
-      txCollection.stopCollectingForBlocksUpTo(1);
+      txCollection.stopCollectingForBlocksUpTo(BlockNumber(1));
       await txCollection.trigger();
       expect(nodes[0].getTxsByHash).toHaveBeenCalledWith([txHashes[1], txHashes[2]]);
 
       jest.clearAllMocks();
-      txCollection.stopCollectingForBlocksAfter(2);
+      txCollection.stopCollectingForBlocksAfter(BlockNumber(2));
       await txCollection.trigger();
       expect(nodes[0].getTxsByHash).toHaveBeenCalledWith([txHashes[1]]);
     });
@@ -363,7 +375,7 @@ describe('TxCollection', () => {
     });
 
     it('collects from nodes distributing batches', async () => {
-      txs = times(20, () => makeTx());
+      txs = await Promise.all(times(20, () => makeTx()));
       txHashes = txs.map(tx => tx.txHash);
       setNodeTxs(nodes[0], txs);
       setNodeTxs(nodes[1], txs.slice(15, 20));
@@ -425,7 +437,7 @@ describe('TxCollection', () => {
 
     it('stops collecting a tx from nodes when found', async () => {
       deadline = new Date(dateProvider.now() + 4000);
-      txs = times(4, () => makeTx());
+      txs = await Promise.all(times(4, () => makeTx()));
       txHashes = txs.map(tx => tx.txHash);
 
       const reqRespPromise = promiseWithResolvers<TxArray[]>();

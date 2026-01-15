@@ -11,37 +11,29 @@ import { type ChainConfig, chainConfigMappings } from '@aztec/stdlib/config';
 export { getPackageInfo } from './package_info.js';
 
 /**
- * Temporary configuration until WASM can be used instead of native
- */
-export interface BBProverConfig {
-  bbWorkingDirectory?: string;
-  bbBinaryPath?: string;
-  bbSkipCleanup?: boolean;
-}
-
-/**
  * Configuration settings for the prover factory
  */
 export interface KernelProverConfig {
   /** Whether we are running with real proofs */
   proverEnabled?: boolean;
 }
+
 /**
- * Configuration settings for the PXE.
+ * Configuration settings for the synchronizer.
  */
-export interface PXEConfig {
+export interface SynchronizerConfig {
   /** Maximum amount of blocks to pull from the stream in one request when synchronizing */
   l2BlockBatchSize: number;
 }
 
-export type PXEServiceConfig = PXEConfig & KernelProverConfig & BBProverConfig & DataStoreConfig & ChainConfig;
+export type PXEConfig = KernelProverConfig & DataStoreConfig & ChainConfig & SynchronizerConfig;
 
 export type CliPXEOptions = {
   /** Custom Aztec Node URL to connect to  */
   nodeUrl?: string;
 };
 
-export const pxeConfigMappings: ConfigMappingsType<PXEServiceConfig> = {
+export const pxeConfigMappings: ConfigMappingsType<PXEConfig> = {
   ...dataConfigMappings,
   ...chainConfigMappings,
   l2BlockBatchSize: {
@@ -49,19 +41,13 @@ export const pxeConfigMappings: ConfigMappingsType<PXEServiceConfig> = {
     ...numberConfigHelper(50),
     description: 'Maximum amount of blocks to pull from the stream in one request when synchronizing',
   },
-  bbBinaryPath: {
-    env: 'BB_BINARY_PATH',
-    description: 'Path to the BB binary',
-  },
-  bbWorkingDirectory: {
-    env: 'BB_WORKING_DIRECTORY',
-    description: 'Working directory for the BB binary',
-  },
-  bbSkipCleanup: {
-    env: 'BB_SKIP_CLEANUP',
-    description: 'True to skip cleanup of temporary files for debugging purposes',
-    ...booleanConfigHelper(),
-  },
+  // TODO: We're losing this feature in moving to bb.js api.
+  // Reimplement it as a setting that dumps the msgpack data on the bb.js backend if needed.
+  // bbSkipCleanup: {
+  //   env: 'BB_SKIP_CLEANUP',
+  //   description: 'True to skip cleanup of temporary files for debugging purposes',
+  //   ...booleanConfigHelper(),
+  // },
   proverEnabled: {
     env: 'PXE_PROVER_ENABLED',
     description: 'Enable real proofs',
@@ -70,10 +56,10 @@ export const pxeConfigMappings: ConfigMappingsType<PXEServiceConfig> = {
 };
 
 /**
- * Creates an instance of PXEServiceConfig out of environment variables using sensible defaults for integration testing if not set.
+ * Creates an instance of PXEConfig out of environment variables using sensible defaults for integration testing if not set.
  */
-export function getPXEServiceConfig(): PXEServiceConfig {
-  return getConfigFromMappings<PXEServiceConfig>(pxeConfigMappings);
+export function getPXEConfig(): PXEConfig {
+  return getConfigFromMappings<PXEConfig>(pxeConfigMappings);
 }
 
 export const pxeCliConfigMappings: ConfigMappingsType<CliPXEOptions> = {
@@ -83,7 +69,7 @@ export const pxeCliConfigMappings: ConfigMappingsType<CliPXEOptions> = {
   },
 };
 
-export const allPxeConfigMappings: ConfigMappingsType<CliPXEOptions & PXEServiceConfig> = {
+export const allPxeConfigMappings: ConfigMappingsType<CliPXEOptions & PXEConfig> = {
   ...pxeConfigMappings,
   ...pxeCliConfigMappings,
   ...dataConfigMappings,
@@ -99,8 +85,8 @@ export const allPxeConfigMappings: ConfigMappingsType<CliPXEOptions & PXEService
 /**
  * Creates an instance of CliPxeOptions out of environment variables
  */
-export function getCliPXEOptions(): CliPXEOptions & PXEServiceConfig {
-  const pxeConfig = getPXEServiceConfig();
+export function getCliPXEOptions(): CliPXEOptions & PXEConfig {
+  const pxeConfig = getPXEConfig();
   const cliOptions = getConfigFromMappings<CliPXEOptions>(pxeCliConfigMappings);
   return {
     ...pxeConfig,

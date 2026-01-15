@@ -1,17 +1,17 @@
-import type { DeployL1ContractsArgs, ExtendedViemWalletClient } from '@aztec/ethereum';
-import {
-  DefaultL1ContractsConfig,
-  RollupContract,
-  createExtendedL1Client,
-  decodeSlashConsensusVotes,
-  deployL1Contracts,
-} from '@aztec/ethereum';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import { DefaultL1ContractsConfig } from '@aztec/ethereum/config';
+import { RollupContract, decodeSlashConsensusVotes } from '@aztec/ethereum/contracts';
+import type { DeployL1ContractsArgs } from '@aztec/ethereum/deploy-l1-contracts';
+import { deployL1Contracts } from '@aztec/ethereum/deploy-l1-contracts';
 import { EthCheatCodes, RollupCheatCodes, startAnvil } from '@aztec/ethereum/test';
+import type { ExtendedViemWalletClient } from '@aztec/ethereum/types';
+import { EpochNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { SecretValue } from '@aztec/foundation/config';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import { bufferToHex } from '@aztec/foundation/string';
+import { DateProvider } from '@aztec/foundation/timer';
 import { TallySlashingProposerAbi } from '@aztec/l1-artifacts/TallySlashingProposerAbi';
 
 import type { Anvil } from '@viem/anvil';
@@ -67,7 +67,7 @@ describe('TallySlashingProposer', () => {
       ...DefaultL1ContractsConfig,
       salt: undefined,
       vkTreeRoot: Fr.random(),
-      protocolContractTreeRoot: Fr.random(),
+      protocolContractsHash: Fr.random(),
       genesisArchiveRoot: Fr.random(),
       realVerifier: false,
       slasherFlavor: 'tally' as const,
@@ -82,7 +82,7 @@ describe('TallySlashingProposer', () => {
     };
 
     const deployed = await deployL1Contracts([rpcUrl], deployerPrivateKey, foundry, logger, testConfig);
-    cheatCodes = new EthCheatCodes([rpcUrl]);
+    cheatCodes = new EthCheatCodes([rpcUrl], new DateProvider());
     rollupCheatCodes = new RollupCheatCodes(cheatCodes, deployed.l1ContractAddresses);
 
     writeClient = createExtendedL1Client([rpcUrl], deployerPrivateKey);
@@ -160,7 +160,6 @@ describe('TallySlashingProposer', () => {
       const roundInfo = await tallySlashingProposer.getRound(0n);
 
       expect(typeof roundInfo.isExecuted).toBe('boolean');
-      expect(typeof roundInfo.readyToExecute).toBe('boolean');
       expect(typeof roundInfo.voteCount).toBe('bigint');
       expect(roundInfo.voteCount).toBeGreaterThanOrEqual(0n);
     });
@@ -182,14 +181,14 @@ describe('TallySlashingProposer', () => {
 
     it('builds correct typed data to sign', async () => {
       const votes = bufferToHex(Buffer.alloc(testSlashingRoundSize / testConfig.aztecEpochDuration, 1));
-      const slot = 1n;
+      const slot = SlotNumber(1);
       const typedData = tallySlashingProposer.buildVoteTypedData(votes, slot);
       const expectedDigest = await tallySlashingProposer.getVoteDataDigest(votes, slot);
       expect(hashTypedData(typedData)).toEqual(expectedDigest.toString());
     });
 
     it('builds vote request with signer', async () => {
-      await rollupCheatCodes.advanceToEpoch(12n);
+      await rollupCheatCodes.advanceToEpoch(EpochNumber(12));
       const votes = bufferToHex(Buffer.alloc(testSlashingRoundSize / testConfig.aztecEpochDuration, 1));
       const slot = await rollup.getSlotNumber();
       const proposer = EthAddress.fromString(await rollup.getCurrentProposer());

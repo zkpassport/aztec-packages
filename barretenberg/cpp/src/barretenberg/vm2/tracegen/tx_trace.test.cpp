@@ -31,9 +31,10 @@ TEST(TxTraceGenTest, EnqueuedCallEvent)
     auto calldata_hash = FF::random_element();
 
     simulation::TxStartupEvent startup_event = {
-        .state = { .gas_used = { 500, 1000 }, .tree_states = {}, .written_public_data_slots_tree_snapshot = {} },
+        .gas_used = { 500, 1000 },
         .gas_limit = { 1000, 2000 },
         .teardown_gas_limit = { 0, 0 },
+        .phase_lengths = { .setup = 1 },
     };
 
     simulation::TxPhaseEvent tx_event = {
@@ -46,6 +47,7 @@ TEST(TxTraceGenTest, EnqueuedCallEvent)
                 .msg_sender = msg_sender,
                 .contract_address = contract_address,
                 .is_static = false,
+                .calldata_size = 2,
                 .calldata_hash = calldata_hash,
                 .success = true,
             },
@@ -68,6 +70,7 @@ TEST(TxTraceGenTest, EnqueuedCallEvent)
                       ROW_FIELD_EQ(tx_remaining_phase_inv, 1),
                       ROW_FIELD_EQ(tx_msg_sender, msg_sender),
                       ROW_FIELD_EQ(tx_contract_addr, contract_address),
+                      ROW_FIELD_EQ(tx_calldata_size, 2),
                       ROW_FIELD_EQ(tx_calldata_hash, calldata_hash),
                       ROW_FIELD_EQ(tx_end_phase, 1),
                       ROW_FIELD_EQ(tx_is_static, false)));
@@ -87,7 +90,7 @@ TEST(TxTraceGenTest, CollectFeeEvent)
     auto fee = effective_fee_per_da_gas * prev_da_gas_used + effective_fee_per_l2_gas * prev_l2_gas_used;
 
     simulation::TxStartupEvent startup_event = {
-        .state = { .gas_used = { 500, 1000 }, .tree_states = {}, .written_public_data_slots_tree_snapshot = {} },
+        .gas_used = { 500, 1000 },
         .gas_limit = { 1000, 2000 },
         .teardown_gas_limit = { 0, 0 },
     };
@@ -137,13 +140,55 @@ TEST(TxTraceGenTest, CollectFeeEvent)
                       ROW_FIELD_EQ(tx_uint32_max, 0xffffffff)));
 };
 
+TEST(TxTraceGenTest, BasicFirstPaddedRow)
+{
+    TestTraceContainer trace;
+    TxTraceBuilder builder;
+
+    simulation::TxStartupEvent startup_event = {
+        .gas_used = { 500, 1000 },
+        .gas_limit = { 1000, 2000 },
+        .teardown_gas_limit = { 0, 0 },
+    };
+
+    simulation::TxPhaseEvent empty_nr_nullifier_insertion_event = { .phase = TransactionPhase::NR_NULLIFIER_INSERTION,
+                                                                    .state_before = {},
+                                                                    .state_after = {},
+                                                                    .reverted = false,
+                                                                    .event = simulation::EmptyPhaseEvent{} };
+
+    builder.process({ startup_event, empty_nr_nullifier_insertion_event }, trace);
+
+    auto rows = trace.as_rows();
+    ASSERT_EQ(rows.size(), 2);
+
+    EXPECT_THAT(
+        rows[1],
+        AllOf(
+            ROW_FIELD_EQ(tx_sel, 1),
+            ROW_FIELD_EQ(tx_phase_value, static_cast<uint8_t>(TransactionPhase::NR_NULLIFIER_INSERTION)),
+            ROW_FIELD_EQ(tx_is_padded, 1),
+            ROW_FIELD_EQ(tx_is_tree_insert_phase, 1),
+            ROW_FIELD_EQ(tx_sel_non_revertible_append_nullifier, 1),
+            ROW_FIELD_EQ(tx_start_tx, 1),
+            ROW_FIELD_EQ(tx_should_read_gas_limit, 1),
+            ROW_FIELD_EQ(tx_gas_limit_pi_offset, AVM_PUBLIC_INPUTS_GAS_SETTINGS_GAS_LIMITS_ROW_IDX),
+            ROW_FIELD_EQ(tx_read_pi_start_offset,
+                         AVM_PUBLIC_INPUTS_PREVIOUS_NON_REVERTIBLE_ACCUMULATED_DATA_NULLIFIERS_ROW_IDX),
+            ROW_FIELD_EQ(tx_read_pi_offset,
+                         AVM_PUBLIC_INPUTS_PREVIOUS_NON_REVERTIBLE_ACCUMULATED_DATA_NULLIFIERS_ROW_IDX),
+            ROW_FIELD_EQ(tx_sel_read_phase_length, 1),
+            ROW_FIELD_EQ(tx_read_pi_length_offset,
+                         AVM_PUBLIC_INPUTS_PREVIOUS_NON_REVERTIBLE_ACCUMULATED_DATA_ARRAY_LENGTHS_NULLIFIERS_ROW_IDX)));
+}
+
 TEST(TxTraceGenTest, PadTreesEvent)
 {
     TestTraceContainer trace;
     TxTraceBuilder builder;
 
     simulation::TxStartupEvent startup_event = {
-        .state = { .gas_used = { 500, 1000 }, .tree_states = {}, .written_public_data_slots_tree_snapshot = {} },
+        .gas_used = { 500, 1000 },
         .gas_limit = { 1000, 2000 },
         .teardown_gas_limit = { 0, 0 },
     };
@@ -151,17 +196,17 @@ TEST(TxTraceGenTest, PadTreesEvent)
     simulation::TxPhaseEvent tx_event = { .phase = TransactionPhase::TREE_PADDING,
                                           .state_before = {
                                             .tree_states = {
-                                                .noteHashTree = {
+                                                .note_hash_tree = {
                                                     .tree = {
                                                         .root = 27,
-                                                        .nextAvailableLeafIndex = 65,
+                                                        .next_available_leaf_index = 65,
                                                     },
                                                     .counter = 1
                                                 },
-                                                .nullifierTree = {
+                                                .nullifier_tree = {
                                                     .tree = {
                                                         .root = 28,
-                                                        .nextAvailableLeafIndex = 127,
+                                                        .next_available_leaf_index = 127,
                                                     },
                                                     .counter = 63
                                                 },
@@ -169,17 +214,17 @@ TEST(TxTraceGenTest, PadTreesEvent)
                                           },
                                           .state_after = {
                                             .tree_states = {
-                                                .noteHashTree = {
+                                                .note_hash_tree = {
                                                     .tree = {
                                                         .root = 27,
-                                                        .nextAvailableLeafIndex = 128,
+                                                        .next_available_leaf_index = 128,
                                                     },
                                                     .counter = 1
                                                 },
-                                                .nullifierTree = {
+                                                .nullifier_tree = {
                                                     .tree = {
                                                         .root = 28,
-                                                        .nextAvailableLeafIndex = 128,
+                                                        .next_available_leaf_index = 128,
                                                     },
                                                     .counter = 63
                                                 },
@@ -200,8 +245,6 @@ TEST(TxTraceGenTest, PadTreesEvent)
                       ROW_FIELD_EQ(tx_is_tree_padding, 1),
                       ROW_FIELD_EQ(tx_remaining_phase_counter, 1),
                       ROW_FIELD_EQ(tx_remaining_phase_inv, 1),
-                      ROW_FIELD_EQ(tx_sel_can_emit_note_hash, 1),
-                      ROW_FIELD_EQ(tx_sel_can_emit_nullifier, 1),
                       ROW_FIELD_EQ(tx_prev_note_hash_tree_root, 27),
                       ROW_FIELD_EQ(tx_prev_note_hash_tree_size, 65),
                       ROW_FIELD_EQ(tx_prev_num_note_hashes_emitted, 1),
@@ -220,7 +263,7 @@ TEST(TxTraceGenTest, CleanupEvent)
     TxTraceBuilder builder;
 
     simulation::TxStartupEvent startup_event = {
-        .state = { .gas_used = { 500, 1000 }, .tree_states = {}, .written_public_data_slots_tree_snapshot = {} },
+        .gas_used = { 500, 1000 },
         .gas_limit = { 1000, 2000 },
         .teardown_gas_limit = { 0, 0 },
     };
@@ -245,15 +288,71 @@ TEST(TxTraceGenTest, CleanupEvent)
               ROW_FIELD_EQ(tx_remaining_phase_counter, 1),
               ROW_FIELD_EQ(tx_remaining_phase_inv, 1),
               ROW_FIELD_EQ(tx_note_hash_pi_offset, AVM_PUBLIC_INPUTS_END_TREE_SNAPSHOTS_NOTE_HASH_TREE_ROW_IDX),
-              ROW_FIELD_EQ(tx_should_read_note_hash_tree, 1),
+              ROW_FIELD_EQ(tx_sel_read_trees_and_gas_used, 1),
               ROW_FIELD_EQ(tx_nullifier_pi_offset, AVM_PUBLIC_INPUTS_END_TREE_SNAPSHOTS_NULLIFIER_TREE_ROW_IDX),
-              ROW_FIELD_EQ(tx_should_read_nullifier_tree, 1),
+              ROW_FIELD_EQ(tx_sel_read_trees_and_gas_used, 1),
               ROW_FIELD_EQ(tx_public_data_pi_offset, AVM_PUBLIC_INPUTS_END_TREE_SNAPSHOTS_PUBLIC_DATA_TREE_ROW_IDX),
-              ROW_FIELD_EQ(tx_should_read_public_data_tree, 1),
               ROW_FIELD_EQ(tx_l1_l2_pi_offset, AVM_PUBLIC_INPUTS_END_TREE_SNAPSHOTS_L1_TO_L2_MESSAGE_TREE_ROW_IDX),
-              ROW_FIELD_EQ(tx_should_read_l1_l2_tree, 1),
               ROW_FIELD_EQ(tx_gas_used_pi_offset, AVM_PUBLIC_INPUTS_END_GAS_USED_ROW_IDX),
-              ROW_FIELD_EQ(tx_should_read_gas_used, 1)));
+              ROW_FIELD_EQ(tx_reverted_pi_offset, AVM_PUBLIC_INPUTS_REVERTED_ROW_IDX)));
+}
+
+TEST(TxTraceGenTest, CleanupRevertedEvent)
+{
+    TestTraceContainer trace;
+    TxTraceBuilder builder;
+
+    simulation::TxStartupEvent startup_event = {
+        .gas_used = { 500, 1000 },
+        .gas_limit = { 1000, 2000 },
+        .teardown_gas_limit = { 0, 0 },
+    };
+
+    simulation::TxPhaseEvent tx_event = { .phase = TransactionPhase::R_NOTE_INSERTION,
+                                          .state_before = {},
+                                          .state_after = {},
+                                          .reverted = true,
+                                          .event = simulation::PrivateAppendTreeEvent{} };
+
+    simulation::TxPhaseEvent cleanup_event = { .phase = TransactionPhase::CLEANUP,
+                                               .state_before = {},
+                                               .state_after = {},
+                                               .reverted = false,
+                                               .event = simulation::CleanupEvent{} };
+
+    builder.process({ startup_event, tx_event, cleanup_event }, trace);
+    auto rows = trace.as_rows();
+    ASSERT_EQ(rows.size(), 3); // 0th precomputed, tx, cleanup
+
+    // Note insertion:
+    EXPECT_THAT(rows[1],
+                AllOf(ROW_FIELD_EQ(tx_sel, 1),
+                      ROW_FIELD_EQ(tx_phase_value, static_cast<uint8_t>(TransactionPhase::R_NOTE_INSERTION)),
+                      ROW_FIELD_EQ(tx_start_phase, 1),
+                      ROW_FIELD_EQ(tx_end_phase, 1),
+                      ROW_FIELD_EQ(tx_is_cleanup, 0),
+                      ROW_FIELD_EQ(tx_reverted, 1),
+                      ROW_FIELD_EQ(tx_tx_reverted, 1)));
+
+    // Cleanup:
+    EXPECT_THAT(
+        rows[2],
+        AllOf(ROW_FIELD_EQ(tx_sel, 1),
+              ROW_FIELD_EQ(tx_phase_value, static_cast<uint8_t>(TransactionPhase::CLEANUP)),
+              ROW_FIELD_EQ(tx_start_phase, 1),
+              ROW_FIELD_EQ(tx_end_phase, 1),
+              ROW_FIELD_EQ(tx_is_cleanup, 1),
+              ROW_FIELD_EQ(tx_reverted, 0),
+              ROW_FIELD_EQ(tx_tx_reverted, 1),
+              ROW_FIELD_EQ(tx_remaining_phase_counter, 1),
+              ROW_FIELD_EQ(tx_remaining_phase_inv, 1),
+              ROW_FIELD_EQ(tx_note_hash_pi_offset, AVM_PUBLIC_INPUTS_END_TREE_SNAPSHOTS_NOTE_HASH_TREE_ROW_IDX),
+              ROW_FIELD_EQ(tx_sel_read_trees_and_gas_used, 1),
+              ROW_FIELD_EQ(tx_nullifier_pi_offset, AVM_PUBLIC_INPUTS_END_TREE_SNAPSHOTS_NULLIFIER_TREE_ROW_IDX),
+              ROW_FIELD_EQ(tx_public_data_pi_offset, AVM_PUBLIC_INPUTS_END_TREE_SNAPSHOTS_PUBLIC_DATA_TREE_ROW_IDX),
+              ROW_FIELD_EQ(tx_l1_l2_pi_offset, AVM_PUBLIC_INPUTS_END_TREE_SNAPSHOTS_L1_TO_L2_MESSAGE_TREE_ROW_IDX),
+              ROW_FIELD_EQ(tx_gas_used_pi_offset, AVM_PUBLIC_INPUTS_END_GAS_USED_ROW_IDX),
+              ROW_FIELD_EQ(tx_reverted_pi_offset, AVM_PUBLIC_INPUTS_REVERTED_ROW_IDX)));
 }
 
 } // namespace

@@ -1,19 +1,21 @@
 import {
   BatchedBlobAccumulator,
-  BlobAccumulatorPublicInputs,
   type FinalBlobBatchingChallenges,
   SpongeBlob,
+  encodeCheckpointBlobDataFromBlocks,
 } from '@aztec/blob-lib';
 import {
   type ARCHIVE_HEIGHT,
-  BLOBS_PER_BLOCK,
+  BLOBS_PER_CHECKPOINT,
   FIELDS_PER_BLOB,
-  type L1_TO_L2_MSG_SUBTREE_SIBLING_PATH_LENGTH,
+  type L1_TO_L2_MSG_SUBTREE_ROOT_SIBLING_PATH_LENGTH,
   type NESTED_RECURSIVE_ROLLUP_HONK_PROOF_LENGTH,
   NUM_MSGS_PER_BASE_PARITY,
 } from '@aztec/constants';
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { padArrayEnd } from '@aztec/foundation/collection';
-import { BLS12Point, Fr } from '@aztec/foundation/fields';
+import { BLS12Point } from '@aztec/foundation/curves/bls12';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import type { Tuple } from '@aztec/foundation/serialize';
 import { type TreeNodeLocation, UnbalancedTreeStore } from '@aztec/foundation/trees';
 import type { PublicInputsAndRecursiveProof } from '@aztec/stdlib/interfaces/server';
@@ -46,29 +48,35 @@ export class CheckpointProvingState {
   private blocks: (BlockProvingState | undefined)[] = [];
   private startBlobAccumulator: BatchedBlobAccumulator | undefined;
   private endBlobAccumulator: BatchedBlobAccumulator | undefined;
+  private blobFields: Fr[] | undefined;
   private error: string | undefined;
-  public readonly firstBlockNumber: number;
+  public readonly firstBlockNumber: BlockNumber;
 
   constructor(
     public readonly index: number,
     public readonly constants: CheckpointConstantData,
     public readonly totalNumBlocks: number,
-    private readonly totalNumBlobFields: number,
     private readonly finalBlobBatchingChallenges: FinalBlobBatchingChallenges,
     private readonly headerOfLastBlockInPreviousCheckpoint: BlockHeader,
     private readonly lastArchiveSiblingPath: Tuple<Fr, typeof ARCHIVE_HEIGHT>,
     private readonly l1ToL2Messages: Fr[],
     // The snapshot and sibling path before the new l1 to l2 message subtree is inserted.
     private readonly lastL1ToL2MessageTreeSnapshot: AppendOnlyTreeSnapshot,
-    private readonly lastL1ToL2MessageSubtreeSiblingPath: Tuple<Fr, typeof L1_TO_L2_MSG_SUBTREE_SIBLING_PATH_LENGTH>,
+    private readonly lastL1ToL2MessageSubtreeRootSiblingPath: Tuple<
+      Fr,
+      typeof L1_TO_L2_MSG_SUBTREE_ROOT_SIBLING_PATH_LENGTH
+    >,
     // The snapshot and sibling path after the new l1 to l2 message subtree is inserted.
     private readonly newL1ToL2MessageTreeSnapshot: AppendOnlyTreeSnapshot,
-    private readonly newL1ToL2MessageSubtreeSiblingPath: Tuple<Fr, typeof L1_TO_L2_MSG_SUBTREE_SIBLING_PATH_LENGTH>,
+    private readonly newL1ToL2MessageSubtreeRootSiblingPath: Tuple<
+      Fr,
+      typeof L1_TO_L2_MSG_SUBTREE_ROOT_SIBLING_PATH_LENGTH
+    >,
     public parentEpoch: EpochProvingState,
     private onBlobAccumulatorSet: (checkpoint: CheckpointProvingState) => void,
   ) {
     this.blockProofs = new UnbalancedTreeStore(totalNumBlocks);
-    this.firstBlockNumber = headerOfLastBlockInPreviousCheckpoint.globalVariables.blockNumber + 1;
+    this.firstBlockNumber = BlockNumber(headerOfLastBlockInPreviousCheckpoint.globalVariables.blockNumber + 1);
   }
 
   public get epochNumber(): number {
@@ -76,13 +84,13 @@ export class CheckpointProvingState {
   }
 
   public startNewBlock(
-    blockNumber: number,
+    blockNumber: BlockNumber,
     timestamp: UInt64,
     totalNumTxs: number,
     lastArchiveTreeSnapshot: AppendOnlyTreeSnapshot,
     lastArchiveSiblingPath: Tuple<Fr, typeof ARCHIVE_HEIGHT>,
   ): BlockProvingState {
-    const index = blockNumber - this.firstBlockNumber;
+    const index = Number(blockNumber) - Number(this.firstBlockNumber);
     if (index >= this.totalNumBlocks) {
       throw new Error(`Unable to start a new block at index ${index}. Expected at most ${this.totalNumBlocks} blocks.`);
     }
@@ -92,11 +100,10 @@ export class CheckpointProvingState {
     // happen in the first block.
     const lastL1ToL2MessageTreeSnapshot =
       index === 0 ? this.lastL1ToL2MessageTreeSnapshot : this.newL1ToL2MessageTreeSnapshot;
-    const lastL1ToL2MessageSubtreeSiblingPath =
-      index === 0 ? this.lastL1ToL2MessageSubtreeSiblingPath : this.newL1ToL2MessageSubtreeSiblingPath;
+    const lastL1ToL2MessageSubtreeRootSiblingPath =
+      index === 0 ? this.lastL1ToL2MessageSubtreeRootSiblingPath : this.newL1ToL2MessageSubtreeRootSiblingPath;
 
-    const startSpongeBlob =
-      index === 0 ? SpongeBlob.init(this.totalNumBlobFields) : this.blocks[index - 1]?.getEndSpongeBlob();
+    const startSpongeBlob = index === 0 ? SpongeBlob.init() : this.blocks[index - 1]?.getEndSpongeBlob();
     if (!startSpongeBlob) {
       throw new Error(
         'Cannot start a new block before the trees have progressed from the tx effects in the previous block.',
@@ -112,7 +119,7 @@ export class CheckpointProvingState {
       lastArchiveTreeSnapshot,
       lastArchiveSiblingPath,
       lastL1ToL2MessageTreeSnapshot,
-      lastL1ToL2MessageSubtreeSiblingPath,
+      lastL1ToL2MessageSubtreeRootSiblingPath,
       this.newL1ToL2MessageTreeSnapshot,
       this.headerOfLastBlockInPreviousCheckpoint,
       startSpongeBlob,
@@ -189,12 +196,12 @@ export class CheckpointProvingState {
   }
 
   public async accumulateBlobs(startBlobAccumulator: BatchedBlobAccumulator) {
-    if (this.isAcceptingBlocks() || this.blocks.some(b => b!.isAcceptingTxs())) {
+    if (this.isAcceptingBlocks() || this.blocks.some(b => !b?.hasEndState())) {
       return;
     }
 
-    const blobFields = this.blocks.flatMap(b => b!.getBlockBlobFields());
-    this.endBlobAccumulator = await accumulateBlobs(blobFields, startBlobAccumulator);
+    this.blobFields = encodeCheckpointBlobDataFromBlocks(this.blocks.map(b => b!.getBlockBlobData()));
+    this.endBlobAccumulator = await accumulateBlobs(this.blobFields!, startBlobAccumulator);
     this.startBlobAccumulator = startBlobAccumulator;
 
     this.onBlobAccumulatorSet(this);
@@ -223,7 +230,7 @@ export class CheckpointProvingState {
     return this.totalNumBlocks === 1 ? 'rollup-checkpoint-root-single-block' : 'rollup-checkpoint-root';
   }
 
-  public async getCheckpointRootRollupInputs() {
+  public getCheckpointRootRollupInputs() {
     const proofs = this.#getChildProofsForRoot();
     const nonEmptyProofs = proofs.filter(p => !!p);
     if (proofs.length !== nonEmptyProofs.length) {
@@ -233,16 +240,18 @@ export class CheckpointProvingState {
       throw new Error('Start blob accumulator is not set.');
     }
 
-    const blobFields = this.blocks.flatMap(b => b!.getBlockBlobFields());
-    const { blobCommitments, blobsHash } = await buildBlobHints(blobFields);
+    // `blobFields` must've been set if `startBlobAccumulator` is set (in `accumulateBlobs`).
+    const blobFields = this.blobFields!;
+
+    const { blobCommitments, blobsHash } = buildBlobHints(blobFields);
 
     const hints = CheckpointRootRollupHints.from({
       previousBlockHeader: this.headerOfLastBlockInPreviousCheckpoint,
       previousArchiveSiblingPath: this.lastArchiveSiblingPath,
-      startBlobAccumulator: BlobAccumulatorPublicInputs.fromBatchedBlobAccumulator(this.startBlobAccumulator),
+      startBlobAccumulator: this.startBlobAccumulator.toBlobAccumulator(),
       finalBlobChallenges: this.finalBlobBatchingChallenges,
-      blobFields: padArrayEnd(blobFields, Fr.ZERO, FIELDS_PER_BLOB * BLOBS_PER_BLOCK),
-      blobCommitments: padArrayEnd(blobCommitments, BLS12Point.ZERO, BLOBS_PER_BLOCK),
+      blobFields: padArrayEnd(blobFields, Fr.ZERO, FIELDS_PER_BLOB * BLOBS_PER_CHECKPOINT),
+      blobCommitments: padArrayEnd(blobCommitments, BLS12Point.ZERO, BLOBS_PER_CHECKPOINT),
       blobsHash,
     });
 
@@ -253,8 +262,8 @@ export class CheckpointProvingState {
       : new CheckpointRootRollupPrivateInputs([left, right], hints);
   }
 
-  public getBlockProvingStateByBlockNumber(blockNumber: number) {
-    const index = blockNumber - this.firstBlockNumber;
+  public getBlockProvingStateByBlockNumber(blockNumber: BlockNumber) {
+    const index = Number(blockNumber) - Number(this.firstBlockNumber);
     return this.blocks[index];
   }
 

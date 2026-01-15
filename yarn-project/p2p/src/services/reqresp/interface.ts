@@ -1,4 +1,4 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { L2Block } from '@aztec/stdlib/block';
 import { TxArray, TxHashArray } from '@aztec/stdlib/tx';
 
@@ -120,27 +120,6 @@ export type SubProtocolMap = {
     InstanceType<(typeof subProtocolMap)[S]['request']>,
     InstanceType<(typeof subProtocolMap)[S]['response']>
   >;
-};
-
-/**
- * Default handler for unimplemented sub protocols, this SHOULD be overwritten
- * by the service, but is provided as a fallback
- */
-export const defaultHandler = (_msg: any): Promise<Buffer> => {
-  return Promise.resolve(Buffer.from('unimplemented'));
-};
-
-/**
- * Default sub protocol handlers - this SHOULD be overwritten by the service,
- */
-export const DEFAULT_SUB_PROTOCOL_HANDLERS: ReqRespSubProtocolHandlers = {
-  [ReqRespSubProtocol.PING]: defaultHandler,
-  [ReqRespSubProtocol.STATUS]: defaultHandler,
-  [ReqRespSubProtocol.TX]: defaultHandler,
-  [ReqRespSubProtocol.GOODBYE]: defaultHandler,
-  [ReqRespSubProtocol.BLOCK]: defaultHandler,
-  [ReqRespSubProtocol.AUTH]: defaultHandler,
-  [ReqRespSubProtocol.BLOCK_TXS]: defaultHandler,
 };
 
 /**

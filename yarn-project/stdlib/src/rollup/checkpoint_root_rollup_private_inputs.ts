@@ -1,6 +1,7 @@
-import { BlobAccumulatorPublicInputs, FinalBlobBatchingChallenges } from '@aztec/blob-lib';
-import { ARCHIVE_HEIGHT, BLOBS_PER_BLOCK, FIELDS_PER_BLOB } from '@aztec/constants';
-import { BLS12Point, Fr } from '@aztec/foundation/fields';
+import { BlobAccumulator, FinalBlobBatchingChallenges } from '@aztec/blob-lib/types';
+import { ARCHIVE_HEIGHT, BLOBS_PER_CHECKPOINT, FIELDS_PER_BLOB } from '@aztec/constants';
+import { BLS12Point } from '@aztec/foundation/curves/bls12';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { bufferSchemaFor } from '@aztec/foundation/schemas';
 import { BufferReader, type Tuple, serializeToBuffer } from '@aztec/foundation/serialize';
 import { bufferToHex, hexToBuffer } from '@aztec/foundation/string';
@@ -23,7 +24,7 @@ export class CheckpointRootRollupHints {
     /**
      * The current blob accumulation state across the epoch.
      */
-    public startBlobAccumulator: BlobAccumulatorPublicInputs,
+    public startBlobAccumulator: BlobAccumulator,
     /**
      * Finalized challenges z and gamma for performing blob batching. Shared value across the epoch.
      */
@@ -31,13 +32,13 @@ export class CheckpointRootRollupHints {
     /**
      * Flat list of all tx effects which will be added to the blob.
      * Below line gives error 'Type instantiation is excessively deep and possibly infinite. ts(2589)'
-     * Tuple<Fr, FIELDS_PER_BLOB * BLOBS_PER_BLOCK>
+     * Tuple<Fr, FIELDS_PER_BLOB * BLOBS_PER_CHECKPOINT>
      */
     public blobFields: Fr[],
     /**
      * KZG commitments representing the blob (precomputed in ts, injected to use inside circuit).
      */
-    public blobCommitments: Tuple<BLS12Point, typeof BLOBS_PER_BLOCK>,
+    public blobCommitments: Tuple<BLS12Point, typeof BLOBS_PER_CHECKPOINT>,
     /**
      * The hash of eth blob hashes for this block
      * See yarn-project/foundation/src/blob/index.ts or body.ts for calculation
@@ -70,12 +71,12 @@ export class CheckpointRootRollupHints {
     return new CheckpointRootRollupHints(
       BlockHeader.fromBuffer(reader),
       reader.readArray(ARCHIVE_HEIGHT, Fr),
-      reader.readObject(BlobAccumulatorPublicInputs),
+      reader.readObject(BlobAccumulator),
       reader.readObject(FinalBlobBatchingChallenges),
       // Below line gives error 'Type instantiation is excessively deep and possibly infinite. ts(2589)'
       // reader.readArray(FIELDS_PER_BLOB, Fr),
-      Array.from({ length: FIELDS_PER_BLOB * BLOBS_PER_BLOCK }, () => Fr.fromBuffer(reader)),
-      reader.readArray(BLOBS_PER_BLOCK, BLS12Point),
+      Array.from({ length: FIELDS_PER_BLOB * BLOBS_PER_CHECKPOINT }, () => Fr.fromBuffer(reader)),
+      reader.readArray(BLOBS_PER_CHECKPOINT, BLS12Point),
       Fr.fromBuffer(reader),
     );
   }

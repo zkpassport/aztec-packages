@@ -1,15 +1,13 @@
-import type { ExtendedViemWalletClient, ViemClient } from '@aztec/ethereum';
-import {
-  DefaultL1ContractsConfig,
-  createExtendedL1Client,
-  deployL1Contracts,
-  getPublicClient,
-  tryExtractEvent,
-} from '@aztec/ethereum';
+import { createExtendedL1Client, getPublicClient } from '@aztec/ethereum/client';
+import { DefaultL1ContractsConfig } from '@aztec/ethereum/config';
+import { deployL1Contracts } from '@aztec/ethereum/deploy-l1-contracts';
 import { EthCheatCodes, startAnvil } from '@aztec/ethereum/test';
+import type { ExtendedViemWalletClient, ViemClient } from '@aztec/ethereum/types';
+import { tryExtractEvent } from '@aztec/ethereum/utils';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import { type Logger, createLogger } from '@aztec/foundation/log';
+import { DateProvider } from '@aztec/foundation/timer';
 import { SlashFactoryAbi } from '@aztec/l1-artifacts/SlashFactoryAbi';
 
 import type { Anvil } from '@viem/anvil';
@@ -56,13 +54,13 @@ describe('SlashFactory', () => {
     ({ anvil, rpcUrl } = await startAnvil());
 
     publicClient = getPublicClient({ l1RpcUrls: [rpcUrl], l1ChainId: 31337 });
-    cheatCodes = new EthCheatCodes([rpcUrl]);
+    cheatCodes = new EthCheatCodes([rpcUrl], new DateProvider());
 
     const deployed = await deployL1Contracts([rpcUrl], privateKey, foundry, logger, {
       ...DefaultL1ContractsConfig,
       salt: undefined,
       vkTreeRoot: Fr.random(),
-      protocolContractTreeRoot: Fr.random(),
+      protocolContractsHash: Fr.random(),
       genesisArchiveRoot: Fr.random(),
       realVerifier: false,
     });

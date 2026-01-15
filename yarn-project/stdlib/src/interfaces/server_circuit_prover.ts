@@ -6,7 +6,6 @@ import type {
 } from '@aztec/constants';
 
 import type { AvmCircuitInputs } from '../avm/avm.js';
-import type { PrivateToPublicKernelCircuitPublicInputs } from '../kernel/private_to_public_kernel_circuit_public_inputs.js';
 import type { ParityBasePrivateInputs } from '../parity/parity_base_private_inputs.js';
 import type { ParityPublicInputs } from '../parity/parity_public_inputs.js';
 import type { ParityRootPrivateInputs } from '../parity/parity_root_private_inputs.js';
@@ -27,7 +26,8 @@ import type {
   CheckpointRootSingleBlockRollupPrivateInputs,
 } from '../rollup/checkpoint_root_rollup_private_inputs.js';
 import type { PrivateTxBaseRollupPrivateInputs } from '../rollup/private_tx_base_rollup_private_inputs.js';
-import type { PublicTubePrivateInputs } from '../rollup/public_tube_private_inputs.js';
+import type { PublicChonkVerifierPrivateInputs } from '../rollup/public_chonk_verifier_private_inputs.js';
+import type { PublicChonkVerifierPublicInputs } from '../rollup/public_chonk_verifier_public_inputs.js';
 import type { PublicTxBaseRollupPrivateInputs } from '../rollup/public_tx_base_rollup_private_inputs.js';
 import type { RootRollupPrivateInputs } from '../rollup/root_rollup_private_inputs.js';
 import type { RootRollupPublicInputs } from '../rollup/root_rollup_public_inputs.js';
@@ -60,15 +60,12 @@ export interface ServerCircuitProver {
     epochNumber?: number,
   ): Promise<PublicInputsAndRecursiveProof<ParityPublicInputs, typeof NESTED_RECURSIVE_PROOF_LENGTH>>;
 
-  getPublicTubeProof(
-    inputs: PublicTubePrivateInputs,
+  getPublicChonkVerifierProof(
+    inputs: PublicChonkVerifierPrivateInputs,
     signal?: AbortSignal,
     epochNumber?: number,
   ): Promise<
-    PublicInputsAndRecursiveProof<
-      PrivateToPublicKernelCircuitPublicInputs,
-      typeof NESTED_RECURSIVE_ROLLUP_HONK_PROOF_LENGTH
-    >
+    PublicInputsAndRecursiveProof<PublicChonkVerifierPublicInputs, typeof NESTED_RECURSIVE_ROLLUP_HONK_PROOF_LENGTH>
   >;
 
   /**

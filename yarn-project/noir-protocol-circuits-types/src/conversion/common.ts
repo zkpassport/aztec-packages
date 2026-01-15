@@ -5,11 +5,13 @@ import {
   MAX_NOTE_HASHES_PER_TX,
   MAX_NULLIFIERS_PER_TX,
   MAX_PRIVATE_LOGS_PER_TX,
+  MAX_PROTOCOL_CONTRACTS,
   PRIVATE_LOG_SIZE_IN_FIELDS,
-  PUBLIC_LOG_SIZE_IN_FIELDS,
 } from '@aztec/constants';
+import { BlockNumber, SlotNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
+import { GrumpkinScalar, Point } from '@aztec/foundation/curves/grumpkin';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr, GrumpkinScalar, Point } from '@aztec/foundation/fields';
 import { type Serializable, type Tuple, assertLength, mapTuple } from '@aztec/foundation/serialize';
 import type { MembershipWitness } from '@aztec/foundation/trees';
 import { FunctionSelector } from '@aztec/stdlib/abi';
@@ -20,7 +22,6 @@ import {
   ClaimedLengthArray,
   CountedLogHash,
   LogHash,
-  OptionalNumber,
   PrivateToPublicAccumulatedData,
   PrivateToPublicKernelCircuitPublicInputs,
   PrivateToRollupAccumulatedData,
@@ -30,7 +31,7 @@ import {
   ScopedCountedLogHash,
   ScopedLogHash,
 } from '@aztec/stdlib/kernel';
-import { PrivateLog, PublicLog } from '@aztec/stdlib/logs';
+import { PrivateLog } from '@aztec/stdlib/logs';
 import {
   CountedL2ToL1Message,
   L2ToL1Message,
@@ -40,13 +41,14 @@ import {
 import {
   AppendOnlyTreeSnapshot,
   type NullifierLeafPreimage,
-  type ProtocolContractLeafPreimage,
   type PublicDataTreeLeafPreimage,
 } from '@aztec/stdlib/trees';
 import {
   BlockHeader,
   GlobalVariables,
   PartialStateReference,
+  PrivateTxConstantData,
+  ProtocolContracts,
   StateReference,
   TxConstantData,
   TxContext,
@@ -68,25 +70,24 @@ import type {
   EmbeddedCurveScalar as GrumpkinScalarNoir,
   L2ToL1Message as L2ToL1MessageNoir,
   LogHash as LogHashNoir,
-  Log as LogNoir,
   MembershipWitness as MembershipWitnessNoir,
   AztecAddress as NoirAztecAddress,
   EthAddress as NoirEthAddress,
   Field as NoirField,
   EmbeddedCurvePoint as NoirPoint,
   NullifierLeafPreimage as NullifierLeafPreimageNoir,
-  Option as OptionalNumberNoir,
   PartialStateReference as PartialStateReferenceNoir,
+  Log as PrivateLogNoir,
   PrivateToPublicAccumulatedData as PrivateToPublicAccumulatedDataNoir,
   PrivateToPublicKernelCircuitPublicInputs as PrivateToPublicKernelCircuitPublicInputsNoir,
   PrivateToRollupAccumulatedData as PrivateToRollupAccumulatedDataNoir,
   PrivateToRollupKernelCircuitPublicInputs as PrivateToRollupKernelCircuitPublicInputsNoir,
-  ProtocolContractLeafPreimage as ProtocolContractLeafPreimageNoir,
+  PrivateTxConstantData as PrivateTxConstantDataNoir,
+  ProtocolContracts as ProtocolContractsNoir,
   PublicCallRequestArrayLengths as PublicCallRequestArrayLengthsNoir,
   PublicCallRequest as PublicCallRequestNoir,
   PublicDataTreeLeafPreimage as PublicDataTreeLeafPreimageNoir,
   PublicDataWrite as PublicDataWriteNoir,
-  PublicLog as PublicLogNoir,
   Scoped,
   StateReference as StateReferenceNoir,
   TxConstantData as TxConstantDataNoir,
@@ -291,35 +292,17 @@ export function mapGasFeesFromNoir(gasFees: GasFeesNoir): GasFees {
   return new GasFees(mapBigIntFromNoir(gasFees.fee_per_da_gas), mapBigIntFromNoir(gasFees.fee_per_l2_gas));
 }
 
-export function mapPrivateLogToNoir(log: PrivateLog): LogNoir<typeof PRIVATE_LOG_SIZE_IN_FIELDS> {
+export function mapPrivateLogToNoir(log: PrivateLog): PrivateLogNoir {
   return {
     fields: mapTuple(log.fields, mapFieldToNoir),
     length: mapNumberToNoir(log.emittedLength),
   };
 }
 
-export function mapPrivateLogFromNoir(log: LogNoir<typeof PRIVATE_LOG_SIZE_IN_FIELDS>) {
+export function mapPrivateLogFromNoir(log: PrivateLogNoir) {
   return new PrivateLog(
     mapTupleFromNoir(log.fields, PRIVATE_LOG_SIZE_IN_FIELDS, mapFieldFromNoir),
     mapNumberFromNoir(log.length),
-  );
-}
-
-export function mapPublicLogToNoir(log: PublicLog): PublicLogNoir {
-  return {
-    contract_address: mapAztecAddressToNoir(log.contractAddress),
-    log: {
-      fields: mapTuple(log.fields, mapFieldToNoir),
-      length: mapNumberToNoir(log.emittedLength),
-    },
-  };
-}
-
-export function mapPublicLogFromNoir(log: PublicLogNoir) {
-  return new PublicLog(
-    mapAztecAddressFromNoir(log.contract_address),
-    mapTupleFromNoir(log.log.fields, PUBLIC_LOG_SIZE_IN_FIELDS, mapFieldFromNoir),
-    mapNumberFromNoir(log.log.length),
   );
 }
 
@@ -428,17 +411,6 @@ export function mapBlockHeaderFromNoir(header: BlockHeaderNoir): BlockHeader {
     mapFieldFromNoir(header.total_fees),
     mapFieldFromNoir(header.total_mana_used),
   );
-}
-
-export function mapOptionalNumberToNoir(option: OptionalNumber): OptionalNumberNoir {
-  return {
-    _is_some: option.isSome,
-    _value: mapNumberToNoir(option.value),
-  };
-}
-
-export function mapOptionalNumberFromNoir(option: OptionalNumberNoir) {
-  return new OptionalNumber(option._is_some, mapNumberFromNoir(option._value));
 }
 
 /**
@@ -577,7 +549,7 @@ export function mapGlobalVariablesToNoir(globalVariables: GlobalVariables): Glob
     chain_id: mapFieldToNoir(globalVariables.chainId),
     version: mapFieldToNoir(globalVariables.version),
     block_number: mapNumberToNoir(globalVariables.blockNumber),
-    slot_number: mapFieldToNoir(globalVariables.slotNumber),
+    slot_number: mapFieldToNoir(new Fr(globalVariables.slotNumber)),
     timestamp: mapBigIntToNoir(globalVariables.timestamp),
     coinbase: mapEthAddressToNoir(globalVariables.coinbase),
     fee_recipient: mapAztecAddressToNoir(globalVariables.feeRecipient),
@@ -594,8 +566,8 @@ export function mapGlobalVariablesFromNoir(globalVariables: GlobalVariablesNoir)
   return new GlobalVariables(
     mapFieldFromNoir(globalVariables.chain_id),
     mapFieldFromNoir(globalVariables.version),
-    mapNumberFromNoir(globalVariables.block_number),
-    mapFieldFromNoir(globalVariables.slot_number),
+    BlockNumber(mapNumberFromNoir(globalVariables.block_number)),
+    SlotNumber(mapFieldFromNoir(globalVariables.slot_number).toNumber()),
     mapBigIntFromNoir(globalVariables.timestamp),
     mapEthAddressFromNoir(globalVariables.coinbase),
     mapAztecAddressFromNoir(globalVariables.fee_recipient),
@@ -681,21 +653,6 @@ export function mapPublicDataTreePreimageToNoir(preimage: PublicDataTreeLeafPrei
     value: mapFieldToNoir(preimage.leaf.value),
     next_slot: mapFieldToNoir(preimage.nextKey),
     next_index: mapNumberToNoir(Number(preimage.nextIndex)),
-  };
-}
-
-/**
- * Maps a protocol contract leaf preimage to noir
- * @param protocolContractPreimage - The protocol contract leaf preimage.
- * @returns The noir protocol contract leaf preimage.
- * Note: the circuit does not use next_index, so it does not exist in the noir struct.
- */
-export function mapProtocolContractLeafPreimageToNoir(
-  protocolContractPreimage: ProtocolContractLeafPreimage,
-): ProtocolContractLeafPreimageNoir {
-  return {
-    address: mapFieldToNoir(protocolContractPreimage.address),
-    next_address: mapFieldToNoir(protocolContractPreimage.nextAddress),
   };
 }
 
@@ -880,12 +837,42 @@ export function mapTxContextFromNoir(txContext: TxContextNoir): TxContext {
   );
 }
 
+export function mapProtocolContractsToNoir(protocolContracts: ProtocolContracts): ProtocolContractsNoir {
+  return {
+    derived_addresses: mapTuple(protocolContracts.derivedAddresses, mapAztecAddressToNoir),
+  };
+}
+
+export function mapProtocolContractsFromNoir(protocolContracts: ProtocolContractsNoir): ProtocolContracts {
+  return new ProtocolContracts(
+    mapTupleFromNoir(protocolContracts.derived_addresses, MAX_PROTOCOL_CONTRACTS, mapAztecAddressFromNoir),
+  );
+}
+
+export function mapPrivateTxConstantDataToNoir(data: PrivateTxConstantData): PrivateTxConstantDataNoir {
+  return {
+    anchor_block_header: mapBlockHeaderToNoir(data.anchorBlockHeader),
+    tx_context: mapTxContextToNoir(data.txContext),
+    vk_tree_root: mapFieldToNoir(data.vkTreeRoot),
+    protocol_contracts: mapProtocolContractsToNoir(data.protocolContracts),
+  };
+}
+
+export function mapPrivateTxConstantDataFromNoir(data: PrivateTxConstantDataNoir): PrivateTxConstantData {
+  return new PrivateTxConstantData(
+    mapBlockHeaderFromNoir(data.anchor_block_header),
+    mapTxContextFromNoir(data.tx_context),
+    mapFieldFromNoir(data.vk_tree_root),
+    mapProtocolContractsFromNoir(data.protocol_contracts),
+  );
+}
+
 export function mapTxConstantDataFromNoir(data: TxConstantDataNoir) {
   return new TxConstantData(
     mapBlockHeaderFromNoir(data.anchor_block_header),
     mapTxContextFromNoir(data.tx_context),
     mapFieldFromNoir(data.vk_tree_root),
-    mapFieldFromNoir(data.protocol_contract_tree_root),
+    mapFieldFromNoir(data.protocol_contracts_hash),
   );
 }
 
@@ -894,7 +881,7 @@ export function mapTxConstantDataToNoir(data: TxConstantData): TxConstantDataNoi
     anchor_block_header: mapBlockHeaderToNoir(data.anchorBlockHeader),
     tx_context: mapTxContextToNoir(data.txContext),
     vk_tree_root: mapFieldToNoir(data.vkTreeRoot),
-    protocol_contract_tree_root: mapFieldToNoir(data.protocolContractTreeRoot),
+    protocol_contracts_hash: mapFieldToNoir(data.protocolContractsHash),
   };
 }
 

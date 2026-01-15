@@ -1,14 +1,14 @@
 #include "barretenberg/vm2/testing/keccakf1600_fixture.test.hpp"
 
 #include "barretenberg/vm2/common/aztec_constants.hpp"
-#include "barretenberg/vm2/simulation/bitwise.hpp"
 #include "barretenberg/vm2/simulation/events/bitwise_event.hpp"
 #include "barretenberg/vm2/simulation/events/event_emitter.hpp"
 #include "barretenberg/vm2/simulation/events/keccakf1600_event.hpp"
 #include "barretenberg/vm2/simulation/events/range_check_event.hpp"
-#include "barretenberg/vm2/simulation/keccakf1600.hpp"
+#include "barretenberg/vm2/simulation/gadgets/bitwise.hpp"
+#include "barretenberg/vm2/simulation/gadgets/keccakf1600.hpp"
+#include "barretenberg/vm2/simulation/gadgets/memory.hpp"
 #include "barretenberg/vm2/simulation/lib/execution_id_manager.hpp"
-#include "barretenberg/vm2/simulation/memory.hpp"
 #include "barretenberg/vm2/tracegen/bitwise_trace.hpp"
 #include "barretenberg/vm2/tracegen/gt_trace.hpp"
 #include "barretenberg/vm2/tracegen/keccakf1600_trace.hpp"
@@ -42,7 +42,7 @@ void generate_keccak_trace_impl(TestTraceContainer& trace,
                                 const std::vector<MemoryAddress>& dst_addresses,
                                 const std::vector<MemoryAddress>& src_addresses,
                                 bool expect_error,
-                                uint32_t space_id)
+                                uint16_t space_id)
 {
     KeccakF1600TraceBuilder keccak_builder;
     BitwiseTraceBuilder bitwise_builder;
@@ -92,16 +92,17 @@ void generate_keccak_trace_impl(TestTraceContainer& trace,
 void generate_keccak_trace(TestTraceContainer& trace,
                            const std::vector<MemoryAddress>& dst_addresses,
                            const std::vector<MemoryAddress>& src_addresses,
-                           uint32_t space_id)
+                           uint16_t space_id)
 {
     generate_keccak_trace_impl(
         trace,
         [&](MemorySimulator& memory_simulator, size_t i) {
             // Write in memory first to fill source values in memory.
+            // Standard Keccak layout: memory[(y * 5) + x] = A[x][y]
             // Arbitrary values: 100 * i + j * 2^32 + k
             for (size_t j = 0; j < 5; j++) {
                 for (size_t k = 0; k < 5; k++) {
-                    memory_simulator.set(src_addresses[i] + static_cast<MemoryAddress>((5 * j) + k),
+                    memory_simulator.set(src_addresses[i] + static_cast<MemoryAddress>((k * 5) + j),
                                          MemoryValue::from<uint64_t>((static_cast<uint64_t>(j) << 32) + k + (100 * i)));
                 }
             }
@@ -117,16 +118,17 @@ void generate_keccak_trace_with_tag_error(TestTraceContainer& trace,
                                           MemoryAddress src_address,
                                           size_t error_offset,
                                           MemoryTag error_tag,
-                                          uint32_t space_id)
+                                          uint16_t space_id)
 {
     generate_keccak_trace_impl(
         trace,
         [&](MemorySimulator& memory_simulator, size_t) {
             // Write in memory first to fill source values in memory.
+            // Standard Keccak layout: memory[(y * 5) + x] = A[x][y]
             // Arbitrary values: 100 + j * 2^32 + k
             for (size_t j = 0; j < 5; j++) {
                 for (size_t k = 0; k < 5; k++) {
-                    const size_t idx = (5 * j) + k;
+                    const size_t idx = (k * 5) + j;
                     if (idx == error_offset) {
                         memory_simulator.set(
                             src_address + static_cast<MemoryAddress>(idx),
@@ -148,7 +150,7 @@ void generate_keccak_trace_with_tag_error(TestTraceContainer& trace,
 void generate_keccak_trace_with_slice_error(TestTraceContainer& trace,
                                             MemoryAddress dst_address,
                                             MemoryAddress src_address,
-                                            uint32_t space_id)
+                                            uint16_t space_id)
 {
     // Precondition for this trace to make sense is that the src or dst slice is out of bounds.
     ASSERT_TRUE(src_address > AVM_HIGHEST_MEM_ADDRESS - AVM_KECCAKF1600_STATE_SIZE + 1 ||

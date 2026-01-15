@@ -1,19 +1,15 @@
-import {
-  AztecAddress,
-  type AztecNode,
-  Fr,
-  type Logger,
-  type PXE,
-  type TxHash,
-  computeSecretHash,
-  createLogger,
-} from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { computeSecretHash } from '@aztec/aztec.js/crypto';
+import { Fr } from '@aztec/aztec.js/fields';
+import { type Logger, createLogger } from '@aztec/aztec.js/log';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import type { TxHash } from '@aztec/aztec.js/tx';
 import type { CheatCodes } from '@aztec/aztec/testing';
 import type { TokenContract } from '@aztec/noir-contracts.js/Token';
 import { TokenBlacklistContract } from '@aztec/noir-contracts.js/TokenBlacklist';
 import { InvalidAccountContract } from '@aztec/noir-test-contracts.js/InvalidAccount';
 import type { SequencerClient } from '@aztec/sequencer-client';
-import type { TestWallet } from '@aztec/test-wallet';
+import type { TestWallet } from '@aztec/test-wallet/server';
 
 import { jest } from '@jest/globals';
 
@@ -62,7 +58,6 @@ export class BlacklistTokenContractTest {
   private snapshotManager: ISnapshotManager;
   logger: Logger;
   wallet!: TestWallet;
-  pxe!: PXE;
   asset!: TokenBlacklistContract;
   tokenSim!: TokenSimulator;
   badAccount!: InvalidAccountContract;
@@ -99,8 +94,7 @@ export class BlacklistTokenContractTest {
     await this.snapshotManager.snapshot(
       '3_accounts',
       deployAccounts(3, this.logger),
-      ({ deployedAccounts }, { pxe, cheatCodes, aztecNode, sequencer, wallet }) => {
-        this.pxe = pxe;
+      ({ deployedAccounts }, { cheatCodes, aztecNode, sequencer, wallet }) => {
         this.cheatCodes = cheatCodes;
         this.aztecNode = aztecNode;
         this.sequencer = sequencer;
@@ -136,7 +130,7 @@ export class BlacklistTokenContractTest {
       },
       async ({ tokenContractAddress, badAccountAddress }) => {
         // Restore the token contract state.
-        this.asset = await TokenBlacklistContract.at(tokenContractAddress, this.wallet);
+        this.asset = TokenBlacklistContract.at(tokenContractAddress, this.wallet);
         this.logger.verbose(`Token contract address: ${this.asset.address}`);
 
         this.tokenSim = new TokenSimulator(
@@ -147,7 +141,7 @@ export class BlacklistTokenContractTest {
           [this.adminAddress, this.otherAddress, this.blacklistedAddress],
         );
 
-        this.badAccount = await InvalidAccountContract.at(badAccountAddress, this.wallet);
+        this.badAccount = InvalidAccountContract.at(badAccountAddress, this.wallet);
         this.logger.verbose(`Bad account address: ${this.badAccount.address}`);
 
         expect(await this.asset.methods.get_roles(this.adminAddress).simulate({ from: this.adminAddress })).toEqual(

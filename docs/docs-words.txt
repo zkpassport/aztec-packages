@@ -28,6 +28,7 @@ barebones
 Becuase
 becuse
 behaviour
+Besu
 biggroup
 blackbox
 blobhash
@@ -37,6 +38,7 @@ Blockscience
 blockspace
 bootstraping
 bvec
+cafecafe
 CALLCODE
 cdoffset
 chainid
@@ -49,6 +51,7 @@ Chiplets
 ciphertextheader
 ciphertexts
 citizensˮ
+claimability
 clawback
 cmov
 CMOV
@@ -77,6 +80,7 @@ defn
 delegatecall
 DELEGATECALL
 delegatecalls
+delegators
 deloying
 depoyment
 deserialise
@@ -88,6 +92,7 @@ dlazy
 Dlazy
 DLAZY
 donʼt
+downsampling
 dstsize
 ECADD
 ECCVM
@@ -100,6 +105,7 @@ emitunencryptedlog
 EMITUNENCRYPTEDLOG
 Epkd
 Epkdheader
+Erigon
 eskheader
 Etheruem
 evalulation
@@ -124,6 +130,7 @@ GASLEFT
 genric
 getcontractinstance
 GETCONTRACTINSTANCE
+getfoundry
 gevulot
 gigibits
 gigibytes
@@ -137,6 +144,7 @@ HMAC
 hmencheader
 Holderˮ
 Hypernova
+iancoleman
 icanhazip
 iiuc
 Ikegai
@@ -227,6 +235,7 @@ penalised
 permissonless
 pkey
 posesses
+preconfigured
 preconfirmed
 prefered
 procss
@@ -258,6 +267,7 @@ Returndata
 revertdata
 rollupʼs
 RSSH
+rustc
 sendl
 SENDL
 serde
@@ -265,6 +275,7 @@ Shamir
 sharedsecret
 shcedule
 Shnorr
+showcerts
 siled
 skywalker
 slashable
@@ -298,6 +309,7 @@ synchronising
 Synchronising
 tagg
 Taghs
+Teku
 testtoken
 textsf
 theh
@@ -333,6 +345,8 @@ unncessary
 unreverted
 unrleated
 unshield
+unstake
+unstakes
 usermod
 Unstaking
 utilise
@@ -344,6 +358,7 @@ visualisation
 visualise
 visualised
 woooh
+XPOST
 zcash
 Zcash
 Zybil
@@ -351,3 +366,4 @@ nothin
 whoooaa
 flamegraphs
 mycontract
+notegetteroptions

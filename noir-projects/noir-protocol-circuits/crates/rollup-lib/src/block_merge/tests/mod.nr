@@ -1,9 +1,13 @@
+mod child_proof_vk_tests;
 mod consecutive_block_rollups_tests;
 mod rollup_structure_tests;
 
 use crate::{
     abis::BlockRollupPublicInputs,
-    block_merge::block_merge_rollup_private_inputs::BlockMergeRollupPrivateInputs,
+    block_merge::{
+        block_merge_rollup_private_inputs::BlockMergeRollupPrivateInputs,
+        utils::merge_block_rollups::accumulate_block_headers_hash,
+    },
     tests::RollupFixtureBuilder,
 };
 use types::{
@@ -137,8 +141,21 @@ impl TestBuilder {
         // at least the number of blocks.
         assert(pi.end_timestamp - pi.start_timestamp + 1 >= num_blocks as u64);
 
+        let expected_block_headers_hash =
+            accumulate_block_headers_hash(left.block_headers_hash, right.block_headers_hash);
+        assert_eq(pi.block_headers_hash, expected_block_headers_hash);
+
         assert_eq(pi.in_hash, left.in_hash);
-        assert_eq(pi.out_hash, accumulate_sha256(left.out_hash, right.out_hash));
+
+        let expected_out_hash = if (left.out_hash != 0) & (right.out_hash != 0) {
+            accumulate_sha256(left.out_hash, right.out_hash)
+        } else if left.out_hash != 0 {
+            left.out_hash
+        } else {
+            right.out_hash
+        };
+        assert_eq(pi.out_hash, expected_out_hash);
+        // The tests to cover all the above scenarios are in `consecutive_block_rollups_tests.nr`.
 
         assert_eq(pi.accumulated_fees, left.accumulated_fees + right.accumulated_fees);
         assert_eq(

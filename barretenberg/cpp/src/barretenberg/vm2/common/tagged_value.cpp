@@ -62,6 +62,17 @@ struct shift_right {
     }
 };
 
+struct greater_than {
+    template <typename T, typename U> bool operator()(const T& a, const U& b) const
+    {
+        if constexpr (std::is_same_v<T, FF>) {
+            return static_cast<uint256_t>(a) > static_cast<uint256_t>(b);
+        } else {
+            return a > b;
+        }
+    }
+};
+
 struct less_than {
     template <typename T, typename U> bool operator()(const T& a, const U& b) const
     {
@@ -266,7 +277,9 @@ TaggedValue TaggedValue::from_tag_truncating(ValueTag tag, FF value)
     case ValueTag::FF:
         return TaggedValue(value);
     default:
-        throw std::runtime_error("Invalid tag");
+        const auto msg =
+            format("Tag check failed: Tag value: " + std::to_string(static_cast<uint8_t>(tag)), " is invalid.");
+        throw std::runtime_error(msg);
     }
 }
 
@@ -330,6 +343,12 @@ bool TaggedValue::operator<(const TaggedValue& other) const
     return std::visit(ComparisonOperationVisitor<less_than>(), value, other.value);
 }
 
+bool TaggedValue::operator>(const TaggedValue& other) const
+{
+    // Cannot use std::greater<> here because we need to handle FF specially.
+    return std::visit(ComparisonOperationVisitor<greater_than>(), value, other.value);
+}
+
 bool TaggedValue::operator<=(const TaggedValue& other) const
 {
     // Cannot use std::less_equal<> here because we need to handle FF specially.
@@ -360,27 +379,11 @@ FF TaggedValue::as_ff() const
 
 ValueTag TaggedValue::get_tag() const
 {
-    // The tag is implicit in the type.
-    if (std::holds_alternative<uint8_t>(value)) {
-        return ValueTag::U8;
-    } else if (std::holds_alternative<uint1_t>(value)) {
-        return ValueTag::U1;
-    } else if (std::holds_alternative<uint16_t>(value)) {
-        return ValueTag::U16;
-    } else if (std::holds_alternative<uint32_t>(value)) {
-        return ValueTag::U32;
-    } else if (std::holds_alternative<uint64_t>(value)) {
-        return ValueTag::U64;
-    } else if (std::holds_alternative<uint128_t>(value)) {
-        return ValueTag::U128;
-    } else if (std::holds_alternative<FF>(value)) {
-        return ValueTag::FF;
-    } else {
-        throw std::runtime_error("Unknown value type");
-    }
-
-    assert(false && "This should never happen.");
-    return ValueTag::FF; // Only to make the compiler happy.
+    // Converts the index of the variant to the tag.
+    static constexpr std::array<ValueTag, 7> index_to_tag = { ValueTag::U8,  ValueTag::U1,  ValueTag::U16,
+                                                              ValueTag::U32, ValueTag::U64, ValueTag::U128,
+                                                              ValueTag::FF };
+    return index_to_tag[value.index()];
 }
 
 std::string TaggedValue::to_string() const
@@ -413,7 +416,7 @@ std::string std::to_string(bb::avm2::ValueTag tag)
     case ValueTag::U128:
         return "U128";
     case ValueTag::FF:
-        return "FF";
+        return "FIELD";
     default:
         return "Unknown";
     }

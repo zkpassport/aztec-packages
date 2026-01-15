@@ -1,12 +1,9 @@
-import type { ExecutionPayload } from '@aztec/entrypoints/payload';
 import { createLogger } from '@aztec/foundation/log';
 import type { AuthWitness } from '@aztec/stdlib/auth-witness';
-import type { GasSettings } from '@aztec/stdlib/gas';
-import type { Capsule, TxProvingResult } from '@aztec/stdlib/tx';
+import type { Capsule, ExecutionPayload } from '@aztec/stdlib/tx';
 
 import type { Wallet } from '../wallet/wallet.js';
-import type { RequestMethodOptions, SendMethodOptions } from './interaction_options.js';
-import { ProvenTx } from './proven_tx.js';
+import { type RequestInteractionOptions, type SendInteractionOptions, toSendOptions } from './interaction_options.js';
 import { SentTx } from './sent_tx.js';
 
 /**
@@ -28,36 +25,7 @@ export abstract class BaseContractInteraction {
    * @param options - An optional object containing additional configuration for the transaction.
    * @returns An execution request wrapped in promise.
    */
-  public abstract request(options?: RequestMethodOptions): Promise<ExecutionPayload>;
-
-  /**
-   * Creates a transaction execution request, simulates and proves it. Differs from .prove in
-   * that its result does not include the wallet nor the composed tx object, but only the proving result.
-   * This object can then be used to either create a ProvenTx ready to be sent, or directly send the transaction.
-   * @param options - optional arguments to be used in the creation of the transaction
-   * @returns The proving result.
-   */
-  protected async proveInternal(options: SendMethodOptions): Promise<TxProvingResult> {
-    const executionPayload = await this.request(options);
-    return await this.wallet.proveTx(executionPayload, options);
-  }
-
-  // docs:start:prove
-  /**
-   * Proves a transaction execution request and returns a tx object ready to be sent.
-   * @param options - optional arguments to be used in the creation of the transaction
-   * @returns The resulting transaction
-   */
-  public async prove(options: SendMethodOptions): Promise<ProvenTx> {
-    // docs:end:prove
-    const txProvingResult = await this.proveInternal(options);
-    return new ProvenTx(
-      this.wallet,
-      await txProvingResult.toTx(),
-      txProvingResult.getOffchainEffects(),
-      txProvingResult.stats,
-    );
-  }
+  public abstract request(options?: RequestInteractionOptions): Promise<ExecutionPayload>;
 
   // docs:start:send
   /**
@@ -65,28 +33,17 @@ export abstract class BaseContractInteraction {
    * This function throws an error if called on a utility function.
    * It creates and signs the transaction if necessary, and returns a SentTx instance,
    * which can be used to track the transaction status, receipt, and events.
-   * @param options - An optional object containing 'from' property representing
-   * the AztecAddress of the sender. If not provided, the default address is used.
+   * @param options - An object containing 'from' property representing
+   * the AztecAddress of the sender and optional fee configuration
    * @returns A SentTx instance for tracking the transaction status and information.
    */
-  public send(options: SendMethodOptions): SentTx {
+  public send(options: SendInteractionOptions): SentTx {
     // docs:end:send
     const sendTx = async () => {
-      const txProvingResult = await this.proveInternal(options);
-      return this.wallet.sendTx(await txProvingResult.toTx());
+      const executionPayload = await this.request(options);
+      const sendOptions = toSendOptions(options);
+      return this.wallet.sendTx(executionPayload, sendOptions);
     };
     return new SentTx(this.wallet, sendTx);
-  }
-
-  /**
-   * Estimates gas for the interaction and returns gas limits for it.
-   * @param options - Options.
-   * @returns Gas limits.
-   */
-  public async estimateGas(
-    options: Omit<SendMethodOptions, 'estimateGas'>,
-  ): Promise<Pick<GasSettings, 'gasLimits' | 'teardownGasLimits'>> {
-    const executionPayload = await this.request(options);
-    return this.wallet.estimateGas(executionPayload, options);
   }
 }

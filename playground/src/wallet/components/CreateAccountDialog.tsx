@@ -1,7 +1,10 @@
-import DialogTitle from '@mui/material/DialogTitle';
-import Dialog from '@mui/material/Dialog';
-import { Fr, DeployMethod, type DeployOptions, AztecAddress } from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { type DeployOptions, DeployMethod } from '@aztec/aztec.js/contracts';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { DeployAccountOptions } from '@aztec/aztec.js/wallet';
 import Button from '@mui/material/Button';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
 import TextField from '@mui/material/TextField';
 import { useState } from 'react';
 import { deriveSigningKey } from '@aztec/stdlib/keys';
@@ -9,7 +12,7 @@ import FormControl from '@mui/material/FormControl';
 import Select from '@mui/material/Select';
 import MenuItem from '@mui/material/MenuItem';
 import type { AccountType } from '../wallet_db';
-import { randomBytes } from '@aztec/foundation/crypto';
+import { randomBytes } from '@aztec/foundation/crypto/random';
 import { FeePaymentSelector } from '../../components/common/FeePaymentSelector';
 import CircularProgress from '@mui/material/CircularProgress';
 import InputLabel from '@mui/material/InputLabel';
@@ -70,16 +73,14 @@ export function CreateAccountDialog({
       const address = account.getAddress();
 
       let deployMethod: DeployMethod;
-      let opts: DeployOptions;
+      let opts: DeployAccountOptions;
       if (publiclyDeploy) {
         deployMethod = await accountManager.getDeployMethod();
         opts = {
           from: AztecAddress.ZERO,
-          contractAddressSalt: salt,
           fee: {
-            paymentMethod: await accountManager.getSelfPaymentMethod(feePaymentMethod),
+            paymentMethod: feePaymentMethod,
           },
-          universalDeploy: true,
           skipClassPublication: true,
           skipInstancePublication: true,
         };
@@ -155,10 +156,7 @@ export function CreateAccountDialog({
                 <CircularProgress size={20} />
               </div>
             ) : (
-              <Button
-                disabled={alias === '' || (publiclyDeploy && !feePaymentMethod) || isRegistering}
-                onClick={createAccount}
-              >
+              <Button disabled={alias === '' || isRegistering} onClick={createAccount}>
                 {publiclyDeploy ? 'Create and deploy' : 'Create'}
               </Button>
             )

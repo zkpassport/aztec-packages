@@ -1,16 +1,11 @@
 import { type ArchiverConfig, archiverConfigMappings } from '@aztec/archiver/config';
-import {
-  type GenesisStateConfig,
-  type L1ContractAddresses,
-  genesisStateConfigMappings,
-  l1ContractAddressesMapping,
-} from '@aztec/ethereum';
+import { type GenesisStateConfig, genesisStateConfigMappings } from '@aztec/ethereum/config';
+import { type L1ContractAddresses, l1ContractAddressesMapping } from '@aztec/ethereum/l1-contract-addresses';
 import { type ConfigMappingsType, booleanConfigHelper, getConfigFromMappings } from '@aztec/foundation/config';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import { type DataStoreConfig, dataConfigMappings } from '@aztec/kv-store/config';
 import {
   type KeyStore,
-  type KeyStoreConfig,
   type ValidatorKeyStore,
   ethPrivateKeySchema,
   keyStoreConfigMappings,
@@ -47,7 +42,6 @@ export type AztecNodeConfig = ArchiverConfig &
   Pick<ProverClientUserConfig, 'bbBinaryPath' | 'bbWorkingDirectory' | 'realProofs'> &
   P2PConfig &
   DataStoreConfig &
-  KeyStoreConfig &
   SentinelConfig &
   SharedNodeConfig &
   GenesisStateConfig &
@@ -57,6 +51,11 @@ export type AztecNodeConfig = ArchiverConfig &
     l1Contracts: L1ContractAddresses;
     /** Whether the validator is disabled for this node */
     disableValidator: boolean;
+    /** Whether to skip waiting for the archiver to be fully synced before starting other services */
+    skipArchiverInitialSync: boolean;
+
+    /** A flag to force verification of tx Chonk proofs. Only used for testnet */
+    debugForceTxProofVerification: boolean;
   };
 
 export const aztecNodeConfigMappings: ConfigMappingsType<AztecNodeConfig> = {
@@ -82,6 +81,16 @@ export const aztecNodeConfigMappings: ConfigMappingsType<AztecNodeConfig> = {
     description: 'Whether the validator is disabled for this node.',
     ...booleanConfigHelper(),
   },
+  skipArchiverInitialSync: {
+    env: 'SKIP_ARCHIVER_INITIAL_SYNC',
+    description: 'Whether to skip waiting for the archiver to be fully synced before starting other services.',
+    ...booleanConfigHelper(false),
+  },
+  debugForceTxProofVerification: {
+    env: 'DEBUG_FORCE_TX_PROOF_VERIFICATION',
+    description: 'Whether to skip waiting for the archiver to be fully synced before starting other services.',
+    ...booleanConfigHelper(false),
+  },
 };
 
 /**
@@ -94,7 +103,7 @@ export function getConfigEnvVars(): AztecNodeConfig {
 
 type ConfigRequiredToBuildKeyStore = TxSenderConfig & SequencerClientConfig & SharedNodeConfig & ValidatorClientConfig;
 
-function createKeyStoreFromWeb3Signer(config: ConfigRequiredToBuildKeyStore) {
+function createKeyStoreFromWeb3Signer(config: ConfigRequiredToBuildKeyStore): KeyStore | undefined {
   const validatorKeyStores: ValidatorKeyStore[] = [];
 
   if (
@@ -124,7 +133,7 @@ function createKeyStoreFromWeb3Signer(config: ConfigRequiredToBuildKeyStore) {
   return keyStore;
 }
 
-function createKeyStoreFromPrivateKeys(config: ConfigRequiredToBuildKeyStore) {
+function createKeyStoreFromPrivateKeys(config: ConfigRequiredToBuildKeyStore): KeyStore | undefined {
   const validatorKeyStores: ValidatorKeyStore[] = [];
   const ethPrivateKeys = config.validatorPrivateKeys
     ? config.validatorPrivateKeys.getValue().map(x => ethPrivateKeySchema.parse(x))
@@ -158,7 +167,9 @@ function createKeyStoreFromPrivateKeys(config: ConfigRequiredToBuildKeyStore) {
   return keyStore;
 }
 
-export function createKeyStoreForValidator(config: TxSenderConfig & SequencerClientConfig & SharedNodeConfig) {
+export function createKeyStoreForValidator(
+  config: TxSenderConfig & SequencerClientConfig & SharedNodeConfig,
+): KeyStore | undefined {
   if (config.web3SignerUrl !== undefined && config.web3SignerUrl.length > 0) {
     return createKeyStoreFromWeb3Signer(config);
   }

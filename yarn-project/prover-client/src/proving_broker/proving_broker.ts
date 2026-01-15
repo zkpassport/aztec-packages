@@ -1,3 +1,4 @@
+import { EpochNumber } from '@aztec/foundation/branded-types';
 import { createLogger } from '@aztec/foundation/log';
 import { type PromiseWithResolvers, RunningPromise, promiseWithResolvers } from '@aztec/foundation/promise';
 import { PriorityMemoryQueue } from '@aztec/foundation/queue';
@@ -44,7 +45,7 @@ type EnqueuedProvingJob = Pick<ProvingJob, 'id' | 'epochNumber'>;
 export class ProvingBroker implements ProvingJobProducer, ProvingJobConsumer, Traceable {
   private queues: ProvingQueues = {
     [ProvingRequestType.PUBLIC_VM]: new PriorityMemoryQueue<EnqueuedProvingJob>(provingJobComparator),
-    [ProvingRequestType.PUBLIC_TUBE]: new PriorityMemoryQueue<EnqueuedProvingJob>(provingJobComparator),
+    [ProvingRequestType.PUBLIC_CHONK_VERIFIER]: new PriorityMemoryQueue<EnqueuedProvingJob>(provingJobComparator),
 
     [ProvingRequestType.PRIVATE_TX_BASE_ROLLUP]: new PriorityMemoryQueue<EnqueuedProvingJob>(provingJobComparator),
     [ProvingRequestType.PUBLIC_TX_BASE_ROLLUP]: new PriorityMemoryQueue<EnqueuedProvingJob>(provingJobComparator),
@@ -567,7 +568,7 @@ export class ProvingBroker implements ProvingJobProducer, ProvingJobConsumer, Tr
     this.reEnqueueExpiredJobs();
     const oldestEpochToKeep = this.oldestEpochToKeep();
     if (oldestEpochToKeep > 0) {
-      await this.database.deleteAllProvingJobsOlderThanEpoch(oldestEpochToKeep);
+      await this.database.deleteAllProvingJobsOlderThanEpoch(EpochNumber(oldestEpochToKeep));
       this.logger.trace(`Deleted all epochs older than ${oldestEpochToKeep}`);
     }
   }
@@ -700,7 +701,7 @@ export const PROOF_TYPES_IN_PRIORITY_ORDER: ProvingRequestType[] = [
   ProvingRequestType.PUBLIC_TX_BASE_ROLLUP,
   ProvingRequestType.PRIVATE_TX_BASE_ROLLUP,
   ProvingRequestType.PUBLIC_VM,
-  ProvingRequestType.PUBLIC_TUBE,
+  ProvingRequestType.PUBLIC_CHONK_VERIFIER,
   ProvingRequestType.PARITY_ROOT,
   ProvingRequestType.PARITY_BASE,
 ];

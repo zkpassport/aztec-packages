@@ -1,4 +1,6 @@
-import type { AztecAddress, Logger, Wallet } from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import type { Logger } from '@aztec/aztec.js/log';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import type { TokenContract } from '@aztec/noir-contracts.js/Token';
 
 import { jest } from '@jest/globals';
@@ -32,7 +34,8 @@ describe('partial notes', () => {
       logger,
     } = await setup(2));
 
-    token0 = await deployToken(wallet, adminAddress, 0n, logger);
+    const { contract } = await deployToken(wallet, adminAddress, 0n, logger);
+    token0 = contract;
   });
 
   afterAll(() => teardown());

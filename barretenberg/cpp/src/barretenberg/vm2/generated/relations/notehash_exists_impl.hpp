@@ -15,9 +15,7 @@ void notehash_existsImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
 {
     using C = ColumnAndShifts;
 
-    BB_BENCH_NAME("accumulate/notehash_exists");
-
-    const auto constants_NOTE_HASH_TREE_LEAF_COUNT = FF(1099511627776UL);
+    const auto constants_NOTE_HASH_TREE_LEAF_COUNT = FF(4398046511104UL);
     const auto constants_MEM_TAG_U1 = FF(1);
 
     {
@@ -39,12 +37,6 @@ void notehash_existsImpl<FF_>::accumulate(ContainerOverSubrelations& evals,
         auto tmp = static_cast<View>(in.get(C::execution_sel_execute_notehash_exists)) *
                    (CView(constants_MEM_TAG_U1) - static_cast<View>(in.get(C::execution_mem_tag_reg_2_)));
         std::get<2>(evals) += (tmp * scaling_factor);
-    }
-    { // NOTE_HASH_EXISTS_SUCCESS
-        using View = typename std::tuple_element_t<3, ContainerOverSubrelations>::View;
-        auto tmp = static_cast<View>(in.get(C::execution_sel_execute_notehash_exists)) *
-                   static_cast<View>(in.get(C::execution_sel_opcode_error));
-        std::get<3>(evals) += (tmp * scaling_factor);
     }
 }
 

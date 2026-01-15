@@ -1,4 +1,4 @@
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { OracleVersionCheckContractArtifact } from '@aztec/noir-test-contracts.js/OracleVersionCheck';
 import { WASMSimulator } from '@aztec/simulator/client';
 import { FunctionCall, FunctionSelector, FunctionType, encodeArguments } from '@aztec/stdlib/abi';
@@ -91,6 +91,7 @@ describe('Oracle Version Check test suite', () => {
         selector: FunctionSelector.empty(),
         type: FunctionType.UTILITY,
         isStatic: false,
+        hideMsgSender: false,
         args: encodeArguments(utilityFunctionArtifact, []),
         returnTypes: utilityFunctionArtifact.returnTypes,
       };

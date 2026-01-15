@@ -1,9 +1,8 @@
-use crate::{
-    components::private_kernel_circuit_public_inputs_composer::create_protocol_nullifier,
-    tests::private_kernel_circuit_public_inputs_composer_builder::PrivateKernelCircuitPublicInputsComposerBuilder,
-};
+use crate::tests::private_kernel_circuit_public_inputs_composer_builder::PrivateKernelCircuitPublicInputsComposerBuilder;
 use dep::types::{
-    abis::side_effect::OrderedValue, constants::MAX_U64_VALUE, tests::utils::make_fixture,
+    constants::MAX_U64_VALUE,
+    hash::{create_protocol_nullifier, silo_nullifier},
+    tests::utils::make_fixture,
     traits::Empty,
 };
 
@@ -21,7 +20,7 @@ fn new_from_tx_request_succeeds() {
     let anchor_block_header = builder.private_call.anchor_block_header;
 
     // Safety: this is a test.
-    let output = unsafe { builder.new_from_tx_request(false).public_inputs_builder.finish() };
+    let output = unsafe { builder.new_from_tx_request(false).finish() };
 
     // Check output constants.
     assert_eq(output.is_private_only, false);
@@ -31,8 +30,11 @@ fn new_from_tx_request_succeeds() {
     // Check protocol nullifier is set.
     assert_eq(output.end.nullifiers.array[0], protocol_nullifier);
 
-    // Check the nullifier claim is set to the protocol nullifier
-    assert_eq(output.claimed_first_nullifier, protocol_nullifier.value());
+    // Check the nullifier claim is set to the siloed protocol nullifier
+    assert_eq(output.claimed_first_nullifier, silo_nullifier(protocol_nullifier));
+
+    // Check that the revertible counter is set to the hint
+    assert_eq(output.claimed_revertible_counter, builder.revertible_counter_hint);
 
     // Check include_by_timestamp is set to max u64,
     // so that it can be overwritten by the private call's include_by_timestamp later.
@@ -56,7 +58,7 @@ fn new_from_tx_request_without_protocol_nullifier_succeeds() {
     builder.private_call.anchor_block_header = make_fixture(1);
     let anchor_block_header = builder.private_call.anchor_block_header;
     // Safety: this is a test.
-    let output = unsafe { builder.new_from_tx_request(false).public_inputs_builder.finish() };
+    let output = unsafe { builder.new_from_tx_request(false).finish() };
 
     // Check output constants.
     assert_eq(output.is_private_only, false);
@@ -68,6 +70,9 @@ fn new_from_tx_request_without_protocol_nullifier_succeeds() {
 
     // Check the nullifier claim is set to the hint
     assert_eq(output.claimed_first_nullifier, builder.first_nullifier_hint);
+
+    // Check that the revertible counter is set to the hint
+    assert_eq(output.claimed_revertible_counter, builder.revertible_counter_hint);
 
     // Check include_by_timestamp is set to max u64,
     // so that it can be overwritten by the private call's include_by_timestamp later.

@@ -1,8 +1,18 @@
+import {
+  BlockNumber,
+  BlockNumberSchema,
+  type CheckpointNumber,
+  type EpochNumber,
+  type SlotNumber,
+} from '@aztec/foundation/branded-types';
+import type { Fr } from '@aztec/foundation/curves/bn254';
 import type { EthAddress } from '@aztec/foundation/eth-address';
 import type { TypedEventEmitter } from '@aztec/foundation/types';
 
 import { z } from 'zod';
 
+import type { Checkpoint } from '../checkpoint/checkpoint.js';
+import type { PublishedCheckpoint } from '../checkpoint/published_checkpoint.js';
 import type { L1RollupConstants } from '../epoch-helpers/index.js';
 import type { BlockHeader } from '../tx/block_header.js';
 import type { IndexedTxEffect } from '../tx/indexed_tx_effect.js';
@@ -32,27 +42,27 @@ export interface L2BlockSource {
    * Gets the number of the latest L2 block processed by the block source implementation.
    * @returns The number of the latest L2 block processed by the block source implementation.
    */
-  getBlockNumber(): Promise<number>;
+  getBlockNumber(): Promise<BlockNumber>;
 
   /**
    * Gets the number of the latest L2 block proven seen by the block source implementation.
    * @returns The number of the latest L2 block proven seen by the block source implementation.
    */
-  getProvenBlockNumber(): Promise<number>;
+  getProvenBlockNumber(): Promise<BlockNumber>;
 
   /**
    * Gets an l2 block. If a negative number is passed, the block returned is the most recent.
    * @param number - The block number to return (inclusive).
    * @returns The requested L2 block.
    */
-  getBlock(number: number): Promise<L2Block | undefined>;
+  getBlock(number: BlockNumber): Promise<L2Block | undefined>;
 
   /**
    * Gets an l2 block header.
    * @param number - The block number to return or 'latest' for the most recent one.
    * @returns The requested L2 block header.
    */
-  getBlockHeader(number: number | 'latest'): Promise<BlockHeader | undefined>;
+  getBlockHeader(number: BlockNumber | 'latest'): Promise<BlockHeader | undefined>;
 
   /**
    * Gets up to `limit` amount of L2 blocks starting from `from`.
@@ -61,10 +71,48 @@ export interface L2BlockSource {
    * @param proven - If true, only return blocks that have been proven.
    * @returns The requested L2 blocks.
    */
-  getBlocks(from: number, limit: number, proven?: boolean): Promise<L2Block[]>;
+  getBlocks(from: BlockNumber, limit: number, proven?: boolean): Promise<L2Block[]>;
+
+  getPublishedCheckpoints(from: CheckpointNumber, limit: number): Promise<PublishedCheckpoint[]>;
+
+  /**
+   * Gets a checkpoint by the archive root, which should be the root of the archive tree after the requested checkpoint
+   * is applied.
+   * @param archive - The new archive root of the checkpoint.
+   * @returns The requested checkpoint (or undefined if not found).
+   */
+  getCheckpointByArchive(archive: Fr): Promise<Checkpoint | undefined>;
 
   /** Equivalent to getBlocks but includes publish data. */
-  getPublishedBlocks(from: number, limit: number, proven?: boolean): Promise<PublishedL2Block[]>;
+  getPublishedBlocks(from: BlockNumber, limit: number, proven?: boolean): Promise<PublishedL2Block[]>;
+
+  /**
+   * Gets a published block by its hash.
+   * @param blockHash - The block hash to retrieve.
+   * @returns The requested published block (or undefined if not found).
+   */
+  getPublishedBlockByHash(blockHash: Fr): Promise<PublishedL2Block | undefined>;
+
+  /**
+   * Gets a published block by its archive root.
+   * @param archive - The archive root to retrieve.
+   * @returns The requested published block (or undefined if not found).
+   */
+  getPublishedBlockByArchive(archive: Fr): Promise<PublishedL2Block | undefined>;
+
+  /**
+   * Gets a block header by its hash.
+   * @param blockHash - The block hash to retrieve.
+   * @returns The requested block header (or undefined if not found).
+   */
+  getBlockHeaderByHash(blockHash: Fr): Promise<BlockHeader | undefined>;
+
+  /**
+   * Gets a block header by its archive root.
+   * @param archive - The archive root to retrieve.
+   * @returns The requested block header (or undefined if not found).
+   */
+  getBlockHeaderByArchive(archive: Fr): Promise<BlockHeader | undefined>;
 
   /**
    * Gets a tx effect.
@@ -81,34 +129,41 @@ export interface L2BlockSource {
   getSettledTxReceipt(txHash: TxHash): Promise<TxReceipt | undefined>;
 
   /**
-   * Returns the current L2 slot number based on the current L1 timestamp.
+   * Returns the current L2 slot number based on the currently synced L1 timestamp.
    */
-  getL2SlotNumber(): Promise<bigint>;
+  getL2SlotNumber(): Promise<SlotNumber | undefined>;
 
   /**
-   * Returns the current L2 epoch number based on the current L1 timestamp.
+   * Returns the current L2 epoch number based on the currently synced L1 timestamp.
    */
-  getL2EpochNumber(): Promise<bigint>;
+  getL2EpochNumber(): Promise<EpochNumber | undefined>;
+
+  /**
+   * Returns all checkpoints for a given epoch.
+   * @dev Use this method only with recent epochs, since it walks the checkpoint list backwards.
+   * @param epochNumber - The epoch number to return checkpoints for.
+   */
+  getCheckpointsForEpoch(epochNumber: EpochNumber): Promise<Checkpoint[]>;
 
   /**
    * Returns all blocks for a given epoch.
    * @dev Use this method only with recent epochs, since it walks the block list backwards.
    * @param epochNumber - The epoch number to return blocks for.
    */
-  getBlocksForEpoch(epochNumber: bigint): Promise<L2Block[]>;
+  getBlocksForEpoch(epochNumber: EpochNumber): Promise<L2Block[]>;
 
   /**
    * Returns all block headers for a given epoch.
    * @dev Use this method only with recent epochs, since it walks the block list backwards.
    * @param epochNumber - The epoch number to return headers for.
    */
-  getBlockHeadersForEpoch(epochNumber: bigint): Promise<BlockHeader[]>;
+  getBlockHeadersForEpoch(epochNumber: EpochNumber): Promise<BlockHeader[]>;
 
   /**
    * Returns whether the given epoch is completed on L1, based on the current L1 and L2 block numbers.
    * @param epochNumber - The epoch number to check.
    */
-  isEpochComplete(epochNumber: bigint): Promise<boolean>;
+  isEpochComplete(epochNumber: EpochNumber): Promise<boolean>;
 
   /**
    * Returns the tips of the L2 chain.
@@ -120,8 +175,11 @@ export interface L2BlockSource {
    */
   getL1Constants(): Promise<L1RollupConstants>;
 
+  /** Returns values for the genesis block */
+  getGenesisValues(): Promise<{ genesisArchiveRoot: Fr }>;
+
   /** Latest synced L1 timestamp. */
-  getL1Timestamp(): Promise<bigint>;
+  getL1Timestamp(): Promise<bigint | undefined>;
 
   /**
    * Returns whether the latest block in the pending chain on L1 is invalid (ie its attestations are incorrect).
@@ -162,33 +220,26 @@ export type L2BlockTag = 'latest' | 'proven' | 'finalized';
 export type L2Tips = Record<L2BlockTag, L2BlockId>;
 
 /** Identifies a block by number and hash. */
-export type L2BlockId = z.infer<typeof L2BlockIdSchema>;
+export type L2BlockId = { number: BlockNumber; hash: string };
 
 /** Creates an L2 block id */
-export function makeL2BlockId(number: number, hash?: string): L2BlockId {
+export function makeL2BlockId(number: BlockNumber, hash?: string): L2BlockId {
   if (number !== 0 && !hash) {
     throw new Error(`Hash is required for non-genesis blocks (got block number ${number})`);
   }
   return { number, hash: hash! };
 }
 
-// TODO(palla/schemas): This package should know what is the block hash of the genesis block 0.
-const L2BlockIdSchema = z.union([
-  z.object({
-    number: z.literal(0),
-    hash: z.undefined(),
-  }),
-  z.object({
-    number: z.number(),
-    hash: z.string(),
-  }),
-]);
+const L2BlockIdSchema = z.object({
+  number: BlockNumberSchema,
+  hash: z.string(),
+});
 
 export const L2TipsSchema = z.object({
   latest: L2BlockIdSchema,
   proven: L2BlockIdSchema,
   finalized: L2BlockIdSchema,
-}) satisfies z.ZodType<L2Tips>;
+});
 
 export enum L2BlockSourceEvents {
   L2PruneDetected = 'l2PruneDetected',
@@ -198,14 +249,14 @@ export enum L2BlockSourceEvents {
 
 export type L2BlockProvenEvent = {
   type: 'l2BlockProven';
-  blockNumber: bigint;
-  slotNumber: bigint;
-  epochNumber: bigint;
+  blockNumber: BlockNumber;
+  slotNumber: SlotNumber;
+  epochNumber: EpochNumber;
 };
 
 export type L2BlockPruneEvent = {
   type: 'l2PruneDetected';
-  epochNumber: bigint;
+  epochNumber: EpochNumber;
   blocks: L2Block[];
 };
 

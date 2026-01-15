@@ -1,5 +1,5 @@
 // === AUDIT STATUS ===
-// internal:    { status: not started, auditors: [], date: YYYY-MM-DD }
+// internal:    { status: completed, auditors: [Federico], date: 2025-10-24 }
 // external_1:  { status: not started, auditors: [], date: YYYY-MM-DD }
 // external_2:  { status: not started, auditors: [], date: YYYY-MM-DD }
 // =====================
@@ -17,14 +17,17 @@ using namespace bb;
 /**
  * @brief Create constraints to verify an ECDSA signature
  *
- * @details Given and ECDSA constraint system, add to the builder constraints that verify the ECDSA signature. We
+ * @details Given an ECDSA constraint system, add to the builder constraints that verify the ECDSA signature. We
  * perform the following operations:
  *  1. Reconstruct byte arrays from builder variables (we enforce that each variable fits in one byte and stack them in
  *     a vector) and the boolean result from the corresponding builder variable
  *  2. Reconstruct the public key from the byte representations (big-endian, 32-byte numbers) of the \f$x\f$ and \f$y\f$
  *     coordinates.
- *  3. Enforce uniqueness of the representation of the public key by asserting \f$x < q\f$ and \f$y < q\f$, where
- * \f$q\f$ is the modulus of the base field of the elliptic curve we are working with.
+ *  3. Conditionally select the public key, the signature, and the hash of the message when the predicate is witness
+ *     false. This ensures that the circuit is satisfied when the predicate is false. We set:
+ *      - r = s = H(m) = 1 (the hash is set to 1 to avoid failures in the byte_array constructor)
+ *      - The public key to 2 times the generator of the curve (this is to avoid problems with lookup tables in
+ *        secp265r1)
  *  4. Verify the signature against the public key and the hash of the message. We return a bool_t bearing witness to
  *     whether the signature verification was successfull or not.
  *  5. Enforce that the result of the signature verification matches the expected result.
@@ -35,9 +38,7 @@ using namespace bb;
  * @param has_valid_witness_assignments
  */
 template <typename Curve>
-void create_ecdsa_verify_constraints(typename Curve::Builder& builder,
-                                     const EcdsaConstraint& input,
-                                     bool has_valid_witness_assignments)
+void create_ecdsa_verify_constraints(typename Curve::Builder& builder, const EcdsaConstraint& input)
 {
     using Builder = Curve::Builder;
 
@@ -49,20 +50,6 @@ void create_ecdsa_verify_constraints(typename Curve::Builder& builder,
     using bool_ct = bb::stdlib::bool_t<Builder>;
     using byte_array_ct = bb::stdlib::byte_array<Builder>;
 
-    // Lambda to convert std::vector<field_ct> to byte_array_ct
-    auto fields_to_bytes = [](Builder& builder, std::vector<field_ct>& fields) -> byte_array_ct {
-        byte_array_ct result(&builder);
-        for (auto& field : fields) {
-            // Construct byte array of length 1 from the field element
-            // The constructor enforces that `field` fits in one byte
-            byte_array_ct byte_to_append(field, /*num_bytes=*/1);
-            // Append the new byte to the result
-            result.write(byte_to_append);
-        }
-
-        return result;
-    };
-
     // Define builder variables based on the witness indices
     std::vector<field_ct> hashed_message_fields = fields_from_witnesses(builder, input.hashed_message);
     std::vector<field_ct> r_fields = fields_from_witnesses(builder, std::span(input.signature.begin(), 32));
@@ -70,41 +57,65 @@ void create_ecdsa_verify_constraints(typename Curve::Builder& builder,
     std::vector<field_ct> pub_x_fields = fields_from_witnesses(builder, input.pub_x_indices);
     std::vector<field_ct> pub_y_fields = fields_from_witnesses(builder, input.pub_y_indices);
     field_ct result_field = field_ct::from_witness_index(&builder, input.result);
+    bool_ct predicate(to_field_ct(input.predicate, builder)); // Constructor enforces predicate = 0 or 1
 
-    if (!has_valid_witness_assignments) {
+    if (builder.is_write_vk_mode()) {
         // Fill builder variables in case of empty witness assignment
         create_dummy_ecdsa_constraint<Curve>(
             builder, hashed_message_fields, r_fields, s_fields, pub_x_fields, pub_y_fields, result_field);
     }
 
-    // Step 1.
-    // Construct inputs to signature verification from witness indices
+    // Step 1: Conditionally assign field values when predicate is false
+    if (!predicate.is_constant()) {
+        // Set r = s = H(m) = 1 when the predicate is false
+        for (size_t idx = 0; idx < 32; idx++) {
+            r_fields[idx] = field_ct::conditional_assign(predicate, r_fields[idx], field_ct(idx == 0 ? 1 : 0));
+            s_fields[idx] = field_ct::conditional_assign(predicate, s_fields[idx], field_ct(idx == 0 ? 1 : 0));
+            hashed_message_fields[idx] =
+                field_ct::conditional_assign(predicate, hashed_message_fields[idx], field_ct(idx == 0 ? 1 : 0));
+        }
+
+        // Set public key to 2*generator when predicate is false
+        // The choice of 2*generator is arbitrary; it just needs to be a valid point on the curve and different from G
+        // or (-G). For secp256r1, the batch multiplication requires that the two points do not have the same x
+        // coordinate (so as to create a valid lookup table).
+        // Compute as native type to get byte representation
+        typename Curve::AffineElementNative default_point_native(Curve::g1::one + Curve::g1::one);
+        std::array<uint8_t, 32> default_x_bytes;
+        std::array<uint8_t, 32> default_y_bytes;
+        Curve::fq::serialize_to_buffer(default_point_native.x, default_x_bytes.data());
+        Curve::fq::serialize_to_buffer(default_point_native.y, default_y_bytes.data());
+
+        for (size_t i = 0; i < 32; ++i) {
+            pub_x_fields[i] = field_ct::conditional_assign(predicate, pub_x_fields[i], field_ct(default_x_bytes[i]));
+            pub_y_fields[i] = field_ct::conditional_assign(predicate, pub_y_fields[i], field_ct(default_y_bytes[i]));
+        }
+    } else {
+        BB_ASSERT(input.predicate.value, "Creating ECDSA constraints with a constant predicate equal to false.");
+    }
+
+    // Step 2: Convert conditionally-assigned fields to byte arrays (adds range constraints on the correct values)
     byte_array_ct hashed_message = fields_to_bytes(builder, hashed_message_fields);
     byte_array_ct pub_x_bytes = fields_to_bytes(builder, pub_x_fields);
     byte_array_ct pub_y_bytes = fields_to_bytes(builder, pub_y_fields);
     byte_array_ct r = fields_to_bytes(builder, r_fields);
     byte_array_ct s = fields_to_bytes(builder, s_fields);
-    bool_ct result = static_cast<bool_ct>(result_field); // Constructor enforces result_field = 0 or 1
+    bool_ct result(result_field); // Constructor enforces result = 0 or 1
 
-    // Step 2.
-    // Reconstruct the public key from the byte representations of its coordinates
+    // Step 3: Construct public key from byte arrays
     Fq pub_x(pub_x_bytes);
     Fq pub_y(pub_y_bytes);
-    G1 public_key(pub_x, pub_y);
-
-    // Step 3.
-    // Ensure uniqueness of the public key by asserting each of its coordinates is smaller than the modulus of the base
-    // field
-    pub_x.assert_is_in_field();
-    pub_y.assert_is_in_field();
+    // This constructor sets the infinity flag of public_key to false. This is OK because the point at infinity is not a
+    // point on the curve and we check tha public_key is on the curve in the ecdsa verification circuit.
+    G1 public_key(pub_x, pub_y, /*assert_on_curve=*/false);
 
     // Step 4.
     bool_ct signature_result =
         stdlib::ecdsa_verify_signature<Builder, Curve, Fq, Fr, G1>(hashed_message, public_key, { r, s });
 
     // Step 5.
-    // Assert that signature verification returned the expected result
-    signature_result.assert_equal(result);
+    // Ensure the circuit is satisfied when predicate is witness false
+    signature_result.assert_equal(bool_ct::conditional_assign(predicate, result, signature_result));
 }
 
 /**
@@ -121,27 +132,18 @@ void create_dummy_ecdsa_constraint(typename Curve::Builder& builder,
                                    const std::vector<stdlib::field_t<typename Curve::Builder>>& pub_y_fields,
                                    const stdlib::field_t<typename Curve::Builder>& result_field)
 {
-    using Builder = Curve::Builder;
     using FqNative = Curve::fq;
     using G1Native = Curve::g1;
-    using field_ct = stdlib::field_t<Builder>;
-
-    // Lambda to populate builder variables from vector of field values
-    auto populate_fields = [&builder](const std::vector<field_ct>& fields, const std::vector<bb::fr>& values) {
-        for (auto [field, value] : zip_view(fields, values)) {
-            builder.set_variable(field.witness_index, value);
-        }
-    };
 
     // Vector of 32 copies of bb::fr::zero()
     std::vector<bb::fr> mock_zeros(32, bb::fr::zero());
 
     // Hashed message
-    populate_fields(hashed_message_fields, mock_zeros);
+    populate_fields(builder, hashed_message_fields, mock_zeros);
 
     // Signature
-    populate_fields(r_fields, mock_zeros);
-    populate_fields(s_fields, mock_zeros);
+    populate_fields(builder, r_fields, mock_zeros);
+    populate_fields(builder, s_fields, mock_zeros);
 
     // Pub key
     std::array<uint8_t, 32> buffer_x;
@@ -154,21 +156,21 @@ void create_dummy_ecdsa_constraint(typename Curve::Builder& builder,
         mock_pub_x.emplace_back(bb::fr(byte_x));
         mock_pub_y.emplace_back(bb::fr(byte_y));
     }
-    populate_fields(pub_x_fields, mock_pub_x);
-    populate_fields(pub_y_fields, mock_pub_y);
+    populate_fields(builder, pub_x_fields, mock_pub_x);
+    populate_fields(builder, pub_y_fields, mock_pub_y);
 
     // Result
-    builder.set_variable(result_field.witness_index, bb::fr::one());
+    builder.set_variable(result_field.get_witness_index(), bb::fr::one());
 }
 
-template void create_ecdsa_verify_constraints<stdlib::secp256k1<UltraCircuitBuilder>>(
-    UltraCircuitBuilder& builder, const EcdsaConstraint& input, bool has_valid_witness_assignments);
-template void create_ecdsa_verify_constraints<stdlib::secp256k1<MegaCircuitBuilder>>(
-    MegaCircuitBuilder& builder, const EcdsaConstraint& input, bool has_valid_witness_assignments);
-template void create_ecdsa_verify_constraints<stdlib::secp256r1<UltraCircuitBuilder>>(
-    UltraCircuitBuilder& builder, const EcdsaConstraint& input, bool has_valid_witness_assignments);
-template void create_ecdsa_verify_constraints<stdlib::secp256r1<MegaCircuitBuilder>>(
-    MegaCircuitBuilder& builder, const EcdsaConstraint& input, bool has_valid_witness_assignments);
+template void create_ecdsa_verify_constraints<stdlib::secp256k1<UltraCircuitBuilder>>(UltraCircuitBuilder& builder,
+                                                                                      const EcdsaConstraint& input);
+template void create_ecdsa_verify_constraints<stdlib::secp256k1<MegaCircuitBuilder>>(MegaCircuitBuilder& builder,
+                                                                                     const EcdsaConstraint& input);
+template void create_ecdsa_verify_constraints<stdlib::secp256r1<UltraCircuitBuilder>>(UltraCircuitBuilder& builder,
+                                                                                      const EcdsaConstraint& input);
+template void create_ecdsa_verify_constraints<stdlib::secp256r1<MegaCircuitBuilder>>(MegaCircuitBuilder& builder,
+                                                                                     const EcdsaConstraint& input);
 
 template void create_dummy_ecdsa_constraint<stdlib::secp256k1<UltraCircuitBuilder>>(
     UltraCircuitBuilder&,

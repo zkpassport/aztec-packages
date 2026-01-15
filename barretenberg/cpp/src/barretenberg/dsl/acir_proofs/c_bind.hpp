@@ -13,8 +13,7 @@
 using namespace bb;
 
 WASM_EXPORT void acir_get_circuit_sizes(uint8_t const* constraint_system_buf,
-                                        bool const* recursive,
-                                        bool const* honk_recursion,
+                                        bool const* has_ipa_claim,
                                         uint32_t* total,
                                         uint32_t* subgroup);
 
@@ -27,7 +26,7 @@ WASM_EXPORT void acir_prove_and_verify_ultra_honk(uint8_t const* constraint_syst
                                                   bool* result);
 
 /**
- * @brief Construct and verify a ClientIVC proof
+ * @brief Construct and verify a Chonk proof
  * @deprecated
  */
 WASM_EXPORT void acir_prove_and_verify_mega_honk(uint8_t const* constraint_system_buf,
@@ -63,7 +62,7 @@ WASM_EXPORT void acir_serialize_verification_key_into_fields(in_ptr acir_compose
                                                              fr::vec_out_buf out_vkey,
                                                              fr::out_buf out_key_hash);
 
-WASM_EXPORT void acir_prove_ultra_honk(uint8_t const* acir_vec,
+WASM_EXPORT void acir_prove_ultra_zk_honk(uint8_t const* acir_vec,
                                        uint8_t const* witness_vec,
                                        uint8_t const* vk_buf,
                                        uint8_t** out);
@@ -84,7 +83,7 @@ WASM_EXPORT void acir_prove_ultra_starknet_zk_honk(uint8_t const* acir_vec,
                                                    uint8_t const* vk_buf,
                                                    uint8_t** out);
 
-WASM_EXPORT void acir_verify_ultra_honk(uint8_t const* proof_buf, uint8_t const* vk_buf, bool* result);
+WASM_EXPORT void acir_verify_ultra_zk_honk(uint8_t const* proof_buf, uint8_t const* vk_buf, bool* result);
 WASM_EXPORT void acir_verify_ultra_keccak_honk(uint8_t const* proof_buf, uint8_t const* vk_buf, bool* result);
 WASM_EXPORT void acir_verify_ultra_keccak_zk_honk(uint8_t const* proof_buf, uint8_t const* vk_buf, bool* result);
 WASM_EXPORT void acir_verify_ultra_starknet_honk(uint8_t const* proof_buf, uint8_t const* vk_buf, bool* result);

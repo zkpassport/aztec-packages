@@ -1,17 +1,17 @@
-import {
-  AztecAddress,
-  type AztecNode,
-  BatchCall,
-  Fr,
-  type Logger,
-  TxStatus,
-  type Wallet,
-  generateClaimSecret,
-  retryUntil,
-} from '@aztec/aztec.js';
-import { isL1ToL2MessageReady } from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { SentTx } from '@aztec/aztec.js/contracts';
+import { generateClaimSecret } from '@aztec/aztec.js/ethereum';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import { isL1ToL2MessageReady } from '@aztec/aztec.js/messaging';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import { TxStatus } from '@aztec/aztec.js/tx';
+import type { Wallet } from '@aztec/aztec.js/wallet';
+import { BlockNumber } from '@aztec/foundation/branded-types';
 import { timesAsync } from '@aztec/foundation/collection';
+import { retryUntil } from '@aztec/foundation/retry';
 import { TestContract } from '@aztec/noir-test-contracts.js/Test';
+import { ExecutionPayload } from '@aztec/stdlib/tx';
 
 import { sendL1ToL2Message } from '../fixtures/l1_to_l2_messaging.js';
 import type { CrossChainTestHarness } from '../shared/cross_chain_test_harness.js';
@@ -52,10 +52,11 @@ describe('e2e_cross_chain_messaging l1_to_l2', () => {
   const advanceBlock = async () => {
     const block = await aztecNode.getBlockNumber();
     log.warn(`Sending noop tx at block ${block}`);
-    await BatchCall.empty(wallet).send({ from: user1Address }).wait();
+    const sentTx = new SentTx(wallet, () => wallet.sendTx(ExecutionPayload.empty(), { from: user1Address }));
+    await sentTx.wait();
     const newBlock = await aztecNode.getBlockNumber();
     log.warn(`Advanced to block ${newBlock}`);
-    if (newBlock !== block + 1) {
+    if (newBlock === block) {
       throw new Error(`Failed to advance block ${block}`);
     }
     return undefined;
@@ -84,7 +85,7 @@ describe('e2e_cross_chain_messaging l1_to_l2', () => {
   const waitForMessageReady = async (
     msgHash: Fr,
     scope: 'private' | 'public',
-    onNotReady?: (blockNumber: number) => Promise<void>,
+    onNotReady?: (blockNumber: BlockNumber) => Promise<void>,
   ) => {
     const msgBlock = await waitForMessageFetched(msgHash);
     log.warn(`Waiting until L2 reaches msg block ${msgBlock} (current is ${await aztecNode.getBlockNumber()})`);
@@ -209,7 +210,7 @@ describe('e2e_cross_chain_messaging l1_to_l2', () => {
         if (scope === 'private') {
           // On private, we simulate the tx locally and check that we get a missing message error, then we advance to the next block
           await expect(() => consume().simulate({ from: user1Address })).rejects.toThrow(/No L1 to L2 message found/);
-          await advanceBlock();
+          await tryAdvanceBlock();
           await t.ctx.watcher.markAsProven();
         } else {
           // On public, we actually send the tx and check that it reverts due to the missing message.

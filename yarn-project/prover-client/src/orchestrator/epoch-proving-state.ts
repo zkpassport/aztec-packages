@@ -1,21 +1,22 @@
 import { BatchedBlob, BatchedBlobAccumulator, type FinalBlobBatchingChallenges } from '@aztec/blob-lib';
 import type {
   ARCHIVE_HEIGHT,
-  L1_TO_L2_MSG_SUBTREE_SIBLING_PATH_LENGTH,
+  L1_TO_L2_MSG_SUBTREE_ROOT_SIBLING_PATH_LENGTH,
   NESTED_RECURSIVE_PROOF_LENGTH,
   NESTED_RECURSIVE_ROLLUP_HONK_PROOF_LENGTH,
 } from '@aztec/constants';
-import type { Fr } from '@aztec/foundation/fields';
+import { BlockNumber, EpochNumber } from '@aztec/foundation/branded-types';
+import type { Fr } from '@aztec/foundation/curves/bn254';
 import type { Tuple } from '@aztec/foundation/serialize';
 import { type TreeNodeLocation, UnbalancedTreeStore } from '@aztec/foundation/trees';
 import type { PublicInputsAndRecursiveProof } from '@aztec/stdlib/interfaces/server';
-import type { PrivateToPublicKernelCircuitPublicInputs } from '@aztec/stdlib/kernel';
 import type { Proof } from '@aztec/stdlib/proofs';
 import {
   CheckpointConstantData,
   CheckpointMergeRollupPrivateInputs,
   CheckpointPaddingRollupPrivateInputs,
   CheckpointRollupPublicInputs,
+  PublicChonkVerifierPublicInputs,
   RootRollupPrivateInputs,
   type RootRollupPublicInputs,
 } from '@aztec/stdlib/rollup';
@@ -57,20 +58,16 @@ export class EpochProvingState {
   private finalBatchedBlob: BatchedBlob | undefined;
   private provingStateLifecycle = PROVING_STATE_LIFECYCLE.PROVING_STATE_CREATED;
 
-  // Map from tx hash to tube proof promise. Used when kickstarting tube proofs before tx processing.
-  public readonly cachedTubeProofs = new Map<
+  // Map from tx hash to chonk verifier proof promise. Used when kickstarting chonk verifier proofs before tx processing.
+  public readonly cachedChonkVerifierProofs = new Map<
     string,
     Promise<
-      PublicInputsAndRecursiveProof<
-        PrivateToPublicKernelCircuitPublicInputs,
-        typeof NESTED_RECURSIVE_ROLLUP_HONK_PROOF_LENGTH
-      >
+      PublicInputsAndRecursiveProof<PublicChonkVerifierPublicInputs, typeof NESTED_RECURSIVE_ROLLUP_HONK_PROOF_LENGTH>
     >
   >();
 
   constructor(
-    public readonly epochNumber: number,
-    private readonly firstCheckpointNumber: Fr,
+    public readonly epochNumber: EpochNumber,
     public readonly totalNumCheckpoints: number,
     private readonly finalBlobBatchingChallenges: FinalBlobBatchingChallenges,
     private onCheckpointBlobAccumulatorSet: (checkpoint: CheckpointProvingState) => void,
@@ -84,48 +81,39 @@ export class EpochProvingState {
   // Adds a block to the proving state, returns its index
   // Will update the proving life cycle if this is the last block
   public startNewCheckpoint(
+    checkpointIndex: number,
     constants: CheckpointConstantData,
     totalNumBlocks: number,
-    totalNumBlobFields: number,
     previousBlockHeader: BlockHeader,
     lastArchiveSiblingPath: Tuple<Fr, typeof ARCHIVE_HEIGHT>,
     l1ToL2Messages: Fr[],
     lastL1ToL2MessageTreeSnapshot: AppendOnlyTreeSnapshot,
-    lastL1ToL2MessageSubtreeSiblingPath: Tuple<Fr, typeof L1_TO_L2_MSG_SUBTREE_SIBLING_PATH_LENGTH>,
+    lastL1ToL2MessageSubtreeRootSiblingPath: Tuple<Fr, typeof L1_TO_L2_MSG_SUBTREE_ROOT_SIBLING_PATH_LENGTH>,
     newL1ToL2MessageTreeSnapshot: AppendOnlyTreeSnapshot,
-    newL1ToL2MessageSubtreeSiblingPath: Tuple<Fr, typeof L1_TO_L2_MSG_SUBTREE_SIBLING_PATH_LENGTH>,
+    newL1ToL2MessageSubtreeRootSiblingPath: Tuple<Fr, typeof L1_TO_L2_MSG_SUBTREE_ROOT_SIBLING_PATH_LENGTH>,
   ): CheckpointProvingState {
-    const slotNumber = constants.slotNumber;
-    if (slotNumber.lt(this.firstCheckpointNumber)) {
+    if (checkpointIndex >= this.totalNumCheckpoints) {
       throw new Error(
-        `Unable to start a new checkpoint - checkpoint too old. Epoch started at ${this.firstCheckpointNumber.toNumber()}. Got ${slotNumber.toNumber()}.`,
-      );
-    }
-
-    const index = slotNumber.sub(this.firstCheckpointNumber).toNumber();
-    if (index >= this.totalNumCheckpoints) {
-      throw new Error(
-        `Unable to start a new checkpoint at index ${index}. Expected at most ${this.totalNumCheckpoints} checkpoints.`,
+        `Unable to start a new checkpoint at index ${checkpointIndex}. Expected at most ${this.totalNumCheckpoints} checkpoints.`,
       );
     }
 
     const checkpoint = new CheckpointProvingState(
-      index,
+      checkpointIndex,
       constants,
       totalNumBlocks,
-      totalNumBlobFields,
       this.finalBlobBatchingChallenges,
       previousBlockHeader,
       lastArchiveSiblingPath,
       l1ToL2Messages,
       lastL1ToL2MessageTreeSnapshot,
-      lastL1ToL2MessageSubtreeSiblingPath,
+      lastL1ToL2MessageSubtreeRootSiblingPath,
       newL1ToL2MessageTreeSnapshot,
-      newL1ToL2MessageSubtreeSiblingPath,
+      newL1ToL2MessageSubtreeRootSiblingPath,
       this,
       this.onCheckpointBlobAccumulatorSet,
     );
-    this.checkpoints[index] = checkpoint;
+    this.checkpoints[checkpointIndex] = checkpoint;
 
     if (this.checkpoints.filter(c => !!c).length === this.totalNumCheckpoints) {
       this.provingStateLifecycle = PROVING_STATE_LIFECYCLE.PROVING_STATE_FULL;
@@ -138,13 +126,16 @@ export class EpochProvingState {
     return this.checkpoints[index];
   }
 
-  public getCheckpointProvingStateByBlockNumber(blockNumber: number) {
+  public getCheckpointProvingStateByBlockNumber(blockNumber: BlockNumber) {
     return this.checkpoints.find(
-      c => c && blockNumber >= c.firstBlockNumber && blockNumber < c.firstBlockNumber + c.totalNumBlocks,
+      c =>
+        c &&
+        Number(blockNumber) >= Number(c.firstBlockNumber) &&
+        Number(blockNumber) < Number(c.firstBlockNumber) + c.totalNumBlocks,
     );
   }
 
-  public getBlockProvingStateByBlockNumber(blockNumber: number) {
+  public getBlockProvingStateByBlockNumber(blockNumber: BlockNumber) {
     return this.getCheckpointProvingStateByBlockNumber(blockNumber)?.getBlockProvingStateByBlockNumber(blockNumber);
   }
 
@@ -249,7 +240,7 @@ export class EpochProvingState {
     if (!this.endBlobAccumulator) {
       throw new Error('End blob accumulator not ready.');
     }
-    this.finalBatchedBlob = await this.endBlobAccumulator.finalize();
+    this.finalBatchedBlob = await this.endBlobAccumulator.finalize(true /* verifyProof */);
   }
 
   public getParentLocation(location: TreeNodeLocation) {

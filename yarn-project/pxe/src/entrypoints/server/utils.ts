@@ -1,6 +1,5 @@
-import { BBNativePrivateKernelProver } from '@aztec/bb-prover/client/native';
-import { BBWASMBundlePrivateKernelProver } from '@aztec/bb-prover/client/wasm/bundle';
-import { randomBytes } from '@aztec/foundation/crypto';
+import { BBBundlePrivateKernelProver } from '@aztec/bb-prover/client/bundle';
+import { randomBytes } from '@aztec/foundation/crypto/random';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import { BundledProtocolContractsProvider } from '@aztec/protocol-contracts/providers/bundle';
 import {
@@ -12,52 +11,23 @@ import {
 import { FileCircuitRecorder } from '@aztec/simulator/testing';
 import type { AztecNode } from '@aztec/stdlib/interfaces/client';
 
-import type { PXEServiceConfig } from '../../config/index.js';
-import { PXEService } from '../../pxe_service/pxe_service.js';
+import type { PXEConfig } from '../../config/index.js';
+import { PXE } from '../../pxe.js';
 import { PXE_DATA_SCHEMA_VERSION } from '../../storage/index.js';
 import type { PXECreationOptions } from '../pxe_creation_options.js';
 
-type PXEConfigWithoutDefaults = Omit<
-  PXEServiceConfig,
-  'l1Contracts' | 'l1ChainId' | 'l2BlockBatchSize' | 'rollupVersion'
->;
+type PXEConfigWithoutDefaults = Omit<PXEConfig, 'l1Contracts' | 'l1ChainId' | 'l2BlockBatchSize' | 'rollupVersion'>;
 
-/**
- * Create and start an PXEService instance with the given AztecNode and config.
- *
- * @param aztecNode - The AztecNode instance to be used by the server.
- * @param config - The PXE Service Config to use
- * @param useLogSuffix - Whether to add a randomly generated suffix to the PXE debug logs.
- * @returns A Promise that resolves to the started PXEService instance.
- */
-export function createPXEService(
+export async function createPXE(
   aztecNode: AztecNode,
   config: PXEConfigWithoutDefaults,
   options: PXECreationOptions = { loggers: {} },
 ) {
-  const simulator = new WASMSimulator();
   const recorder = process.env.CIRCUIT_RECORD_DIR
     ? new FileCircuitRecorder(process.env.CIRCUIT_RECORD_DIR)
     : new MemoryCircuitRecorder();
-  const simulatorWithRecorder = new SimulatorRecorderWrapper(simulator, recorder);
-  return createPXEServiceWithSimulator(aztecNode, simulatorWithRecorder, config, options);
-}
+  const simulator = new SimulatorRecorderWrapper(new WASMSimulator(), recorder);
 
-/**
- * Create and start an PXEService instance with the given AztecNode, Simulator and config.
- *
- * @param aztecNode - The AztecNode instance to be used by the server.
- * @param simulator - The Simulator to use
- * @param config - The PXE Service Config to use
- * @param useLogSuffix - Whether to add a randomly generated suffix to the PXE debug logs.
- * @returns A Promise that resolves to the started PXEService instance.
- */
-export async function createPXEServiceWithSimulator(
-  aztecNode: AztecNode,
-  simulator: CircuitSimulator,
-  config: PXEConfigWithoutDefaults,
-  options: PXECreationOptions = { loggers: {} },
-) {
   const logSuffix =
     typeof options.useLogSuffix === 'boolean'
       ? options.useLogSuffix
@@ -67,7 +37,7 @@ export async function createPXEServiceWithSimulator(
   const loggers = options.loggers ?? {};
 
   const { l1ChainId, l1ContractAddresses: l1Contracts, rollupVersion } = await aztecNode.getNodeInfo();
-  const configWithContracts: PXEServiceConfig = {
+  const configWithContracts: PXEConfig = {
     ...config,
     l1Contracts,
     l1ChainId,
@@ -88,11 +58,11 @@ export async function createPXEServiceWithSimulator(
     ? loggers.prover
     : createLogger('pxe:bb:native' + (logSuffix ? `:${logSuffix}` : ''));
 
-  const prover = options.prover ?? (await createProver(config, simulator, proverLogger));
+  const prover = options.prover ?? createProver(simulator, proverLogger);
   const protocolContractsProvider = new BundledProtocolContractsProvider();
 
   const pxeLogger = loggers.pxe ? loggers.pxe : createLogger('pxe:service' + (logSuffix ? `:${logSuffix}` : ''));
-  const pxe = await PXEService.create(
+  const pxe = await PXE.create(
     aztecNode,
     options.store,
     prover,
@@ -104,20 +74,6 @@ export async function createPXEServiceWithSimulator(
   return pxe;
 }
 
-function createProver(
-  config: Pick<PXEServiceConfig, 'bbBinaryPath' | 'bbWorkingDirectory'>,
-  simulator: CircuitSimulator,
-  logger?: Logger,
-) {
-  if (!config.bbBinaryPath || !config.bbWorkingDirectory) {
-    return new BBWASMBundlePrivateKernelProver(simulator, 16, logger);
-  } else {
-    const bbConfig = config as Required<Pick<PXEServiceConfig, 'bbBinaryPath' | 'bbWorkingDirectory'>> &
-      PXEServiceConfig;
-    return BBNativePrivateKernelProver.new(
-      { bbSkipCleanup: false, numConcurrentIVCVerifiers: 1, bbIVCConcurrency: 1, ...bbConfig },
-      simulator,
-      logger,
-    );
-  }
+function createProver(simulator: CircuitSimulator, logger?: Logger) {
+  return new BBBundlePrivateKernelProver(simulator, logger);
 }

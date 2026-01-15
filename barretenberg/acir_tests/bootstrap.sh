@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 source $(git rev-parse --show-toplevel)/ci3/source_bootstrap
 
-cmd=${1:-}
 export CRS_PATH=$HOME/.bb-crs
+export RAYON_NUM_THREADS=1
 
 tests_tar=barretenberg-acir-tests-$(hash_str \
-  $(../../noir/bootstrap.sh hash-tests) \
+  $(../../noir/bootstrap.sh hash) \
   $(cache_content_hash \
     ./.rebuild_patterns \
     ../cpp/.rebuild_patterns \
@@ -13,7 +13,7 @@ tests_tar=barretenberg-acir-tests-$(hash_str \
     )).tar.gz
 
 tests_hash=$(hash_str \
-  $(../../noir/bootstrap.sh hash-tests) \
+  $(../../noir/bootstrap.sh hash) \
   $(../cpp/bootstrap.sh hash) \
   $(cache_content_hash \
     ^barretenberg/acir_tests/ \
@@ -93,7 +93,7 @@ function regenerate_recursive_inputs {
   mv ./target/assert_statement.json ./target/program.json
   mv ./target/assert_statement.gz ./target/witness.gz
   cd ../..
-  parallel 'run_proof_generation {}' ::: $(ls internal_test_programs)
+  parallel 'run_proof_generation {}' ::: "double_verify_honk_proof" "verify_honk_proof" "verify_honk_zk_proof" "double_verify_honk_zk_proof" "verify_rollup_honk_proof"
 }
 
 export -f hex_to_fields_json regenerate_recursive_inputs run_proof_generation generate_toml
@@ -113,11 +113,13 @@ function build {
     cp -R ../../noir/noir-repo/test_programs/execution_success acir_tests
     # Running these requires extra gluecode so they're skipped.
     rm -rf acir_tests/{diamond_deps_0,workspace,workspace_default_member,regression_7323}
-
-    rm -rf acir_tests/{ecdsa_secp256k1_invalid_pub_key_in_inactive_branch,ecdsa_secp256r1_invalid_pub_key_in_inactive_branch}
+    # These use folding, which is not currently supported.
+    rm -rf acir_tests/{fold_call_witness_condition,fold_after_inlined_calls,fold_complex_outputs,fold_basic_nested_call,fold_numeric_generic_poseidon,fold_fibonacci,fold_basic,fold_2_to_17,fold_distinct_return}
     # These are breaking with:
     # Failed to solve program: 'Failed to solve blackbox function: embedded_curve_add, reason: Infinite input: embedded_curve_add(infinity, infinity)'
     rm -rf acir_tests/{regression_5045,regression_7744}
+    # The following test fails because it uses CallData/ReturnData with UltraBuilder, which is not supported
+    rm -rf acir_tests/{regression_7612,regression_7143,databus_composite_calldata,databus_two_calldata_simple,databus_two_calldata,databus}
     # Merge the internal test programs with the acir tests.
     cp -R ./internal_test_programs/* acir_tests
 
@@ -143,7 +145,7 @@ function test {
 # Paths are all relative to the repository root.
 # this function is used to generate the commands for running the tests.
 function test_cmds {
-  # NOTE: client-ivc commands are tested in yarn-project/end-to-end bench due to circular dependencies.
+  # NOTE: chonk commands are tested in yarn-project/end-to-end bench due to circular dependencies.
   # Locally, you can do ./bootstrap.sh bench_ivc to run the 'tests' (benches with validation)
 
   # non_recursive_tests include all of the non recursive test programs
@@ -175,9 +177,6 @@ function test_cmds {
   echo "$tests_hash $scripts/bbjs_prove.sh ecdsa_secp256r1_3x"
   # the prove then verify flow for UltraHonk. This makes sure we have the same circuit for different witness inputs.
   echo "$tests_hash $scripts/bbjs_prove.sh a_6_array"
-
-  # Fold and verify an ACIR program stack using ClientIVC, recursively verify as part of the Tube circuit and produce and verify a Honk proof
-  echo "$tests_hash $scripts/bb_tube_prove.sh a_6_array"
 
   for t in $non_recursive_tests; do
     echo "$tests_hash $scripts/bb_prove.sh $(basename $t)"
@@ -211,9 +210,11 @@ function test_cmds {
 }
 
 function bench_cmds {
-  local dir=$(realpath --relative-to=$root .)
-  echo "$tests_hash:CPUS=16 barretenberg/acir_tests/scripts/run_bench.sh ultra_honk_rec_wasm_memory" \
-    "'scripts/bbjs_legacy_cli_prove.sh verify_honk_proof'"
+  return
+  # TODO: We no longer have a bb.js cli. Recreate this benchmark another way?
+  # local dir=$(realpath --relative-to=$root .)
+  # echo "$tests_hash:CPUS=16 barretenberg/acir_tests/scripts/run_bench.sh ultra_honk_rec_wasm_memory" \
+  #   "'scripts/bbjs_legacy_cli_prove.sh verify_honk_proof'"
 }
 
 # TODO(https://github.com/AztecProtocol/barretenberg/issues/1254): More complete testing, including failure tests
@@ -223,26 +224,13 @@ function bench {
 }
 
 case "$cmd" in
-  "clean")
-    git clean -fdx
-    ;;
-  "ci")
-    build
-    test
-    ;;
-  ""|"fast"|"full")
+  "")
     build
     ;;
   "hash")
     echo $tests_hash
     ;;
-  "compile")
-    compile
-    ;;
-  test|test_cmds|bench|bench_cmds)
-    $cmd
-    ;;
   *)
-    echo "Unknown command: $cmd"
-    exit 1
+    default_cmd_handler "$@"
+    ;;
 esac

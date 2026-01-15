@@ -46,8 +46,20 @@ fn validate_initial_values_constants_incorrect_protocol_nullifier_fails() {
     builder.with_protocol_nullifier();
 
     let mut nullifier = builder.output.nullifiers.get(0);
-    nullifier.nullifier.value += 1;
+    nullifier.inner.inner.value += 1;
     builder.output.nullifiers.set(0, nullifier);
+
+    builder.validate_as_first_call();
+}
+
+/**
+ * claimed_revertible_counter
+ */
+#[test(should_fail_with = "incorrect initial claimed_revertible_counter")]
+fn validate_initial_values_claimed_revertible_counter_mismatch_fails() {
+    let mut builder = PrivateKernelCircuitOutputValidatorBuilder::new();
+
+    builder.output.claimed_revertible_counter = 4567;
 
     builder.validate_as_first_call();
 }

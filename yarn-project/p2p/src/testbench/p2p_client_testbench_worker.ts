@@ -5,6 +5,7 @@
  */
 import { MockL2BlockSource } from '@aztec/archiver/test';
 import type { EpochCacheInterface } from '@aztec/epoch-cache';
+import { EpochNumber, SlotNumber } from '@aztec/foundation/branded-types';
 import { EthAddress } from '@aztec/foundation/eth-address';
 import { createLogger } from '@aztec/foundation/log';
 import { sleep } from '@aztec/foundation/sleep';
@@ -52,8 +53,10 @@ function mockTxPool(): TxPool {
     getTxStatus: () => Promise.resolve(TxStatus.PENDING),
     getTxsByHash: () => Promise.resolve([]),
     hasTxs: () => Promise.resolve([]),
+    hasTx: () => Promise.resolve(false),
     updateConfig: () => {},
     markTxsAsNonEvictable: () => Promise.resolve(),
+    cleanupDeletedMinedTxs: () => Promise.resolve(0),
   };
   return Object.assign(new EventEmitter(), pool);
 }
@@ -70,23 +73,27 @@ function mockAttestationPool(): AttestationPool {
     getAttestationsForSlotAndProposal: () => Promise.resolve([]),
     addBlockProposal: () => Promise.resolve(),
     getBlockProposal: () => Promise.resolve(undefined),
+    hasBlockProposal: () => Promise.resolve(false),
+    hasAttestation: () => Promise.resolve(false),
+    canAddProposal: () => Promise.resolve(true),
+    canAddAttestation: () => Promise.resolve(true),
   };
 }
 
 function mockEpochCache(): EpochCacheInterface {
   return {
-    getCommittee: () => Promise.resolve({ committee: [], seed: 1n, epoch: 0n }),
+    getCommittee: () => Promise.resolve({ committee: [], seed: 1n, epoch: EpochNumber.ZERO }),
     getProposerIndexEncoding: () => '0x' as `0x${string}`,
-    getEpochAndSlotNow: () => ({ epoch: 0n, slot: 0n, ts: 0n }),
+    getEpochAndSlotNow: () => ({ epoch: EpochNumber.ZERO, slot: SlotNumber.ZERO, ts: 0n }),
     computeProposerIndex: () => 0n,
     getProposerAttesterAddressInCurrentOrNextSlot: () =>
       Promise.resolve({
         currentProposer: EthAddress.ZERO,
         nextProposer: EthAddress.ZERO,
-        currentSlot: 0n,
-        nextSlot: 0n,
+        currentSlot: SlotNumber.ZERO,
+        nextSlot: SlotNumber.ZERO,
       }),
-    getEpochAndSlotInNextL1Slot: () => ({ epoch: 0n, slot: 0n, ts: 0n, now: 0n }),
+    getEpochAndSlotInNextL1Slot: () => ({ epoch: EpochNumber.ZERO, slot: SlotNumber.ZERO, ts: 0n, now: 0n }),
     isInCommittee: () => Promise.resolve(false),
     getRegisteredValidators: () => Promise.resolve([]),
     filterInCommittee: () => Promise.resolve([]),

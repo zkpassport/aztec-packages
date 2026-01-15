@@ -2,13 +2,12 @@
  * Test fixtures and utilities to set up and run a test using multiple validators
  */
 import { type AztecNodeConfig, AztecNodeService } from '@aztec/aztec-node';
-import type { SentTx } from '@aztec/aztec.js';
+import { range } from '@aztec/foundation/array';
 import { SecretValue } from '@aztec/foundation/config';
 import { addLogNameHandler, removeLogNameHandler } from '@aztec/foundation/log';
 import { bufferToHex } from '@aztec/foundation/string';
 import type { DateProvider } from '@aztec/foundation/timer';
 import type { ProverNodeConfig, ProverNodeDeps } from '@aztec/prover-node';
-import type { PXEService } from '@aztec/pxe/server';
 import type { PublicDataTreeLeaf } from '@aztec/stdlib/trees';
 
 import getPort from 'get-port';
@@ -22,12 +21,6 @@ import { getEndToEndTestTelemetryClient } from './with_telemetry_utils.js';
 // index 1, and prover node with index 2, so all of our loops here need to start from 3
 // to avoid running validators with the same key
 export const ATTESTER_PRIVATE_KEYS_START_INDEX = 3;
-
-export interface NodeContext {
-  node: AztecNodeService;
-  pxeService: PXEService;
-  txs: SentTx[];
-}
 
 export function generatePrivateKeys(startIndex: number, numberOfKeys: number): `0x${string}`[] {
   const privateKeys: `0x${string}`[] = [];
@@ -48,6 +41,7 @@ export async function createNodes(
   dataDirectory?: string,
   metricsPort?: number,
   indexOffset = 0,
+  validatorsPerNode = 1,
 ): Promise<AztecNodeService[]> {
   const nodePromises: Promise<AztecNodeService>[] = [];
   const loggerIdStorage = new AsyncLocalStorage<string>();
@@ -60,13 +54,18 @@ export async function createNodes(
     // We run on ports from the bootnode upwards
     const port = bootNodePort + 1 + index;
 
+    // Determine validator indices for this node
+    const validatorIndices = validatorsPerNode === 1 ? index : range(validatorsPerNode, validatorsPerNode * index);
+
+    // Assign data directory
     const dataDir = dataDirectory ? `${dataDirectory}-${index}` : undefined;
+
     const nodePromise = createNode(
       config,
       dateProvider,
       port,
       bootstrapNodeEnr,
-      index,
+      validatorIndices,
       prefilledPublicData,
       dataDir,
       metricsPort,
@@ -86,13 +85,13 @@ export async function createNodes(
   return nodes;
 }
 
-// creates a P2P enabled instance of Aztec Node Service
+/** Creates a P2P enabled instance of Aztec Node Service with a validator */
 export async function createNode(
   config: AztecNodeConfig & { dontStartSequencer?: boolean },
   dateProvider: DateProvider,
   tcpPort: number,
   bootstrapNode: string | undefined,
-  addressIndex: number,
+  addressIndex: number | number[],
   prefilledPublicData?: PublicDataTreeLeaf[],
   dataDirectory?: string,
   metricsPort?: number,
@@ -100,12 +99,37 @@ export async function createNode(
 ) {
   const createNode = async () => {
     const validatorConfig = await createValidatorConfig(config, bootstrapNode, tcpPort, addressIndex, dataDirectory);
-    const telemetry = getEndToEndTestTelemetryClient(metricsPort);
+    const telemetry = await getEndToEndTestTelemetryClient(metricsPort);
     return await AztecNodeService.createAndSync(
       validatorConfig,
       { telemetry, dateProvider },
       { prefilledPublicData, dontStartSequencer: config.dontStartSequencer },
     );
+  };
+  return loggerIdStorage ? await loggerIdStorage.run(tcpPort.toString(), createNode) : createNode();
+}
+
+/** Creates a P2P enabled instance of Aztec Node Service without a validator */
+export async function createNonValidatorNode(
+  baseConfig: AztecNodeConfig,
+  dateProvider: DateProvider,
+  tcpPort: number,
+  bootstrapNode: string | undefined,
+  prefilledPublicData?: PublicDataTreeLeaf[],
+  dataDirectory?: string,
+  metricsPort?: number,
+  loggerIdStorage?: AsyncLocalStorage<string>,
+) {
+  const createNode = async () => {
+    const p2pConfig = await createP2PConfig(baseConfig, bootstrapNode, tcpPort, dataDirectory);
+    const config: AztecNodeConfig = {
+      ...p2pConfig,
+      disableValidator: true,
+      validatorPrivateKeys: undefined,
+      publisherPrivateKeys: [],
+    };
+    const telemetry = await getEndToEndTestTelemetryClient(metricsPort);
+    return await AztecNodeService.createAndSync(config, { telemetry, dateProvider }, { prefilledPublicData });
   };
   return loggerIdStorage ? await loggerIdStorage.run(tcpPort.toString(), createNode) : createNode();
 }
@@ -123,16 +147,15 @@ export async function createProverNode(
 ) {
   const createProverNode = async () => {
     const proverNodePrivateKey = getPrivateKeyFromIndex(ATTESTER_PRIVATE_KEYS_START_INDEX + addressIndex)!;
-    const telemetry = getEndToEndTestTelemetryClient(metricsPort);
+    const telemetry = await getEndToEndTestTelemetryClient(metricsPort);
 
-    const proverConfig: Partial<ProverNodeConfig> = {
-      p2pIp: `127.0.0.1`,
-      p2pPort: tcpPort ?? (await getPort()),
-      p2pEnabled: true,
-      peerCheckIntervalMS: TEST_PEER_CHECK_INTERVAL_MS,
-      blockCheckIntervalMS: 1000,
-      bootstrapNodes: bootstrapNode ? [bootstrapNode] : [],
-    };
+    const proverConfig: Partial<ProverNodeConfig> = await createP2PConfig(
+      config,
+      bootstrapNode,
+      tcpPort,
+      dataDirectory,
+    );
+
     const aztecNodeRpcTxProvider = undefined;
     return await createAndSyncProverNode(
       bufferToHex(proverNodePrivateKey),
@@ -146,19 +169,13 @@ export async function createProverNode(
   return loggerIdStorage ? await loggerIdStorage.run(tcpPort.toString(), createProverNode) : createProverNode();
 }
 
-export async function createValidatorConfig(
+export async function createP2PConfig(
   config: AztecNodeConfig,
   bootstrapNodeEnr?: string,
   port?: number,
-  addressIndex: number = 1,
   dataDirectory?: string,
 ) {
   port = port ?? (await getPort());
-
-  const attesterPrivateKey = bufferToHex(getPrivateKeyFromIndex(ATTESTER_PRIVATE_KEYS_START_INDEX + addressIndex)!);
-
-  config.validatorPrivateKeys = new SecretValue([attesterPrivateKey]);
-  config.publisherPrivateKeys = [new SecretValue(attesterPrivateKey)];
 
   const nodeConfig: AztecNodeConfig = {
     ...config,
@@ -169,6 +186,32 @@ export async function createValidatorConfig(
     blockCheckIntervalMS: 1000,
     dataDirectory,
     bootstrapNodes: bootstrapNodeEnr ? [bootstrapNodeEnr] : [],
+  };
+
+  return nodeConfig;
+}
+
+export async function createValidatorConfig(
+  config: AztecNodeConfig,
+  bootstrapNodeEnr?: string,
+  port?: number,
+  addressIndex: number | number[] = 1,
+  dataDirectory?: string,
+) {
+  const addressIndices = Array.isArray(addressIndex) ? addressIndex : [addressIndex];
+  if (addressIndices.length === 0) {
+    throw new Error('At least one address index must be provided to create a validator config');
+  }
+
+  const attesterPrivateKeys = addressIndices.map(index =>
+    bufferToHex(getPrivateKeyFromIndex(ATTESTER_PRIVATE_KEYS_START_INDEX + index)!),
+  );
+  const p2pConfig = await createP2PConfig(config, bootstrapNodeEnr, port, dataDirectory);
+  const nodeConfig: AztecNodeConfig = {
+    ...config,
+    ...p2pConfig,
+    validatorPrivateKeys: new SecretValue(attesterPrivateKeys),
+    publisherPrivateKeys: [new SecretValue(attesterPrivateKeys[0])],
   };
 
   return nodeConfig;

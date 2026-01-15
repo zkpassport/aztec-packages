@@ -6,9 +6,10 @@ import {
   DEFAULT_TEARDOWN_L2_GAS_LIMIT,
   NUMBER_OF_L1_L2_MESSAGES_PER_ROLLUP,
 } from '@aztec/constants';
-import { Schnorr } from '@aztec/foundation/crypto';
-import { Fr } from '@aztec/foundation/fields';
-import { type Logger, applyStringFormatting, createLogger } from '@aztec/foundation/log';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Schnorr } from '@aztec/foundation/crypto/schnorr';
+import { Fr } from '@aztec/foundation/curves/bn254';
+import { LogLevels, type Logger, applyStringFormatting, createLogger } from '@aztec/foundation/log';
 import { TestDateProvider } from '@aztec/foundation/timer';
 import type { KeyStore } from '@aztec/key-store';
 import {
@@ -19,10 +20,11 @@ import {
 } from '@aztec/pxe/server';
 import {
   ExecutionNoteCache,
+  ExecutionTaggingIndexCache,
   HashedValuesCache,
+  type IMiscOracle,
   Oracle,
   PrivateExecutionOracle,
-  UtilityContext,
   UtilityExecutionOracle,
   executePrivateFunction,
   generateSimulatedProvingResult,
@@ -37,25 +39,26 @@ import {
   witnessMapToFields,
 } from '@aztec/simulator/client';
 import {
+  CppPublicTxSimulator,
   GuardedMerkleTreeOperations,
   PublicContractsDB,
   PublicProcessor,
-  PublicTxSimulator,
 } from '@aztec/simulator/server';
 import { type ContractArtifact, FunctionSelector, FunctionType } from '@aztec/stdlib/abi';
 import { AuthWitness } from '@aztec/stdlib/auth-witness';
+import { PublicSimulatorConfig } from '@aztec/stdlib/avm';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import { Body, L2Block } from '@aztec/stdlib/block';
 import { type ContractInstanceWithAddress, computePartialAddress } from '@aztec/stdlib/contract';
 import { Gas, GasFees, GasSettings } from '@aztec/stdlib/gas';
-import { computeCalldataHash, siloNullifier } from '@aztec/stdlib/hash';
+import { computeCalldataHash, computeProtocolNullifier, siloNullifier } from '@aztec/stdlib/hash';
 import {
   PartialPrivateTailPublicInputsForPublic,
   PrivateKernelTailCircuitPublicInputs,
   PrivateToPublicAccumulatedData,
   PublicCallRequest,
 } from '@aztec/stdlib/kernel';
-import { ClientIvcProof } from '@aztec/stdlib/proofs';
+import { ChonkProof } from '@aztec/stdlib/proofs';
 import { makeAppendOnlyTreeSnapshot, makeGlobalVariables } from '@aztec/stdlib/testing';
 import { MerkleTreeId } from '@aztec/stdlib/trees';
 import {
@@ -82,11 +85,13 @@ import {
   insertTxEffectIntoWorldTrees,
   makeTXEBlockHeader,
 } from '../utils/block_creation.js';
-import { TXETypedOracle } from './txe_typed_oracle.js';
+import type { ITxeExecutionOracle } from './interfaces.js';
 
-export class TXEOracleTopLevelContext extends TXETypedOracle {
+export class TXEOracleTopLevelContext implements IMiscOracle, ITxeExecutionOracle {
+  isMisc = true as const;
+  isTxe = true as const;
+
   private logger: Logger;
-  private authwits: Map<string, AuthWitness> = new Map();
 
   constructor(
     private stateMachine: TXEStateMachine,
@@ -98,14 +103,13 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     private nextBlockTimestamp: bigint,
     private version: Fr,
     private chainId: Fr,
+    private authwits: Map<string, AuthWitness>,
   ) {
-    super('TXEOracleTopLevelContext');
-
     this.logger = createLogger('txe:top_level_context');
     this.logger.debug('Entering Top Level Context');
   }
 
-  override utilityAssertCompatibleOracleVersion(version: number): void {
+  utilityAssertCompatibleOracleVersion(version: number): void {
     if (version !== ORACLE_VERSION) {
       throw new Error(
         `Incompatible oracle version. TXE is using version '${ORACLE_VERSION}', but got a request for '${version}'.`,
@@ -115,46 +119,33 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
 
   // This is typically only invoked in private contexts, but it is convenient to also have it in top-level for testing
   // setup.
-  override utilityGetRandomField(): Fr {
+  utilityGetRandomField(): Fr {
     return Fr.random();
   }
 
   // We instruct users to debug contracts via this oracle, so it makes sense that they'd expect it to also work in tests
-  override utilityDebugLog(message: string, fields: Fr[]): void {
-    this.logger.verbose(`${applyStringFormatting(message, fields)}`, { module: `${this.logger.module}:debug_log` });
+  utilityDebugLog(level: number, message: string, fields: Fr[]): void {
+    if (!LogLevels[level]) {
+      throw new Error(`Invalid debug log level: ${level}`);
+    }
+    const levelName = LogLevels[level];
+
+    this.logger[levelName](`${applyStringFormatting(message, fields)}`, { module: `${this.logger.module}:debug_log` });
   }
 
-  // temporary - authwits require this, consider removing it once authwit support improves
-  override utilityGetUtilityContext(): Promise<UtilityContext> {
-    // The zero values for block number, timestamp and contract address are unfortunate sideeffect of use replacing
-    // the utilityGetContractAddress, utilityGetBlockNumber, utilityGetTimestamp, utilityGetChainId and
-    // utilityGetVersion oracles with utilityGetUtilityContext. Having those values populated does not make sense here
-    // as they have no meaning in top level context. OTOH version and chain id also don't really make sense here so
-    // think it's fine to learn to live with this tech debt for now.
-    return Promise.resolve(
-      UtilityContext.from({
-        blockNumber: 0,
-        timestamp: 0n,
-        contractAddress: AztecAddress.zero(),
-        version: this.version,
-        chainId: this.chainId,
-      }),
-    );
+  async txeGetNextBlockNumber(): Promise<BlockNumber> {
+    return BlockNumber((await this.getLastBlockNumber()) + 1);
   }
 
-  override async txeGetNextBlockNumber(): Promise<number> {
-    return (await this.getLastBlockNumber()) + 1;
-  }
-
-  override txeGetNextBlockTimestamp(): Promise<bigint> {
+  txeGetNextBlockTimestamp(): Promise<bigint> {
     return Promise.resolve(this.nextBlockTimestamp);
   }
 
-  override async txeGetLastBlockTimestamp() {
+  async txeGetLastBlockTimestamp() {
     return (await this.stateMachine.node.getBlockHeader('latest'))!.globalVariables.timestamp;
   }
 
-  override async txeGetLastTxEffects() {
+  async txeGetLastTxEffects() {
     const block = await this.stateMachine.archiver.getBlock('latest');
 
     if (block!.body.txEffects.length != 1) {
@@ -167,7 +158,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     return { txHash: txEffects.txHash, noteHashes: txEffects.noteHashes, nullifiers: txEffects.nullifiers };
   }
 
-  override async txeAdvanceBlocksBy(blocks: number) {
+  async txeAdvanceBlocksBy(blocks: number) {
     this.logger.debug(`time traveling ${blocks} blocks`);
 
     for (let i = 0; i < blocks; i++) {
@@ -175,12 +166,12 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     }
   }
 
-  override txeAdvanceTimestampBy(duration: UInt64) {
+  txeAdvanceTimestampBy(duration: UInt64) {
     this.logger.debug(`time traveling ${duration} seconds`);
     this.nextBlockTimestamp += duration;
   }
 
-  override async txeDeploy(artifact: ContractArtifact, instance: ContractInstanceWithAddress, secret: Fr) {
+  async txeDeploy(artifact: ContractArtifact, instance: ContractInstanceWithAddress, secret: Fr) {
     // Emit deployment nullifier
     await this.mineBlock({
       nullifiers: [
@@ -200,7 +191,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     }
   }
 
-  override async txeAddAccount(artifact: ContractArtifact, instance: ContractInstanceWithAddress, secret: Fr) {
+  async txeAddAccount(artifact: ContractArtifact, instance: ContractInstanceWithAddress, secret: Fr) {
     const partialAddress = await computePartialAddress(instance);
 
     this.logger.debug(`Deployed ${artifact.name} at ${instance.address}`);
@@ -215,7 +206,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     return completeAddress;
   }
 
-  override async txeCreateAccount(secret: Fr) {
+  async txeCreateAccount(secret: Fr) {
     // This is a footgun !
     const completeAddress = await this.keyStore.addAccount(secret, secret);
     await this.accountDataProvider.setAccount(completeAddress.address, completeAddress);
@@ -225,7 +216,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     return completeAddress;
   }
 
-  override async txeAddAuthWitness(address: AztecAddress, messageHash: Fr) {
+  async txeAddAuthWitness(address: AztecAddress, messageHash: Fr) {
     const account = await this.accountDataProvider.getAccount(address);
     const privateKey = await this.keyStore.getMasterSecretKey(account.publicKeys.masterIncomingViewingPublicKey);
 
@@ -268,7 +259,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     await this.stateMachine.handleL2Block(block);
   }
 
-  override async txePrivateCallNewFlow(
+  async txePrivateCallNewFlow(
     from: AztecAddress,
     targetContractAddress: AztecAddress = AztecAddress.zero(),
     functionSelector: FunctionSelector = FunctionSelector.empty(),
@@ -302,8 +293,9 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
 
     const blockHeader = await this.pxeOracleInterface.getAnchorBlockHeader();
 
-    const txRequestHash = getSingleTxBlockRequestHash(blockNumber);
-    const noteCache = new ExecutionNoteCache(txRequestHash);
+    const protocolNullifier = await computeProtocolNullifier(getSingleTxBlockRequestHash(blockNumber));
+    const noteCache = new ExecutionNoteCache(protocolNullifier);
+    const taggingIndexCache = new ExecutionTaggingIndexCache();
 
     const simulator = new WASMSimulator();
 
@@ -319,8 +311,8 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
       [],
       HashedValuesCache.create([new HashedValues(args, argsHash)]),
       noteCache,
+      taggingIndexCache,
       this.pxeOracleInterface,
-      simulator,
       0,
       1,
       undefined, // log
@@ -330,6 +322,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
        * contract would perform, including setting senderForTags.
        */
       from,
+      simulator,
     );
 
     // Note: This is a slight modification of simulator.run without any of the checks. Maybe we should modify simulator.run with a boolean value to skip checks.
@@ -343,8 +336,6 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
         targetContractAddress,
         functionSelector,
       );
-      const { usedTxRequestHashForNonces } = noteCache.finish();
-      const firstNullifierHint = usedTxRequestHashForNonces ? Fr.ZERO : noteCache.getAllNullifiers()[0];
 
       const publicCallRequests = collectNested([executionResult], r =>
         r.publicInputs.publicCallRequests
@@ -359,7 +350,10 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
         }),
       );
 
-      result = new PrivateExecutionResult(executionResult, firstNullifierHint, publicFunctionsCalldata);
+      // TXE's top level context does not track side effect counters, and as such, minRevertibleSideEffectCounter is always 0.
+      // This has the unfortunate consequence of always producing revertible nullifiers, which means we
+      // must set the firstNullifierHint to Fr.ZERO so the txRequestHash is always used as nonce generator
+      result = new PrivateExecutionResult(executionResult, Fr.ZERO, publicFunctionsCalldata);
     } catch (err) {
       throw createSimulationError(err instanceof Error ? err : new Error('Unknown error during private execution'));
     }
@@ -367,7 +361,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     // According to the protocol rules, the nonce generator for the note hashes
     // can either be the first nullifier in the tx or the hash of the initial tx request
     // if there are none.
-    const nonceGenerator = result.firstNullifier.equals(Fr.ZERO) ? txRequestHash : result.firstNullifier;
+    const nonceGenerator = result.firstNullifier.equals(Fr.ZERO) ? protocolNullifier : result.firstNullifier;
     const { publicInputs } = await generateSimulatedProvingResult(result, nonceGenerator, this.contractDataProvider);
 
     const globals = makeGlobalVariables();
@@ -381,17 +375,24 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
 
     const contractsDB = new PublicContractsDB(new TXEPublicContractDataSource(blockNumber, this.contractDataProvider));
     const guardedMerkleTrees = new GuardedMerkleTreeOperations(forkedWorldTrees);
+    const config = PublicSimulatorConfig.from({
+      skipFeeEnforcement: true,
+      collectDebugLogs: true,
+      collectHints: false,
+      collectStatistics: false,
+      collectCallMetadata: true,
+    });
     const processor = new PublicProcessor(
       globals,
       guardedMerkleTrees,
       contractsDB,
-      new PublicTxSimulator(guardedMerkleTrees, contractsDB, globals, true, true),
+      new CppPublicTxSimulator(guardedMerkleTrees, contractsDB, globals, config),
       new TestDateProvider(),
     );
 
     const tx = await Tx.create({
       data: publicInputs,
-      clientIvcProof: ClientIvcProof.empty(),
+      chonkProof: ChonkProof.empty(),
       contractClassLogFields: [],
       publicFunctionCalldata: result.publicFunctionCalldata,
     });
@@ -410,7 +411,10 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
       throw new Error(`Public execution has failed: ${failedTxs[0].error}`);
     } else if (!processedTx.revertCode.isOK()) {
       if (processedTx.revertReason) {
-        await enrichPublicSimulationError(processedTx.revertReason, this.contractDataProvider, this.logger);
+        try {
+          await enrichPublicSimulationError(processedTx.revertReason, this.contractDataProvider, this.logger);
+          // eslint-disable-next-line no-empty
+        } catch {}
         throw new Error(`Contract execution has reverted: ${processedTx.revertReason.getMessage()}`);
       } else {
         throw new Error('Contract execution has reverted');
@@ -452,7 +456,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     return executionResult.returnValues ?? [];
   }
 
-  override async txePublicCallNewFlow(
+  async txePublicCallNewFlow(
     from: AztecAddress,
     targetContractAddress: AztecAddress,
     calldata: Fr[],
@@ -488,7 +492,14 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
 
     const contractsDB = new PublicContractsDB(new TXEPublicContractDataSource(blockNumber, this.contractDataProvider));
     const guardedMerkleTrees = new GuardedMerkleTreeOperations(forkedWorldTrees);
-    const simulator = new PublicTxSimulator(guardedMerkleTrees, contractsDB, globals, true, true);
+    const config = PublicSimulatorConfig.from({
+      skipFeeEnforcement: true,
+      collectDebugLogs: true,
+      collectHints: false,
+      collectStatistics: false,
+      collectCallMetadata: true,
+    });
+    const simulator = new CppPublicTxSimulator(guardedMerkleTrees, contractsDB, globals, config);
     const processor = new PublicProcessor(globals, guardedMerkleTrees, contractsDB, simulator, new TestDateProvider());
 
     // We're simulating a scenario in which private execution immediately enqueues a public call and halts. The private
@@ -496,9 +507,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     // side-effect, which the AVM then expects to exist in order to use it as the nonce generator when siloing notes as
     // unique.
     const nonRevertibleAccumulatedData = PrivateToPublicAccumulatedData.empty();
-    if (!isStaticCall) {
-      nonRevertibleAccumulatedData.nullifiers[0] = getSingleTxBlockRequestHash(blockNumber);
-    }
+    nonRevertibleAccumulatedData.nullifiers[0] = getSingleTxBlockRequestHash(blockNumber);
 
     // The enqueued public call itself we make be revertible so that the public execution is itself revertible, as tests
     // may require producing reverts.
@@ -529,7 +538,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
 
     const tx = await Tx.create({
       data: txData,
-      clientIvcProof: ClientIvcProof.empty(),
+      chonkProof: ChonkProof.empty(),
       contractClassLogFields: [],
       publicFunctionCalldata: [calldataHashedValues],
     });
@@ -548,7 +557,10 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
       throw new Error(`Public execution has failed: ${failedTxs[0].error}`);
     } else if (!processedTx.revertCode.isOK()) {
       if (processedTx.revertReason) {
-        await enrichPublicSimulationError(processedTx.revertReason, this.contractDataProvider, this.logger);
+        try {
+          await enrichPublicSimulationError(processedTx.revertReason, this.contractDataProvider, this.logger);
+          // eslint-disable-next-line no-empty
+        } catch {}
         throw new Error(`Contract execution has reverted: ${processedTx.revertReason.getMessage()}`);
       } else {
         throw new Error('Contract execution has reverted');
@@ -593,7 +605,7 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     return returnValues ?? [];
   }
 
-  override async txeSimulateUtilityFunction(
+  async txeSimulateUtilityFunction(
     targetContractAddress: AztecAddress,
     functionSelector: FunctionSelector,
     args: Fr[],
@@ -643,12 +655,13 @@ export class TXEOracleTopLevelContext extends TXETypedOracle {
     }
   }
 
-  close(): bigint {
+  close(): [bigint, Map<string, AuthWitness>] {
     this.logger.debug('Exiting Top Level Context');
-    return this.nextBlockTimestamp;
+    return [this.nextBlockTimestamp, this.authwits];
   }
 
-  private async getLastBlockNumber(): Promise<number> {
-    return (await this.stateMachine.node.getBlockHeader('latest'))?.globalVariables.blockNumber ?? 0;
+  private async getLastBlockNumber(): Promise<BlockNumber> {
+    const header = await this.stateMachine.node.getBlockHeader('latest');
+    return header ? header.globalVariables.blockNumber : BlockNumber.ZERO;
   }
 }

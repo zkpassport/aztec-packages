@@ -1,28 +1,28 @@
 mod validate_against_call_request;
 mod validate_against_previous_kernel;
 mod validate_against_tx_request;
-mod validate_arrays;
 mod validate_as_first_call;
 mod restrict_side_effects;
 mod validate_call_requests;
 mod validate_contract_address;
-mod validate_counters;
-mod validate_log_lengths;
+mod validate_side_effect_counters;
 mod validate_private_call_requests;
 mod verify_proof;
+mod validate_claimed_lengths;
 
 use crate::components::private_call_data_validator::PrivateCallDataValidator;
 use dep::types::{
     abis::{
-        note_hash::ScopedNoteHash, private_call_request::PrivateCallRequest,
+        note_hash::NoteHash, private_call_request::PrivateCallRequest,
         private_kernel::private_call_data::PrivateCallData, transaction::tx_request::TxRequest,
     },
+    side_effect::{Counted, Scoped},
     tests::fixture_builder::FixtureBuilder,
 };
 
 pub struct PrivateCallDataValidatorBuilder {
     private_call: FixtureBuilder,
-    previous_note_hashes: BoundedVec<ScopedNoteHash, 4>,
+    previous_note_hashes: BoundedVec<Scoped<Counted<NoteHash>>, 4>,
 }
 
 impl PrivateCallDataValidatorBuilder {
@@ -56,13 +56,15 @@ impl PrivateCallDataValidatorBuilder {
     pub fn validate(self) {
         let private_call = self.private_call.to_private_call_data();
         PrivateCallDataValidator::new(private_call).validate_common(
-            self.private_call.protocol_contract_tree_root,
+            self.private_call.protocol_contracts,
         );
     }
 
-    pub fn validate_as_first_call(self) {
+    pub fn validate_as_first_call(self, claimed_revertible_counter: u32) {
         let private_call = self.private_call.to_private_call_data();
-        PrivateCallDataValidator::new(private_call).validate_as_first_call();
+        PrivateCallDataValidator::new(private_call).validate_as_first_call(
+            claimed_revertible_counter,
+        );
     }
 
     pub fn validate_against_tx_request(self, request: TxRequest) {

@@ -1,31 +1,31 @@
-import { retryUntil } from '@aztec/aztec.js';
 import { EthCheatCodes, RollupCheatCodes } from '@aztec/ethereum/test';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { retryUntil } from '@aztec/foundation/retry';
+import type { DateProvider } from '@aztec/foundation/timer';
 import type { SequencerClient } from '@aztec/sequencer-client';
-import type { AztecNode, PXE } from '@aztec/stdlib/interfaces/client';
-
-import { AztecCheatCodes } from './aztec_cheat_codes.js';
+import type { AztecNode } from '@aztec/stdlib/interfaces/client';
 
 /**
  * A class that provides utility functions for interacting with the chain.
+ * @deprecated There used to be 3 kinds of cheat codes: eth, rollup and aztec. We have nuked the Aztec ones because
+ * they became unused (we now have better testing tools). If you are introducing a new functionality to the cheat
+ * codes, please consider whether it makes sense to just introduce new utils in your tests instead.
  */
 export class CheatCodes {
   constructor(
     /** Cheat codes for L1.*/
     public eth: EthCheatCodes,
-    /** Cheat codes for Aztec L2. */
-    public aztec: AztecCheatCodes,
     /** Cheat codes for the Aztec Rollup contract on L1. */
     public rollup: RollupCheatCodes,
   ) {}
 
-  static async create(rpcUrls: string[], pxe: PXE, node: AztecNode): Promise<CheatCodes> {
-    const ethCheatCodes = new EthCheatCodes(rpcUrls);
-    const aztecCheatCodes = new AztecCheatCodes(pxe, node);
+  static async create(rpcUrls: string[], node: AztecNode, dateProvider: DateProvider): Promise<CheatCodes> {
+    const ethCheatCodes = new EthCheatCodes(rpcUrls, dateProvider);
     const rollupCheatCodes = new RollupCheatCodes(
       ethCheatCodes,
-      await pxe.getNodeInfo().then(n => n.l1ContractAddresses),
+      await node.getNodeInfo().then(n => n.l1ContractAddresses),
     );
-    return new CheatCodes(ethCheatCodes, aztecCheatCodes, rollupCheatCodes);
+    return new CheatCodes(ethCheatCodes, rollupCheatCodes);
   }
 
   /**
@@ -38,7 +38,7 @@ export class CheatCodes {
    * @param targetTimestamp - The target timestamp to warp to (in seconds)
    */
   async warpL2TimeAtLeastTo(sequencerClient: SequencerClient, node: AztecNode, targetTimestamp: bigint | number) {
-    const currentL2BlockNumber = await node.getBlockNumber();
+    const currentL2BlockNumber: BlockNumber = await node.getBlockNumber();
 
     // We warp the L1 timestamp
     await this.eth.warp(targetTimestamp, { resetBlockInterval: true });
@@ -50,7 +50,7 @@ export class CheatCodes {
 
     await retryUntil(
       async () => {
-        const newL2BlockNumber = await node.getBlockNumber();
+        const newL2BlockNumber: BlockNumber = await node.getBlockNumber();
         return newL2BlockNumber > currentL2BlockNumber;
       },
       'new block after warping L2 time',

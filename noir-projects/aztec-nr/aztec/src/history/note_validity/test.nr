@@ -11,7 +11,7 @@ unconstrained fn fails_on_blocks_before_note_creation() {
         PrivateContextOptions::new().at_anchor_block_number(test::NOTE_CREATED_AT - 1),
         |context| {
             let header = context.anchor_block_header;
-            header.prove_note_validity(retrieved_note, test::NOTE_STORAGE_SLOT, context);
+            header.prove_note_validity(retrieved_note, context);
         },
     );
 }
@@ -23,10 +23,8 @@ unconstrained fn succeeds_on_blocks_after_creation_and_before_nullification() {
     env.private_context_opts(
         PrivateContextOptions::new().at_anchor_block_number(test::NOTE_CREATED_AT),
         |context| {
-            // docs:start:prove_note_validity
             let header = context.anchor_block_header;
-            header.prove_note_validity(retrieved_note, test::NOTE_STORAGE_SLOT, context);
-            // docs:end:prove_note_validity
+            header.prove_note_validity(retrieved_note, context);
         },
     );
 }
@@ -39,7 +37,7 @@ unconstrained fn fails_on_blocks_after_note_nullification() {
         PrivateContextOptions::new().at_anchor_block_number(test::NOTE_NULLIFIED_AT),
         |context| {
             let header = context.anchor_block_header;
-            header.prove_note_validity(retrieved_note, test::NOTE_STORAGE_SLOT, context);
+            header.prove_note_validity(retrieved_note, context);
         },
     );
 }

@@ -1,7 +1,5 @@
 import {
   AVM_MAX_PROCESSABLE_L2_GAS,
-  CONTRACT_CLASS_PUBLISHED_MAGIC_VALUE,
-  CONTRACT_CLASS_REGISTRY_CONTRACT_ADDRESS,
   GAS_ESTIMATION_DA_GAS_LIMIT,
   GAS_ESTIMATION_L2_GAS_LIMIT,
   GAS_ESTIMATION_TEARDOWN_DA_GAS_LIMIT,
@@ -9,34 +7,25 @@ import {
   NULLIFIER_SUBTREE_HEIGHT,
   PUBLIC_DATA_TREE_HEIGHT,
 } from '@aztec/constants';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import type { AztecKVStore } from '@aztec/kv-store';
 import { openTmpStore } from '@aztec/kv-store/lmdb';
 import { type AppendOnlyTree, Poseidon, StandardTree, newTree } from '@aztec/merkle-tree';
 import { ProtocolContractAddress } from '@aztec/protocol-contracts';
 import { computeFeePayerBalanceStorageSlot } from '@aztec/protocol-contracts/fee-juice';
-import { bufferAsFields } from '@aztec/stdlib/abi';
-import { PublicDataWrite, RevertCode } from '@aztec/stdlib/avm';
+import { PublicDataWrite, PublicSimulatorConfig, PublicTxResult, RevertCode } from '@aztec/stdlib/avm';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import type { ContractDataSource } from '@aztec/stdlib/contract';
 import { SimulationError } from '@aztec/stdlib/errors';
 import { Gas, GasFees, GasSettings } from '@aztec/stdlib/gas';
 import { computePublicDataTreeLeafSlot } from '@aztec/stdlib/hash';
 import type { MerkleTreeWriteOperations } from '@aztec/stdlib/interfaces/server';
-import { LogHash, countAccumulatedItems } from '@aztec/stdlib/kernel';
-import { ContractClassLogFields } from '@aztec/stdlib/logs';
+import { countAccumulatedItems } from '@aztec/stdlib/kernel';
 import { L2ToL1Message, ScopedL2ToL1Message } from '@aztec/stdlib/messaging';
-import { fr, makeContractClassPublic, mockTx } from '@aztec/stdlib/testing';
+import { fr, mockTx } from '@aztec/stdlib/testing';
 import { AppendOnlyTreeSnapshot, MerkleTreeId, PublicDataTreeLeaf } from '@aztec/stdlib/trees';
-import {
-  BlockHeader,
-  GlobalVariables,
-  PartialStateReference,
-  StateReference,
-  Tx,
-  TxExecutionPhase,
-} from '@aztec/stdlib/tx';
+import { BlockHeader, GlobalVariables, PartialStateReference, StateReference } from '@aztec/stdlib/tx';
 import { NativeWorldStateService } from '@aztec/world-state';
 
 import { jest } from '@jest/globals';
@@ -45,8 +34,14 @@ import { mock } from 'jest-mock-extended';
 import { AvmFinalizedCallResult } from '../avm/avm_contract_call_result.js';
 import type { InstructionSet } from '../avm/serialization/bytecode_serialization.js';
 import { PublicContractsDB } from '../public_db_sources.js';
+import { CheckedPublicExecutionError } from '../public_errors.js';
+import {
+  L2ToL1MessageLimitReachedError,
+  NoteHashLimitReachedError,
+  NullifierLimitReachedError,
+} from '../side_effect_errors.js';
 import { PublicPersistableStateManager } from '../state_manager/state_manager.js';
-import { type PublicTxResult, PublicTxSimulator } from './public_tx_simulator.js';
+import { PublicTxSimulator } from './public_tx_simulator.js';
 
 describe('public_tx_simulator', () => {
   // Nullifier must be >=128 since tree starts with 128 entries pre-filled
@@ -70,6 +65,7 @@ describe('public_tx_simulator', () => {
 
   let publicDataTree: AppendOnlyTree<Fr>;
 
+  let worldStateService: NativeWorldStateService;
   let treeStore: AztecKVStore;
   let simulator: PublicTxSimulator;
   let simulateInternal: jest.SpiedFunction<
@@ -182,40 +178,8 @@ describe('public_tx_simulator', () => {
     }
   };
 
-  const mockContractClassForTx = async (tx: Tx, revertible = true) => {
-    const publicContractClass = await makeContractClassPublic(42);
-    const contractClassLogFields = [
-      new Fr(CONTRACT_CLASS_PUBLISHED_MAGIC_VALUE),
-      publicContractClass.id,
-      new Fr(publicContractClass.version),
-      publicContractClass.artifactHash,
-      publicContractClass.privateFunctionsRoot,
-      ...bufferAsFields(
-        publicContractClass.packedBytecode,
-        Math.ceil(publicContractClass.packedBytecode.length / 31) + 1,
-      ),
-    ];
-    const contractAddress = new AztecAddress(new Fr(CONTRACT_CLASS_REGISTRY_CONTRACT_ADDRESS));
-    const emittedLength = contractClassLogFields.length;
-    const logFields = ContractClassLogFields.fromEmittedFields(contractClassLogFields);
-
-    tx.contractClassLogFields.push(logFields);
-
-    const contractClassLogHash = LogHash.from({
-      value: await logFields.hash(),
-      length: emittedLength,
-    }).scope(contractAddress);
-    if (revertible) {
-      tx.data.forPublic!.revertibleAccumulatedData.contractClassLogsHashes[0] = contractClassLogHash;
-    } else {
-      tx.data.forPublic!.nonRevertibleAccumulatedData.contractClassLogsHashes[0] = contractClassLogHash;
-    }
-
-    return publicContractClass.id;
-  };
-
   const checkNullifierRoot = async (txResult: PublicTxResult) => {
-    const siloedNullifiers = txResult.avmProvingRequest.inputs.publicInputs.accumulatedData.nullifiers;
+    const siloedNullifiers = txResult.publicInputs!.accumulatedData.nullifiers;
     // Loop helpful for debugging so you can see root progression
     //for (const nullifier of siloedNullifiers) {
     //  await db.batchInsert(
@@ -228,12 +192,12 @@ describe('public_tx_simulator', () => {
     // This is how the public processor inserts nullifiers.
     await merkleTreesCopy.batchInsert(
       MerkleTreeId.NULLIFIER_TREE,
-      siloedNullifiers.map(n => n.toBuffer()),
+      siloedNullifiers.map((n: Fr) => n.toBuffer()),
       NULLIFIER_SUBTREE_HEIGHT,
     );
     const expectedRoot = new Fr((await merkleTrees.getTreeInfo(MerkleTreeId.NULLIFIER_TREE)).root);
     const gotRoot = new Fr((await merkleTrees.getTreeInfo(MerkleTreeId.NULLIFIER_TREE)).root);
-    const gotRootPublicInputs = txResult.avmProvingRequest.inputs.publicInputs.endTreeSnapshots.nullifierTree.root;
+    const gotRootPublicInputs = txResult.publicInputs!.endTreeSnapshots.nullifierTree.root;
     expect(gotRoot).toEqual(expectedRoot);
     expect(gotRootPublicInputs).toEqual(expectedRoot);
   };
@@ -253,18 +217,20 @@ describe('public_tx_simulator', () => {
   };
 
   const createSimulator = ({
-    doMerkleOperations = true,
     skipFeeEnforcement = false,
+    proverId,
   }: {
-    doMerkleOperations?: boolean;
     skipFeeEnforcement?: boolean;
+    proverId?: Fr;
   }) => {
     const simulator = new PublicTxSimulator(
       merkleTrees,
       contractsDB,
       GlobalVariables.from({ ...GlobalVariables.empty(), gasFees }),
-      doMerkleOperations,
-      skipFeeEnforcement,
+      PublicSimulatorConfig.from({
+        skipFeeEnforcement,
+        proverId,
+      }),
     );
 
     // Mock the internal private function. Borrowed from https://stackoverflow.com/a/71033167
@@ -300,8 +266,9 @@ describe('public_tx_simulator', () => {
     privateGasUsed = new Gas(13, 17);
     enqueuedCallGasUsed = new Gas(12, 34);
 
-    merkleTrees = await (await NativeWorldStateService.tmp()).fork();
-    merkleTreesCopy = await (await NativeWorldStateService.tmp()).fork();
+    worldStateService = await NativeWorldStateService.tmp();
+    merkleTrees = await worldStateService.fork();
+    merkleTreesCopy = await worldStateService.fork();
     contractsDB = new PublicContractsDB(mock<ContractDataSource>());
 
     treeStore = openTmpStore();
@@ -327,10 +294,11 @@ describe('public_tx_simulator', () => {
     // Clone the whole state because somewhere down the line (AbstractPhaseManager) the public data root is modified in the referenced header directly :/
     header.state = StateReference.fromBuffer(stateReference.toBuffer());
 
-    simulator = createSimulator({});
+    simulator = createSimulator({ skipFeeEnforcement: true });
   }, 30_000);
 
   afterEach(async () => {
+    await worldStateService.close();
     await treeStore.delete();
   });
 
@@ -341,11 +309,8 @@ describe('public_tx_simulator', () => {
 
     const txResult = await simulator.simulate(tx);
 
-    expect(txResult.processedPhases).toEqual([
-      expect.objectContaining({ phase: TxExecutionPhase.SETUP, revertReason: undefined }),
-    ]);
     expect(txResult.revertCode).toEqual(RevertCode.OK);
-    expect(txResult.revertReason).toBe(undefined);
+    expect(txResult.findRevertReason()).toBeUndefined();
 
     const expectedPublicGasUsed = enqueuedCallGasUsed.mul(2); // For 2 setup calls.
     const expectedTotalGas = privateGasUsed.add(expectedPublicGasUsed);
@@ -360,15 +325,15 @@ describe('public_tx_simulator', () => {
     const availableGasForSecondSetup = availableGasForFirstSetup.sub(enqueuedCallGasUsed);
     expectAvailableGasForCalls([availableGasForFirstSetup, availableGasForSecondSetup]);
 
-    const output = txResult.avmProvingRequest!.inputs.publicInputs;
+    const output = txResult.publicInputs;
 
     const expectedGasUsedForFee = expectedTotalGas;
     const expectedTxFee = expectedTotalGas.computeFee(gasFees);
-    expect(output.endGasUsed).toEqual(expectedGasUsedForFee);
-    expect(output.transactionFee).toEqual(expectedTxFee);
+    expect(output!.endGasUsed).toEqual(expectedGasUsedForFee);
+    expect(output!.transactionFee).toEqual(expectedTxFee);
 
     // We keep all data.
-    expect(countAccumulatedItems(output.accumulatedData.nullifiers)).toBe(3);
+    expect(countAccumulatedItems(output!.accumulatedData.nullifiers)).toBe(3);
   });
 
   it('runs a tx with enqueued public calls in app logic phase only', async () => {
@@ -378,11 +343,8 @@ describe('public_tx_simulator', () => {
 
     const txResult = await simulator.simulate(tx);
 
-    expect(txResult.processedPhases).toEqual([
-      expect.objectContaining({ phase: TxExecutionPhase.APP_LOGIC, revertReason: undefined }),
-    ]);
     expect(txResult.revertCode).toEqual(RevertCode.OK);
-    expect(txResult.revertReason).toBe(undefined);
+    expect(txResult.findRevertReason()).toBeUndefined();
 
     const expectedPublicGasUsed = enqueuedCallGasUsed.mul(2); // For 2 app logic calls.
     const expectedTotalGas = privateGasUsed.add(expectedPublicGasUsed);
@@ -397,15 +359,15 @@ describe('public_tx_simulator', () => {
     const availableGasForSecondAppLogic = availableGasForFirstAppLogic.sub(enqueuedCallGasUsed);
     expectAvailableGasForCalls([availableGasForFirstAppLogic, availableGasForSecondAppLogic]);
 
-    const output = txResult.avmProvingRequest!.inputs.publicInputs;
+    const output = txResult.publicInputs;
 
     const expectedGasUsedForFee = expectedTotalGas;
     const expectedTxFee = expectedTotalGas.computeFee(gasFees);
-    expect(output.endGasUsed).toEqual(expectedGasUsedForFee);
-    expect(output.transactionFee).toEqual(expectedTxFee);
+    expect(output!.endGasUsed).toEqual(expectedGasUsedForFee);
+    expect(output!.transactionFee).toEqual(expectedTxFee);
 
     // We keep all data.
-    expect(countAccumulatedItems(output.accumulatedData.nullifiers)).toBe(3);
+    expect(countAccumulatedItems(output!.accumulatedData.nullifiers)).toBe(3);
   });
 
   it('runs a tx with enqueued public calls in teardown phase only', async () => {
@@ -415,11 +377,8 @@ describe('public_tx_simulator', () => {
 
     const txResult = await simulator.simulate(tx);
 
-    expect(txResult.processedPhases).toEqual([
-      expect.objectContaining({ phase: TxExecutionPhase.TEARDOWN, revertReason: undefined }),
-    ]);
     expect(txResult.revertCode).toEqual(RevertCode.OK);
-    expect(txResult.revertReason).toBe(undefined);
+    expect(txResult.findRevertReason()).toBeUndefined();
 
     const expectedTeardownGasUsed = enqueuedCallGasUsed;
     const expectedTotalGas = privateGasUsed.add(expectedTeardownGasUsed);
@@ -433,15 +392,15 @@ describe('public_tx_simulator', () => {
 
     expectAvailableGasForCalls([teardownGasLimits]);
 
-    const output = txResult.avmProvingRequest!.inputs.publicInputs;
+    const output = txResult.publicInputs;
 
     const expectedGasUsedForFee = expectedTotalGas.sub(expectedTeardownGasUsed).add(teardownGasLimits);
     const expectedTxFee = expectedGasUsedForFee.computeFee(gasFees);
-    expect(output.endGasUsed).toEqual(expectedGasUsedForFee);
-    expect(output.transactionFee).toEqual(expectedTxFee);
+    expect(output!.endGasUsed).toEqual(expectedGasUsedForFee);
+    expect(output!.transactionFee).toEqual(expectedTxFee);
 
     // We keep all data.
-    expect(countAccumulatedItems(output.accumulatedData.nullifiers)).toBe(3);
+    expect(countAccumulatedItems(output!.accumulatedData.nullifiers)).toBe(3);
   });
 
   it('runs a tx with all phases', async () => {
@@ -453,13 +412,8 @@ describe('public_tx_simulator', () => {
 
     const txResult = await simulator.simulate(tx);
 
-    expect(txResult.processedPhases).toEqual([
-      expect.objectContaining({ phase: TxExecutionPhase.SETUP, revertReason: undefined }),
-      expect.objectContaining({ phase: TxExecutionPhase.APP_LOGIC, revertReason: undefined }),
-      expect.objectContaining({ phase: TxExecutionPhase.TEARDOWN, revertReason: undefined }),
-    ]);
     expect(txResult.revertCode).toEqual(RevertCode.OK);
-    expect(txResult.revertReason).toBe(undefined);
+    expect(txResult.findRevertReason()).toBeUndefined();
 
     const expectedPublicGasUsed = enqueuedCallGasUsed.mul(3); // 2 for setup and 1 for app logic.
     const expectedTeardownGasUsed = enqueuedCallGasUsed;
@@ -484,15 +438,15 @@ describe('public_tx_simulator', () => {
       teardownGasLimits,
     ]);
 
-    const output = txResult.avmProvingRequest!.inputs.publicInputs;
+    const output = txResult.publicInputs;
 
     const expectedGasUsedForFee = expectedTotalGas.sub(expectedTeardownGasUsed).add(teardownGasLimits);
     const expectedTxFee = expectedGasUsedForFee.computeFee(gasFees);
-    expect(output.endGasUsed).toEqual(expectedGasUsedForFee);
-    expect(output.transactionFee).toEqual(expectedTxFee);
+    expect(output!.endGasUsed).toEqual(expectedGasUsedForFee);
+    expect(output!.transactionFee).toEqual(expectedTxFee);
 
     // We keep all data.
-    expect(countAccumulatedItems(output.accumulatedData.nullifiers)).toBe(3);
+    expect(countAccumulatedItems(output!.accumulatedData.nullifiers)).toBe(3);
   });
 
   it('deduplicates public data writes', async function () {
@@ -536,11 +490,11 @@ describe('public_tx_simulator', () => {
 
     expect(simulateInternal).toHaveBeenCalledTimes(3);
 
-    const output = txResult.avmProvingRequest!.inputs.publicInputs;
+    const output = txResult.publicInputs;
 
     const numPublicDataWrites = 3;
-    expect(countAccumulatedItems(output.accumulatedData.publicDataWrites)).toBe(numPublicDataWrites);
-    expect(output.accumulatedData.publicDataWrites.slice(0, numPublicDataWrites)).toEqual([
+    expect(countAccumulatedItems(output!.accumulatedData.publicDataWrites)).toBe(numPublicDataWrites);
+    expect(output!.accumulatedData.publicDataWrites.slice(0, numPublicDataWrites)).toEqual([
       new PublicDataWrite(await computePublicDataTreeLeafSlot(contractAddress, contractSlotA), fr(0x103)), // 0x101 replaced with 0x103
       new PublicDataWrite(await computePublicDataTreeLeafSlot(contractAddress, contractSlotB), fr(0x151)),
       new PublicDataWrite(await computePublicDataTreeLeafSlot(contractAddress, contractSlotC), fr(0x152)), // 0x201 replaced with 0x102 and then 0x152
@@ -636,14 +590,8 @@ describe('public_tx_simulator', () => {
 
     const txResult = await simulator.simulate(tx);
 
-    expect(txResult.processedPhases).toEqual([
-      expect.objectContaining({ phase: TxExecutionPhase.SETUP, revertReason: undefined }),
-      expect.objectContaining({ phase: TxExecutionPhase.APP_LOGIC, revertReason: undefined }),
-      expect.objectContaining({ phase: TxExecutionPhase.TEARDOWN, revertReason: undefined }),
-    ]);
-
     expect(txResult.revertCode).toEqual(RevertCode.OK);
-    expect(txResult.revertReason).toBeUndefined();
+    expect(txResult.findRevertReason()).toBeUndefined();
 
     const expectedSetupGas = enqueuedCallGasUsed;
     const expectedAppLogicGas = enqueuedCallGasUsed.mul(2);
@@ -667,17 +615,17 @@ describe('public_tx_simulator', () => {
       teardownGasLimits,
     ]);
 
-    const output = txResult.avmProvingRequest!.inputs.publicInputs;
+    const output = txResult.publicInputs;
 
     const expectedGasUsedForFee = expectedTotalGas.sub(expectedTeardownGasUsed).add(teardownGasLimits);
     const expectedTxFee = expectedGasUsedForFee.computeFee(gasFees);
-    expect(output.endGasUsed).toEqual(expectedGasUsedForFee);
-    expect(output.transactionFee).toEqual(expectedTxFee);
+    expect(output!.endGasUsed).toEqual(expectedGasUsedForFee);
+    expect(output!.transactionFee).toEqual(expectedTxFee);
 
     // We keep all side effects
-    expect(countAccumulatedItems(output.accumulatedData.nullifiers)).toBe(8);
-    expect(countAccumulatedItems(output.accumulatedData.noteHashes)).toBe(8);
-    expect(countAccumulatedItems(output.accumulatedData.l2ToL1Msgs)).toBe(8);
+    expect(countAccumulatedItems(output!.accumulatedData.nullifiers)).toBe(8);
+    expect(countAccumulatedItems(output!.accumulatedData.noteHashes)).toBe(8);
+    expect(countAccumulatedItems(output!.accumulatedData.l2ToL1Msgs)).toBe(8);
 
     // Verify that the actual side effects are as expected and in the right order.
     const includedSiloedNullifiers = [
@@ -688,14 +636,14 @@ describe('public_tx_simulator', () => {
       // teardown
       siloedNullifiers[4],
     ];
-    expect(output.accumulatedData.nullifiers.filter(n => !n.isZero())).toEqual(includedSiloedNullifiers);
+    expect(output!.accumulatedData.nullifiers.filter(n => !n.isZero())).toEqual(includedSiloedNullifiers);
 
     const includedNoteHashes = [
       ...tx.data.forPublic!.nonRevertibleAccumulatedData.noteHashes.filter(n => !n.isZero()),
       noteHashes[0],
       // Cannot use actual revertible note hashes because the AVM will silo them and make them unique.
       // So we'd have to do so here to actually compare. For now, we just check that the correct number
-      // of nonzero revertible notes end up in the output.
+      // of nonzero revertible notes end up in the output!.
       //...tx.data.forPublic!.revertibleAccumulatedData.noteHashes.filter(n => !n.isZero()),
       ...Array.from(
         { length: tx.data.forPublic!.revertibleAccumulatedData.noteHashes.filter(n => !n.isZero()).length },
@@ -705,7 +653,7 @@ describe('public_tx_simulator', () => {
       // Teardown
       noteHashes[4],
     ];
-    expect(output.accumulatedData.noteHashes.filter(n => !n.isZero())).toEqual(includedNoteHashes);
+    expect(output!.accumulatedData.noteHashes.filter(n => !n.isZero())).toEqual(includedNoteHashes);
 
     const includedL2ToL1Messages = [
       ...tx.data.forPublic!.nonRevertibleAccumulatedData.l2ToL1Msgs.filter(m => !m.isEmpty()),
@@ -715,7 +663,7 @@ describe('public_tx_simulator', () => {
       // Teardown
       l2ToL1Messages[4],
     ];
-    expect(output.accumulatedData.l2ToL1Msgs.filter(m => !m.isEmpty())).toEqual(includedL2ToL1Messages);
+    expect(output!.accumulatedData.l2ToL1Msgs.filter(m => !m.isEmpty())).toEqual(includedL2ToL1Messages);
 
     await checkNullifierRoot(txResult);
   });
@@ -772,14 +720,9 @@ describe('public_tx_simulator', () => {
 
     const txResult = await simulator.simulate(tx);
 
-    expect(txResult.processedPhases).toEqual([
-      expect.objectContaining({ phase: TxExecutionPhase.SETUP, revertReason: undefined }),
-      expect.objectContaining({ phase: TxExecutionPhase.APP_LOGIC, revertReason: appLogicFailure }),
-      expect.objectContaining({ phase: TxExecutionPhase.TEARDOWN, revertReason: undefined }),
-    ]);
     expect(txResult.revertCode).toEqual(RevertCode.APP_LOGIC_REVERTED);
     // tx reports app logic failure
-    expect(txResult.revertReason).toBe(appLogicFailure);
+    expect(txResult.findRevertReason()).toEqual(appLogicFailure);
 
     const expectedSetupGas = enqueuedCallGasUsed;
     const expectedAppLogicGas = enqueuedCallGasUsed.mul(2);
@@ -803,17 +746,17 @@ describe('public_tx_simulator', () => {
       teardownGasLimits,
     ]);
 
-    const output = txResult.avmProvingRequest!.inputs.publicInputs;
+    const output = txResult.publicInputs;
 
     const expectedGasUsedForFee = expectedTotalGas.sub(expectedTeardownGasUsed).add(teardownGasLimits);
     const expectedTxFee = expectedGasUsedForFee.computeFee(gasFees);
-    expect(output.endGasUsed).toEqual(expectedGasUsedForFee);
-    expect(output.transactionFee).toEqual(expectedTxFee);
+    expect(output!.endGasUsed).toEqual(expectedGasUsedForFee);
+    expect(output!.transactionFee).toEqual(expectedTxFee);
 
     // We keep only the non-revertible data and setup
-    expect(countAccumulatedItems(output.accumulatedData.nullifiers)).toBe(4);
-    expect(countAccumulatedItems(output.accumulatedData.noteHashes)).toBe(4);
-    expect(countAccumulatedItems(output.accumulatedData.l2ToL1Msgs)).toBe(4);
+    expect(countAccumulatedItems(output!.accumulatedData.nullifiers)).toBe(4);
+    expect(countAccumulatedItems(output!.accumulatedData.noteHashes)).toBe(4);
+    expect(countAccumulatedItems(output!.accumulatedData.l2ToL1Msgs)).toBe(4);
 
     // Verify that the actual side effects are as expected and in the right order.
     const includedSiloedNullifiers = [
@@ -825,7 +768,7 @@ describe('public_tx_simulator', () => {
       // teardown
       siloedNullifiers[4],
     ];
-    expect(output.accumulatedData.nullifiers.filter(n => !n.isZero())).toEqual(includedSiloedNullifiers);
+    expect(output!.accumulatedData.nullifiers.filter(n => !n.isZero())).toEqual(includedSiloedNullifiers);
 
     const includedNoteHashes = [
       ...tx.data.forPublic!.nonRevertibleAccumulatedData.noteHashes.filter(n => !n.isZero()),
@@ -833,7 +776,7 @@ describe('public_tx_simulator', () => {
       // Teardown
       noteHashes[4],
     ];
-    expect(output.accumulatedData.noteHashes.filter(n => !n.isZero())).toEqual(includedNoteHashes);
+    expect(output!.accumulatedData.noteHashes.filter(n => !n.isZero())).toEqual(includedNoteHashes);
 
     const includedL2ToL1Messages = [
       ...tx.data.forPublic!.nonRevertibleAccumulatedData.l2ToL1Msgs.filter(m => !m.isEmpty()),
@@ -841,7 +784,7 @@ describe('public_tx_simulator', () => {
       // Teardown
       l2ToL1Messages[4],
     ];
-    expect(output.accumulatedData.l2ToL1Msgs.filter(m => !m.isEmpty())).toEqual(includedL2ToL1Messages);
+    expect(output!.accumulatedData.l2ToL1Msgs.filter(m => !m.isEmpty())).toEqual(includedL2ToL1Messages);
 
     await checkNullifierRoot(txResult);
   });
@@ -898,13 +841,8 @@ describe('public_tx_simulator', () => {
 
     const txResult = await simulator.simulate(tx);
 
-    expect(txResult.processedPhases).toEqual([
-      expect.objectContaining({ phase: TxExecutionPhase.SETUP, revertReason: undefined }),
-      expect.objectContaining({ phase: TxExecutionPhase.APP_LOGIC, revertReason: undefined }),
-      expect.objectContaining({ phase: TxExecutionPhase.TEARDOWN, revertReason: teardownFailure }),
-    ]);
     expect(txResult.revertCode).toEqual(RevertCode.TEARDOWN_REVERTED);
-    expect(txResult.revertReason).toBe(teardownFailure);
+    expect(txResult.findRevertReason()).toEqual(teardownFailure);
 
     const expectedSetupGas = enqueuedCallGasUsed;
     const expectedAppLogicGas = enqueuedCallGasUsed.mul(2);
@@ -928,18 +866,18 @@ describe('public_tx_simulator', () => {
       teardownGasLimits,
     ]);
 
-    const output = txResult.avmProvingRequest!.inputs.publicInputs;
+    const output = txResult.publicInputs;
 
     // Should still charge the full teardownGasLimits for fee even though teardown reverted.
     const expectedGasUsedForFee = expectedTotalGas.sub(expectedTeardownGasUsed).add(teardownGasLimits);
     const expectedTxFee = expectedGasUsedForFee.computeFee(gasFees);
-    expect(output.endGasUsed).toEqual(expectedGasUsedForFee);
-    expect(output.transactionFee).toEqual(expectedTxFee);
+    expect(output!.endGasUsed).toEqual(expectedGasUsedForFee);
+    expect(output!.transactionFee).toEqual(expectedTxFee);
 
     // We keep only the non-revertible data and setup
-    expect(countAccumulatedItems(output.accumulatedData.nullifiers)).toBe(3);
-    expect(countAccumulatedItems(output.accumulatedData.noteHashes)).toBe(3);
-    expect(countAccumulatedItems(output.accumulatedData.l2ToL1Msgs)).toBe(3);
+    expect(countAccumulatedItems(output!.accumulatedData.nullifiers)).toBe(3);
+    expect(countAccumulatedItems(output!.accumulatedData.noteHashes)).toBe(3);
+    expect(countAccumulatedItems(output!.accumulatedData.l2ToL1Msgs)).toBe(3);
 
     // Verify that the actual side effects are as expected and in the right order.
     const includedSiloedNullifiers = [
@@ -949,19 +887,19 @@ describe('public_tx_simulator', () => {
       //...tx.data.forPublic!.revertibleAccumulatedData.nullifiers.filter(n => !n.isZero()),
       //..siloedNullifiers[1...4]
     ];
-    expect(output.accumulatedData.nullifiers.filter(n => !n.isZero())).toEqual(includedSiloedNullifiers);
+    expect(output!.accumulatedData.nullifiers.filter(n => !n.isZero())).toEqual(includedSiloedNullifiers);
 
     const includedNoteHashes = [
       ...tx.data.forPublic!.nonRevertibleAccumulatedData.noteHashes.filter(n => !n.isZero()),
       noteHashes[0],
     ];
-    expect(output.accumulatedData.noteHashes.filter(n => !n.isZero())).toEqual(includedNoteHashes);
+    expect(output!.accumulatedData.noteHashes.filter(n => !n.isZero())).toEqual(includedNoteHashes);
 
     const includedL2ToL1Messages = [
       ...tx.data.forPublic!.nonRevertibleAccumulatedData.l2ToL1Msgs.filter(m => !m.isEmpty()),
       l2ToL1Messages[0],
     ];
-    expect(output.accumulatedData.l2ToL1Msgs.filter(m => !m.isEmpty())).toEqual(includedL2ToL1Messages);
+    expect(output!.accumulatedData.l2ToL1Msgs.filter(m => !m.isEmpty())).toEqual(includedL2ToL1Messages);
     await checkNullifierRoot(txResult);
   });
 
@@ -1012,14 +950,9 @@ describe('public_tx_simulator', () => {
 
     const txResult = await simulator.simulate(tx);
 
-    expect(txResult.processedPhases).toEqual([
-      expect.objectContaining({ phase: TxExecutionPhase.SETUP, revertReason: undefined }),
-      expect.objectContaining({ phase: TxExecutionPhase.APP_LOGIC, revertReason: appLogicFailure }),
-      expect.objectContaining({ phase: TxExecutionPhase.TEARDOWN, revertReason: teardownFailure }),
-    ]);
     expect(txResult.revertCode).toEqual(RevertCode.BOTH_REVERTED);
     // tx reports app logic failure
-    expect(txResult.revertReason).toBe(appLogicFailure);
+    expect(txResult.findRevertReason()).toEqual(appLogicFailure);
 
     const expectedSetupGas = enqueuedCallGasUsed;
     const expectedAppLogicGas = enqueuedCallGasUsed.mul(2);
@@ -1043,18 +976,18 @@ describe('public_tx_simulator', () => {
       teardownGasLimits,
     ]);
 
-    const output = txResult.avmProvingRequest!.inputs.publicInputs;
+    const output = txResult.publicInputs;
 
     // Should still charge the full teardownGasLimits for fee even though teardown reverted.
     const expectedGasUsedForFee = expectedTotalGas.sub(expectedTeardownGasUsed).add(teardownGasLimits);
     const expectedTxFee = expectedGasUsedForFee.computeFee(gasFees);
-    expect(output.endGasUsed).toEqual(expectedGasUsedForFee);
-    expect(output.transactionFee).toEqual(expectedTxFee);
+    expect(output!.endGasUsed).toEqual(expectedGasUsedForFee);
+    expect(output!.transactionFee).toEqual(expectedTxFee);
 
     // We keep only the non-revertible data and setup
-    expect(countAccumulatedItems(output.accumulatedData.nullifiers)).toBe(3);
-    expect(countAccumulatedItems(output.accumulatedData.noteHashes)).toBe(3);
-    expect(countAccumulatedItems(output.accumulatedData.l2ToL1Msgs)).toBe(3);
+    expect(countAccumulatedItems(output!.accumulatedData.nullifiers)).toBe(3);
+    expect(countAccumulatedItems(output!.accumulatedData.noteHashes)).toBe(3);
+    expect(countAccumulatedItems(output!.accumulatedData.l2ToL1Msgs)).toBe(3);
 
     const includedSiloedNullifiers = [
       ...tx.data.forPublic!.nonRevertibleAccumulatedData.nullifiers.filter(n => !n.isZero()),
@@ -1063,7 +996,7 @@ describe('public_tx_simulator', () => {
       //...tx.data.forPublic!.revertibleAccumulatedData.nullifiers.filter(n => !n.isZero()),
       //..siloedNullifiers[1...4]
     ];
-    expect(output.accumulatedData.nullifiers.filter(n => !n.isZero())).toEqual(includedSiloedNullifiers);
+    expect(output!.accumulatedData.nullifiers.filter(n => !n.isZero())).toEqual(includedSiloedNullifiers);
     await checkNullifierRoot(txResult);
   });
 
@@ -1100,57 +1033,6 @@ describe('public_tx_simulator', () => {
     await checkNullifierRoot(txResult);
   });
 
-  it.each([
-    [' not', 'revertible'],
-    ['', 'non-revertible'],
-  ])('after a revert, does%s retain contract classes emitted from %s logs', async (_, kind) => {
-    const tx = await mockTxWithPublicCalls({
-      numberOfSetupCalls: 1,
-      numberOfAppLogicCalls: 2,
-      hasPublicTeardownCall: true,
-    });
-
-    const contractClassId = await mockContractClassForTx(tx, kind == 'revertible');
-    const appLogicFailure = new SimulationError('Simulation Failed in app logic', []);
-    const siloedNullifiers = [new Fr(10000), new Fr(20000), new Fr(30000), new Fr(40000), new Fr(50000)];
-    mockPublicExecutor([
-      // SETUP
-      async (stateManager: PublicPersistableStateManager) => {
-        await stateManager.writeSiloedNullifier(siloedNullifiers[0]);
-      },
-      // APP LOGIC
-      async (stateManager: PublicPersistableStateManager) => {
-        await stateManager.writeSiloedNullifier(siloedNullifiers[1]);
-        await stateManager.writeSiloedNullifier(siloedNullifiers[2]);
-      },
-      async (stateManager: PublicPersistableStateManager) => {
-        await stateManager.writeSiloedNullifier(siloedNullifiers[3]);
-        return Promise.resolve(appLogicFailure);
-      },
-      // TEARDOWN
-      async (stateManager: PublicPersistableStateManager) => {
-        await stateManager.writeSiloedNullifier(siloedNullifiers[4]);
-      },
-    ]);
-
-    const txResult = await simulator.simulate(tx);
-
-    expect(txResult.revertCode).toEqual(RevertCode.APP_LOGIC_REVERTED);
-    // tx reports app logic failure
-    expect(txResult.revertReason).toBe(appLogicFailure);
-
-    // Note that we do not check tx.data.forPublic? since these are not mutated in the case of a revert.
-    // When contract class logs are fields and only stored here, they will be filtered after simulation
-    // in processed_tx.ts -> makeProcessedTxFromTxWithPublicCalls() like PrivateLogs.
-
-    const contractClass = await contractsDB.getContractClass(contractClassId);
-    if (kind == 'revertible') {
-      expect(contractClass).toBeUndefined();
-    } else {
-      expect(contractClass).toBeDefined();
-    }
-  });
-
   it('runs a tx with non-empty priority fees', async () => {
     // gasFees = new GasFees(2, 3);
     maxPriorityFeesPerGas = new GasFees(5, 7);
@@ -1165,6 +1047,7 @@ describe('public_tx_simulator', () => {
 
     const txResult = await simulator.simulate(tx);
     expect(txResult.revertCode).toEqual(RevertCode.OK);
+    expect(txResult.findRevertReason()).toBeUndefined();
 
     const expectedPublicGasUsed = enqueuedCallGasUsed.mul(2); // 1 for setup and 1 for app logic.
     const expectedTeardownGasUsed = enqueuedCallGasUsed;
@@ -1177,18 +1060,19 @@ describe('public_tx_simulator', () => {
       publicGas: expectedPublicGasUsed.add(expectedTeardownGasUsed),
     });
 
-    const output = txResult.avmProvingRequest!.inputs.publicInputs;
+    const output = txResult.publicInputs;
 
     const expectedGasUsedForFee = expectedTotalGas.sub(expectedTeardownGasUsed).add(teardownGasLimits);
-    expect(output.endGasUsed).toEqual(expectedGasUsedForFee);
+    expect(output!.endGasUsed).toEqual(expectedGasUsedForFee);
 
     const totalFees = new GasFees(2 + 5, 3 + 7);
     const expectedTxFee = expectedGasUsedForFee.computeFee(totalFees);
-    expect(output.transactionFee).toEqual(expectedTxFee);
+    expect(output!.transactionFee).toEqual(expectedTxFee);
   });
 
   describe('fees', () => {
     it('deducts fees from the fee payer balance', async () => {
+      simulator = createSimulator({ skipFeeEnforcement: false });
       const feePayer = await AztecAddress.random();
       await setFeeBalance(feePayer, Fr.MAX_FIELD_VALUE);
 
@@ -1201,9 +1085,11 @@ describe('public_tx_simulator', () => {
 
       const txResult = await simulator.simulate(tx);
       expect(txResult.revertCode).toEqual(RevertCode.OK);
+      expect(txResult.findRevertReason()).toBeUndefined();
     });
 
     it('fails if fee payer cant pay for the tx', async () => {
+      simulator = createSimulator({ skipFeeEnforcement: false });
       const feePayer = await AztecAddress.random();
 
       await expect(
@@ -1231,6 +1117,7 @@ describe('public_tx_simulator', () => {
         }),
       );
       expect(txResult.revertCode).toEqual(RevertCode.OK);
+      expect(txResult.findRevertReason()).toBeUndefined();
     });
   });
 
@@ -1252,14 +1139,297 @@ describe('public_tx_simulator', () => {
     // Verify that the transaction has app logic reverted code
     expect(txResult.revertCode).toEqual(RevertCode.APP_LOGIC_REVERTED);
 
-    // Verify that there are only 2 phases processed (setup and teardown), since app logic is skipped
-    expect(txResult.processedPhases).toEqual([
-      expect.objectContaining({ phase: TxExecutionPhase.SETUP }),
-      expect.objectContaining({ phase: TxExecutionPhase.TEARDOWN }),
-    ]);
-
     // Verify that the SimulationError contains information about the nullifier collision
-    const simulationError = txResult.revertReason as SimulationError;
-    expect(simulationError.getOriginalMessage()).toContain('Nullifier collision');
+    const revertReason = txResult.findRevertReason();
+    expect(revertReason).toBeDefined();
+    expect(revertReason?.getOriginalMessage()).toContain('Nullifier collision');
+  });
+
+  describe('prover id', () => {
+    it('exposes the default prover id in public inputs', async () => {
+      const tx = await mockTxWithPublicCalls({
+        numberOfAppLogicCalls: 1,
+      });
+
+      const txResult = await simulator.simulate(tx);
+
+      expect(txResult.publicInputs?.proverId).toEqual(Fr.ZERO);
+    });
+
+    it('exposes the prover id in public inputs', async () => {
+      const tx = await mockTxWithPublicCalls({
+        numberOfAppLogicCalls: 1,
+      });
+
+      const proverId = Fr.random();
+
+      simulator = createSimulator({ skipFeeEnforcement: true, proverId });
+
+      const txResult = await simulator.simulate(tx);
+
+      expect(txResult.publicInputs?.proverId).toEqual(proverId);
+    });
+  });
+
+  describe('unchecked errors should NOT be caught', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('Unchecked error during enqueued call simulation should NOT be caught', async () => {
+      const tx = await mockTxWithPublicCalls({
+        numberOfAppLogicCalls: 1,
+      });
+
+      const msg = 'This is an unchecked error during enqueued call';
+      simulateInternal.mockRejectedValue(new Error(msg));
+
+      await expect(simulator.simulate(tx)).rejects.toThrow(msg);
+    });
+
+    it('Unchecked error during revertible nullifier insertion should NOT be caught', async () => {
+      const tx = await mockTx(/*seed=*/ 5555, {
+        numberOfNonRevertiblePublicCallRequests: 0,
+        numberOfRevertiblePublicCallRequests: 1, // need at least 1 public call so that is classified as forPublic
+        numberOfRevertibleNullifiers: 1, // nonzero so that this calls writeSiloedNullifier which we mock
+      });
+
+      // Zero out the first nullifier to force it to skip nonrevertible nullifier insertions
+      // so that we fail later during revertibles.
+      tx.data.forPublic!.nonRevertibleAccumulatedData.nullifiers[0] = new Fr(0);
+
+      mockPublicExecutor([
+        // one app logic call
+        async (_stateManager: PublicPersistableStateManager) => {},
+      ]);
+
+      const msg = 'This is an unchecked error during revertible nullifier insertion';
+      jest.spyOn(PublicPersistableStateManager.prototype, 'writeSiloedNullifier').mockImplementation(() => {
+        throw new Error(msg);
+      });
+
+      await expect(simulator.simulate(tx)).rejects.toThrow(msg);
+    });
+
+    it('Unchecked error during revertible note hash insertion should NOT be caught', async () => {
+      const tx = await mockTx(/*seed=*/ 5555, {
+        numberOfNonRevertiblePublicCallRequests: 0,
+        numberOfRevertiblePublicCallRequests: 1, // need at least 1 public call so that is classified as forPublic
+      });
+
+      tx.data.forPublic!.revertibleAccumulatedData.noteHashes[0] = new Fr(123);
+
+      mockPublicExecutor([
+        // one app logic call
+        async (_stateManager: PublicPersistableStateManager) => {},
+      ]);
+
+      const msg = 'This is an unchecked error during revertible note hash insertion';
+      jest.spyOn(PublicPersistableStateManager.prototype, 'writeSiloedNoteHash').mockImplementation(() => {
+        throw new Error(msg);
+      });
+
+      await expect(simulator.simulate(tx)).rejects.toThrow(msg);
+    });
+
+    it('Unchecked error during revertible l2 to l1 message insertion should NOT be caught', async () => {
+      const tx = await mockTx(/*seed=*/ 5555, {
+        numberOfNonRevertiblePublicCallRequests: 0,
+        numberOfRevertiblePublicCallRequests: 1, // need at least 1 public call so that is classified as forPublic
+      });
+
+      tx.data.forPublic!.revertibleAccumulatedData.l2ToL1Msgs[0] = new ScopedL2ToL1Message(
+        new L2ToL1Message(EthAddress.fromNumber(123), new Fr(456)),
+        AztecAddress.fromNumber(789),
+      );
+
+      mockPublicExecutor([
+        // one app logic call
+        async (_stateManager: PublicPersistableStateManager) => {},
+      ]);
+
+      const msg = 'This is an unchecked error during revertible l2 to l1 message insertion';
+      jest.spyOn(PublicPersistableStateManager.prototype, 'writeScopedL2ToL1Message').mockImplementation(() => {
+        throw new Error(msg);
+      });
+
+      await expect(simulator.simulate(tx)).rejects.toThrow(msg);
+    });
+  });
+
+  describe('"checked" errors SHOULD be caught', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('"Checked" error during revertible nullifier insertion should be caught', async () => {
+      const tx = await mockTx(/*seed=*/ 5555, {
+        numberOfNonRevertiblePublicCallRequests: 0,
+        numberOfRevertiblePublicCallRequests: 1, // need at least 1 public call so that is classified as forPublic
+        numberOfRevertibleNullifiers: 1, // nonzero so that this calls writeSiloedNullifier which we mock
+      });
+
+      // Zero out the first nullifier to force it to skip nonrevertible nullifier insertions
+      // so that we fail later during revertibles.
+      tx.data.forPublic!.nonRevertibleAccumulatedData.nullifiers[0] = new Fr(0);
+
+      mockPublicExecutor([
+        // one app logic call
+        async (_stateManager: PublicPersistableStateManager) => {},
+      ]);
+
+      jest.spyOn(PublicPersistableStateManager.prototype, 'writeSiloedNullifier').mockImplementation(() => {
+        throw new NullifierLimitReachedError();
+      });
+
+      const txResult = await simulator.simulate(tx);
+      expect(txResult.revertCode).toEqual(RevertCode.APP_LOGIC_REVERTED);
+      const revertReason = txResult.findRevertReason();
+      expect(revertReason).toBeDefined();
+      expect(revertReason?.getOriginalMessage()).toContain(new NullifierLimitReachedError().message);
+    });
+
+    it('"Checked" error during revertible note hash insertion should be caught', async () => {
+      const tx = await mockTx(/*seed=*/ 5555, {
+        numberOfNonRevertiblePublicCallRequests: 0,
+        numberOfRevertiblePublicCallRequests: 1, // need at least 1 public call so that is classified as forPublic
+      });
+
+      tx.data.forPublic!.revertibleAccumulatedData.noteHashes[0] = new Fr(123);
+
+      mockPublicExecutor([
+        // one app logic call
+        async (_stateManager: PublicPersistableStateManager) => {},
+      ]);
+
+      jest.spyOn(PublicPersistableStateManager.prototype, 'writeSiloedNoteHash').mockImplementation(() => {
+        throw new NoteHashLimitReachedError();
+      });
+      const txResult = await simulator.simulate(tx);
+      expect(txResult.revertCode).toEqual(RevertCode.APP_LOGIC_REVERTED);
+      const revertReason = txResult.findRevertReason();
+      expect(revertReason).toBeDefined();
+      expect(revertReason?.getOriginalMessage()).toContain(new NoteHashLimitReachedError().message);
+    });
+
+    it('"Checked" error during revertible l2 to l1 message insertion should be caught', async () => {
+      const tx = await mockTx(/*seed=*/ 5555, {
+        numberOfNonRevertiblePublicCallRequests: 0,
+        numberOfRevertiblePublicCallRequests: 1, // need at least 1 public call so that is classified as forPublic
+      });
+
+      tx.data.forPublic!.revertibleAccumulatedData.l2ToL1Msgs[0] = new ScopedL2ToL1Message(
+        new L2ToL1Message(EthAddress.fromNumber(123), new Fr(456)),
+        AztecAddress.fromNumber(789),
+      );
+
+      mockPublicExecutor([
+        // one app logic call
+        async (_stateManager: PublicPersistableStateManager) => {},
+      ]);
+
+      jest.spyOn(PublicPersistableStateManager.prototype, 'writeScopedL2ToL1Message').mockImplementation(() => {
+        throw new L2ToL1MessageLimitReachedError();
+      });
+
+      const txResult = await simulator.simulate(tx);
+      expect(txResult.revertCode).toEqual(RevertCode.APP_LOGIC_REVERTED);
+      const revertReason = txResult.findRevertReason();
+      expect(revertReason).toBeDefined();
+      expect(revertReason?.getOriginalMessage()).toContain(new L2ToL1MessageLimitReachedError().message);
+    });
+  });
+
+  describe('unchecked errors should NOT be caught', () => {
+    class CheckedError extends CheckedPublicExecutionError {
+      constructor(message: string) {
+        super(message);
+        this.name = 'CheckedError';
+      }
+    }
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('ANY error from internal simulation is unchecked.... AvmSimulator internally handles checked errors!', async () => {
+      const tx = await mockTxWithPublicCalls({
+        numberOfAppLogicCalls: 1,
+      });
+
+      const msg = 'Error uncaught by AvmSimulator';
+      simulateInternal.mockRejectedValue(new CheckedError(msg));
+
+      await expect(simulator.simulate(tx)).rejects.toThrow(msg);
+    });
+
+    it('Unchecked error during revertible nullifier insertion should NOT be caught', async () => {
+      const tx = await mockTx(/*seed=*/ 5555, {
+        numberOfNonRevertiblePublicCallRequests: 0,
+        numberOfRevertiblePublicCallRequests: 1, // need at least 1 public call so that is classified as forPublic
+        numberOfRevertibleNullifiers: 1, // nonzero so that this calls writeSiloedNullifier which we mock
+      });
+
+      // Zero out the first nullifier to force it to skip nonrevertible nullifier insertions
+      // so that we fail later during revertibles.
+      tx.data.forPublic!.nonRevertibleAccumulatedData.nullifiers[0] = new Fr(0);
+
+      mockPublicExecutor([
+        // one app logic call
+        async (_stateManager: PublicPersistableStateManager) => {},
+      ]);
+
+      const msg = 'This is an unchecked error during revertible nullifier insertion';
+      jest.spyOn(PublicPersistableStateManager.prototype, 'writeSiloedNullifier').mockImplementation(() => {
+        throw new Error(msg);
+      });
+
+      await expect(simulator.simulate(tx)).rejects.toThrow(msg);
+    });
+
+    it('Unchecked error during revertible note hash insertion should NOT be caught', async () => {
+      const tx = await mockTx(/*seed=*/ 5555, {
+        numberOfNonRevertiblePublicCallRequests: 0,
+        numberOfRevertiblePublicCallRequests: 1, // need at least 1 public call so that is classified as forPublic
+      });
+
+      tx.data.forPublic!.revertibleAccumulatedData.noteHashes[0] = new Fr(123);
+
+      mockPublicExecutor([
+        // one app logic call
+        async (_stateManager: PublicPersistableStateManager) => {},
+      ]);
+
+      const msg = 'This is an unchecked error during revertible note hash insertion';
+      jest.spyOn(PublicPersistableStateManager.prototype, 'writeSiloedNoteHash').mockImplementation(() => {
+        throw new Error(msg);
+      });
+
+      await expect(simulator.simulate(tx)).rejects.toThrow(msg);
+    });
+
+    it('Unchecked error during revertible l2 to l1 message insertion should NOT be caught', async () => {
+      const tx = await mockTx(/*seed=*/ 5555, {
+        numberOfNonRevertiblePublicCallRequests: 0,
+        numberOfRevertiblePublicCallRequests: 1, // need at least 1 public call so that is classified as forPublic
+      });
+
+      tx.data.forPublic!.revertibleAccumulatedData.l2ToL1Msgs[0] = new ScopedL2ToL1Message(
+        new L2ToL1Message(EthAddress.fromNumber(123), new Fr(456)),
+        AztecAddress.fromNumber(789),
+      );
+
+      mockPublicExecutor([
+        // one app logic call
+        async (_stateManager: PublicPersistableStateManager) => {},
+      ]);
+
+      const msg = 'This is an unchecked error during revertible l2 to l1 message insertion';
+      jest.spyOn(PublicPersistableStateManager.prototype, 'writeScopedL2ToL1Message').mockImplementation(() => {
+        throw new Error(msg);
+      });
+
+      await expect(simulator.simulate(tx)).rejects.toThrow(msg);
+    });
   });
 });

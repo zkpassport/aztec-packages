@@ -1,7 +1,9 @@
-import { AztecAddress, EthAddress, Fr, type Logger } from '@aztec/aztec.js';
-import { getL1ContractsConfigEnvVars } from '@aztec/ethereum';
+import { AztecAddress, EthAddress } from '@aztec/aztec.js/addresses';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import { getL1ContractsConfigEnvVars } from '@aztec/ethereum/config';
 import { SecretValue } from '@aztec/foundation/config';
-import type { TestWallet } from '@aztec/test-wallet';
+import type { TestWallet } from '@aztec/test-wallet/server';
 
 import { jest } from '@jest/globals';
 import { privateKeyToAccount } from 'viem/accounts';

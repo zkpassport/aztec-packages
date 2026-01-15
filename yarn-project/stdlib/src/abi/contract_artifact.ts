@@ -17,7 +17,7 @@ import {
 } from '../abi/index.js';
 import {
   AZTEC_INITIALIZER_ATTRIBUTE,
-  AZTEC_INTERNAL_ATTRIBUTE,
+  AZTEC_ONLY_SELF_ATTRIBUTE,
   AZTEC_PRIVATE_ATTRIBUTE,
   AZTEC_PUBLIC_ATTRIBUTE,
   AZTEC_UTILITY_ATTRIBUTE,
@@ -152,7 +152,7 @@ function generateFunctionAbi(fn: NoirCompiledContractFunction, contract: NoirCom
     );
   }
   const functionType = getFunctionType(fn);
-  const isInternal = fn.custom_attributes.includes(AZTEC_INTERNAL_ATTRIBUTE);
+  const isOnlySelf = fn.custom_attributes.includes(AZTEC_ONLY_SELF_ATTRIBUTE);
   const isStatic = fn.custom_attributes.includes(AZTEC_VIEW_ATTRIBUTE);
 
   // If the function is not a utility function, the first item is inputs or CallContext which we should omit
@@ -185,7 +185,7 @@ function generateFunctionAbi(fn: NoirCompiledContractFunction, contract: NoirCom
   return {
     name: fn.name,
     functionType,
-    isInternal,
+    isOnlySelf,
     isStatic,
     isInitializer: fn.custom_attributes.includes(AZTEC_INITIALIZER_ATTRIBUTE),
     parameters,
@@ -283,6 +283,9 @@ function getStorageLayout(input: NoirCompiledContract) {
  */
 function generateContractArtifact(contract: NoirCompiledContract): ContractArtifact {
   try {
+    if (!contract.transpiled) {
+      throw new Error("Contract's public bytecode has not been transpiled");
+    }
     return ContractArtifactSchema.parse({
       name: contract.name,
       functions: contract.functions.filter(f => retainBytecode(f)).map(f => generateFunctionArtifact(f, contract)),

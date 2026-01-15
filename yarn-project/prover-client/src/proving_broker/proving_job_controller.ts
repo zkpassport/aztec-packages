@@ -1,4 +1,5 @@
-import { randomBytes } from '@aztec/foundation/crypto';
+import { EpochNumber } from '@aztec/foundation/branded-types';
+import { randomBytes } from '@aztec/foundation/crypto/random';
 import { AbortError } from '@aztec/foundation/error';
 import { createLogger } from '@aztec/foundation/log';
 import type {
@@ -24,7 +25,7 @@ export class ProvingJobController {
   constructor(
     private jobId: ProvingJobId,
     private inputs: ProvingJobInputs,
-    private epochNumber: number,
+    private epochNumber: EpochNumber,
     private startedAt: number,
     private circuitProver: ServerCircuitProver,
     private onComplete: () => void,
@@ -128,8 +129,8 @@ export class ProvingJobController {
         return await this.circuitProver.getAvmProof(inputs, undefined, signal, this.epochNumber);
       }
 
-      case ProvingRequestType.PUBLIC_TUBE: {
-        return await this.circuitProver.getPublicTubeProof(inputs, signal, this.epochNumber);
+      case ProvingRequestType.PUBLIC_CHONK_VERIFIER: {
+        return await this.circuitProver.getPublicChonkVerifierProof(inputs, signal, this.epochNumber);
       }
 
       case ProvingRequestType.PRIVATE_TX_BASE_ROLLUP: {

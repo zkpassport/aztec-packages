@@ -1,17 +1,11 @@
-import {
-  AztecAddress,
-  type AztecNode,
-  EthAddress,
-  Fr,
-  L1FeeJuicePortalManager,
-  type L1TokenManager,
-  type L2AmountClaim,
-  type Logger,
-  type PXE,
-  type Wallet,
-  retryUntil,
-} from '@aztec/aztec.js';
-import type { ExtendedViemWalletClient } from '@aztec/ethereum';
+import { AztecAddress, EthAddress } from '@aztec/aztec.js/addresses';
+import { L1FeeJuicePortalManager, type L1TokenManager, type L2AmountClaim } from '@aztec/aztec.js/ethereum';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { Logger } from '@aztec/aztec.js/log';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import type { Wallet } from '@aztec/aztec.js/wallet';
+import type { ExtendedViemWalletClient } from '@aztec/ethereum/types';
+import { retryUntil } from '@aztec/foundation/retry';
 import { FeeJuiceContract } from '@aztec/noir-contracts.js/FeeJuice';
 import { ProtocolContractAddress } from '@aztec/protocol-contracts';
 import type { AztecNodeAdmin } from '@aztec/stdlib/interfaces/client';
@@ -27,7 +21,6 @@ export interface IGasBridgingTestHarness {
 export interface FeeJuicePortalTestingHarnessFactoryConfig {
   aztecNode: AztecNode;
   aztecNodeAdmin?: AztecNodeAdmin;
-  pxeService: PXE;
   l1Client: ExtendedViemWalletClient;
   wallet: Wallet;
   logger: Logger;
@@ -38,10 +31,10 @@ export class FeeJuicePortalTestingHarnessFactory {
   private constructor(private config: FeeJuicePortalTestingHarnessFactoryConfig) {}
 
   private async createReal() {
-    const { aztecNode, aztecNodeAdmin, pxeService, l1Client, wallet, logger } = this.config;
+    const { aztecNode, aztecNodeAdmin, l1Client, wallet, logger } = this.config;
 
     const ethAccount = EthAddress.fromString((await l1Client.getAddresses())[0]);
-    const l1ContractAddresses = (await pxeService.getNodeInfo()).l1ContractAddresses;
+    const l1ContractAddresses = (await aztecNode.getNodeInfo()).l1ContractAddresses;
 
     const feeJuiceAddress = l1ContractAddresses.feeJuiceAddress;
     const feeJuicePortalAddress = l1ContractAddresses.feeJuicePortalAddress;
@@ -50,12 +43,12 @@ export class FeeJuicePortalTestingHarnessFactory {
       throw new Error('Fee Juice portal not deployed on L1');
     }
 
-    const gasL2 = await FeeJuiceContract.at(ProtocolContractAddress.FeeJuice, wallet);
+    const gasL2 = FeeJuiceContract.at(ProtocolContractAddress.FeeJuice, wallet);
 
     return new GasBridgingTestHarness(
       aztecNode,
       aztecNodeAdmin,
-      pxeService,
+      wallet,
       logger,
       gasL2,
       ethAccount,
@@ -85,8 +78,8 @@ export class GasBridgingTestHarness implements IGasBridgingTestHarness {
     public aztecNode: AztecNode,
     /** Aztec node admin interface */
     public aztecNodeAdmin: AztecNodeAdmin | undefined,
-    /** Private eXecution Environment (PXE). */
-    public pxeService: PXE,
+    /** Wallet. */
+    public wallet: Wallet,
     /** Logger. */
     public logger: Logger,
 

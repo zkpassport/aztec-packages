@@ -7,10 +7,10 @@
 #include "barretenberg/vm2/constraining/testing/check_relation.hpp"
 #include "barretenberg/vm2/generated/relations/lookups_nullifier_exists.hpp"
 #include "barretenberg/vm2/generated/relations/nullifier_exists.hpp"
-#include "barretenberg/vm2/simulation/concrete_dbs.hpp"
-#include "barretenberg/vm2/simulation/execution.hpp"
-#include "barretenberg/vm2/simulation/field_gt.hpp"
-#include "barretenberg/vm2/simulation/lib/db_interfaces.hpp"
+#include "barretenberg/vm2/simulation/gadgets/concrete_dbs.hpp"
+#include "barretenberg/vm2/simulation/gadgets/execution.hpp"
+#include "barretenberg/vm2/simulation/gadgets/field_gt.hpp"
+#include "barretenberg/vm2/simulation/interfaces/db.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_merkle_check.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_nullifier_tree_check.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_poseidon2.hpp"
@@ -42,6 +42,7 @@ using testing::NiceMock;
 using FF = AvmFlavorSettings::FF;
 using C = Column;
 using nullifier_exists = bb::avm2::nullifier_exists<FF>;
+using execution = bb::avm2::execution<FF>;
 
 TEST(NullifierExistsConstrainingTest, PositiveTest)
 {
@@ -100,8 +101,8 @@ TEST(NullifierExistsConstrainingTest, NegativeNullifierExistsSuccess)
         { C::execution_sel_opcode_error, 1 },
     } });
 
-    EXPECT_THROW_WITH_MESSAGE(check_relation<nullifier_exists>(trace, nullifier_exists::SR_NULLIFIER_EXISTS_SUCCESS),
-                              "NULLIFIER_EXISTS_SUCCESS");
+    EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_INFALLIBLE_OPCODES_SUCCESS),
+                              "INFALLIBLE_OPCODES_SUCCESS");
 }
 
 TEST(NullifierExistsConstrainingTest, Interactions)
@@ -121,7 +122,7 @@ TEST(NullifierExistsConstrainingTest, Interactions)
 
     AppendOnlyTreeSnapshot nullifier_tree_snapshot = AppendOnlyTreeSnapshot{
         .root = 42,
-        .nextAvailableLeafIndex = 128,
+        .next_available_leaf_index = 128,
     };
 
     nullifier_tree_check.assert_read(nullifier, address, true, {}, 0, {}, nullifier_tree_snapshot);

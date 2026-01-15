@@ -29,13 +29,13 @@ fn validate_propagated_from_private_call_to_init__note_hash_read_requests_output
     builder.output.append_note_hash_read_requests(2);
     // Tweak the value in the output.
     let mut read_request = builder.output.note_hash_read_requests.get(1);
-    read_request.read_request.value += 1;
+    read_request.inner.inner += 1;
     builder.output.note_hash_read_requests.set(1, read_request);
 
     builder.validate_as_first_call();
 }
 
-#[test(should_fail_with = "propagated contract address does not match")]
+#[test(should_fail_with = "source item does not append to dest")]
 fn validate_propagated_from_private_call_to_init__note_hash_read_requests_mismatch_contract_address_fails() {
     let mut builder = PrivateKernelCircuitOutputValidatorBuilder::new();
 

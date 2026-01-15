@@ -1,37 +1,24 @@
 #!/usr/bin/env bash
 source $(git rev-parse --show-toplevel)/ci3/source_bootstrap
 
-cmd=${1:-}
-
 hash=$(hash_str $(cache_content_hash .rebuild_patterns) $(../yarn-project/bootstrap.sh hash))
 
 dump_fail "flock scripts/logs/install_deps.lock retry scripts/install_deps.sh >&2"
 
-function build {
-  denoise "helm lint ./aztec-network/"
-  denoise ./spartan/scripts/check_env_vars.sh
-}
+source ./scripts/source_env_basic.sh
+source ./scripts/source_network_env.sh
+source ./scripts/gcp_auth.sh
 
-function source_network_env {
-  local env_file
-  # Check if the argument is an absolute path
-  if [[ "$1" = /* ]]; then
-    env_file="$1"
-  else
-    env_file="environments/$1"
-  fi
-  # Optionally source an env file passed as first argument
-  if [[ -n "${env_file:-}" ]]; then
-    if [[ -f "$env_file" ]]; then
-      set -a
-      # shellcheck disable=SC1090
-      source "$env_file"
-      set +a
-    else
-      echo "Env file not found: $env_file" >&2
-      exit 1
-    fi
-  fi
+function build {
+  denoise "helm lint ./aztec-bot/"
+  denoise "helm lint ./aztec-chaos-scenarios/"
+  denoise "helm lint ./aztec-keystore/"
+  denoise "helm lint ./aztec-node/"
+  denoise "helm lint ./aztec-prover-stack/"
+  denoise "helm lint ./aztec-snapshots/"
+  denoise "helm lint ./aztec-validator/"
+  denoise "helm lint ./eth-devnet/"
+  denoise ./spartan/scripts/check_env_vars.sh
 }
 
 function network_shaping {
@@ -86,7 +73,7 @@ function network_test_cmds {
   # currently, we allocate just shy of one hour for each test, so we can have at most 6 tests.
   # If we have more tests, we can reduce the epoch/slot duration in the tests,
   # or parallelize somehow. It's just something to be aware of if you are adding new tests here.
-  local prefix="disabled-cache:CPUS=10:MEM=16g:TIMEOUT=55m"
+  local prefix="disabled-cache:CPUS=10:MEM=16g:TIMEOUT=120m"
   local run_test_script="yarn-project/end-to-end/scripts/run_test.sh"
   echo $prefix $run_test_script simple src/spartan/smoke.test.ts
   echo $prefix $run_test_script simple src/spartan/transfer.test.ts
@@ -98,30 +85,6 @@ function single_test {
   $root/yarn-project/end-to-end/scripts/run_test.sh simple $test_file
 }
 
-function start_env {
-  if [ "$CI_NIGHTLY" -eq 1 ] && [ "$(arch)" != "arm64" ]; then
-    echo "Skipping start_env for nightly while we migrate to use the same deployment flow as the scenario/staging networks."
-  fi
-}
-
-function stop_env {
-  if [ "$CI_NIGHTLY" -eq 1 ] && [ "$(arch)" != "arm64" ]; then
-    echo "Skipping stop_env for nightly while we migrate to use the same deployment flow as the scenario/staging networks."
-  fi
-}
-
-function gcp_auth {
-  # if the GCP_PROJECT_ID is set, activate the service account
-  if [[ -n "${GCP_PROJECT_ID:-}" && "${CLUSTER}" != "kind" ]]; then
-    echo "Activating service account"
-    if [ "$CI" -eq 1 ]; then
-      gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
-    fi
-    gcloud config set project "$GCP_PROJECT_ID"
-    gcloud container clusters get-credentials ${CLUSTER} --region=${GCP_REGION} --project=${GCP_PROJECT_ID}
-  fi
-}
-
 function test {
   echo_header "spartan test (deprecated)"
   # the existing test flow is deprecated.
@@ -130,10 +93,31 @@ function test {
 }
 
 function network_tests {
+  local env_file="$1"
   echo_header "spartan scenario test"
 
   # no parallelize here as we want to run the tests sequentially
+  export SCENARIO_TESTS=1
+  source_network_env $env_file
+
+  gcp_auth
   network_test_cmds | filter_test_cmds | parallelize 1
+}
+
+function network_bench_cmds {
+  echo "$hash:TIMEOUT=3600 BENCH_OUTPUT=bench-out/n_tps.bench.json TPS_TARGET=0.5,1,2 TEST_DURATION=600 $root/yarn-project/end-to-end/scripts/run_test.sh simple n_tps.test.ts"
+}
+
+function network_bench {
+  rm -rf bench-out
+  mkdir -p bench-out
+
+  local env_file="$1"
+  source_network_env $env_file
+
+  echo_header "spartan bench"
+  gcp_auth
+  network_bench_cmds | parallelize 1
 }
 
 function ensure_eth_balances {
@@ -155,29 +139,42 @@ case "$cmd" in
     # do nothing but the install_deps.sh above
     ;;
   "ensure_eth_balances")
-    shift
     env_file="$1"
     amount="$2"
 
-    source_network_env $env_file
+    # First pass: source environment for basic variables like CLUSTER (skip GCP secret processing)
+    source_env_basic "$env_file"
+
+    # Perform GCP auth (needs CLUSTER and other basic vars)
+    gcp_auth
+
+    # Second pass: source environment with GCP secret processing
+    source_network_env "$env_file"
+
     ensure_eth_balances "$amount"
     ;;
-  "network_deploy")
-    shift
+  "ensure_funded_environment")
     env_file="$1"
-    source_network_env $env_file
+    low_watermark="${2:-0.5}"
+    high_watermark="${3:-1.0}"
 
-    gcp_auth
-    ./scripts/deploy_network.sh
-    echo "Deployed network"
+    ./scripts/ensure_funded_environment.sh "$env_file" "$FUNDING_PRIVATE_KEY" "$low_watermark" "$high_watermark"
+    ;;
+  "network_deploy")
+    env_file="$1"
+
+    #Sets up basic env vars like RUN_TESTS
+    source_env_basic "$env_file"
+
+    # Run the network deploy script
+    ./scripts/network_deploy.sh "$env_file"
 
     if [[ "${RUN_TESTS:-}" == "true" ]]; then
       echo "Running tests"
-      network_tests
+      network_tests "$env_file"
     fi
     ;;
   "single_test")
-    shift
     env_file="$1"
     test_file="$2"
     source_network_env $env_file
@@ -186,13 +183,9 @@ case "$cmd" in
     single_test $test_file
     ;;
 
-  "network_tests")
-    shift
+  network_tests|network_bench)
     env_file="$1"
-    source_network_env $env_file
-
-    gcp_auth
-    network_tests
+    $cmd $env_file
     ;;
   "kind")
     if ! kubectl config get-clusters | grep -q "^kind-kind$" || ! docker ps | grep -q "kind-control-plane"; then
@@ -219,7 +212,6 @@ case "$cmd" in
     metrics/install-prod.sh
     ;;
   "network-shaping")
-    shift
     namespace="$1"
     chaos_values="$2"
     if network_shaping "$namespace" "$chaos_values"; then
@@ -233,7 +225,7 @@ case "$cmd" in
   "hash")
     echo $hash
     ;;
-  test|test_cmds|gke|build|start_env|stop_env|gcp_auth)
+  test|test_cmds|gke|build|gcp_auth)
     $cmd
     ;;
   "test-kind-smoke")
@@ -297,7 +289,6 @@ case "$cmd" in
       ./scripts/test_k8s.sh kind src/spartan/upgrade_via_cli.test.ts 1-validators.yaml upgrade-via-cli${NAME_POSTFIX:-}
     ;;
   "test-gke-transfer")
-    shift
     execution_client="$1"
     # TODO(#12163) reenable bot once not conflicting with transfer
     OVERRIDES="blobSink.enabled=true,bot.enabled=false"

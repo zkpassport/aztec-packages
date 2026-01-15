@@ -1,6 +1,9 @@
-import { AztecAddress, type AztecNode, type SimulateMethodOptions, type Wallet } from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import type { ContractInstanceWithAddress, SimulateInteractionOptions } from '@aztec/aztec.js/contracts';
+import type { AztecNode } from '@aztec/aztec.js/node';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import { PrivateVotingContract } from '@aztec/noir-contracts.js/PrivateVoting';
-import type { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
+import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
 import { getContractClassFromArtifact } from '@aztec/stdlib/contract';
 
 import { jest } from '@jest/globals';
@@ -17,7 +20,7 @@ describe('Deployment benchmark', () => {
   // The wallet used by the user to interact
   let userWallet: Wallet;
   // Sponsored FPC contract
-  let sponsoredFPC: SponsoredFPCContract;
+  let sponsoredFPCInstance: ContractInstanceWithAddress;
   // Benchmarking configuration
   const config = t.config.deployments;
 
@@ -25,7 +28,7 @@ describe('Deployment benchmark', () => {
     await t.applyBaseSnapshots();
     await t.applyDeploySponsoredFPCSnapshot();
 
-    ({ aztecNode: node, sponsoredFPC, userWallet } = await t.setup());
+    ({ aztecNode: node, userWallet, sponsoredFPCInstance } = await t.setup());
   });
 
   afterAll(async () => {
@@ -43,7 +46,7 @@ describe('Deployment benchmark', () => {
 
       beforeAll(async () => {
         benchysAddress = await t.createAndFundBenchmarkingAccountOnUserWallet(accountType);
-        await userWallet.registerContract(sponsoredFPC);
+        await userWallet.registerContract(sponsoredFPCInstance, SponsoredFPCContract.artifact);
       });
 
       function deploymentTest(benchmarkingPaymentMethod: BenchmarkingFeePaymentMethod) {
@@ -58,7 +61,7 @@ describe('Deployment benchmark', () => {
 
           it(`${accountType} contract deploys a TokenContract, pays using ${benchmarkingPaymentMethod}`, async () => {
             const paymentMethod = t.paymentMethods[benchmarkingPaymentMethod];
-            const options: SimulateMethodOptions = {
+            const options: SimulateInteractionOptions = {
               from: benchysAddress,
               fee: { paymentMethod: await paymentMethod.forWallet(userWallet, benchysAddress) },
             };
@@ -75,7 +78,6 @@ describe('Deployment benchmark', () => {
                 1 + // Kernel init
                 paymentMethod.circuits + // Payment method circuits
                 (isClassRegistered ? 0 : 2) + // ContractClassRegistry register_contract_class + kernel inner
-                2 + // ContractClassRegistry assert_class_id_is_published + kernel inner
                 2 + // ContractInstanceRegistry publish + kernel inner
                 1 + // Kernel reset
                 1 + // Kernel tail

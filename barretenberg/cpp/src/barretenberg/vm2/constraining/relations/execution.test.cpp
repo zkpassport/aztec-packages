@@ -10,6 +10,7 @@
 #include "barretenberg/vm2/testing/fixtures.hpp"
 #include "barretenberg/vm2/testing/macros.hpp"
 #include "barretenberg/vm2/tracegen/execution_trace.hpp"
+#include "barretenberg/vm2/tracegen/lib/instruction_spec.hpp"
 #include "barretenberg/vm2/tracegen/test_trace_container.hpp"
 
 namespace bb::avm2::constraining {
@@ -45,7 +46,7 @@ TEST(ExecutionConstrainingTest, Continuity)
         {{ C::precomputed_first_row, 1 }},
         {{ C::execution_sel, 1 }},
         {{ C::execution_sel, 1 }},
-        {{ C::execution_sel, 1 }, {C::execution_last, 1}},
+        {{ C::execution_sel, 1 }},
     });
     // clang-format on
 
@@ -59,7 +60,7 @@ TEST(ExecutionConstrainingTest, ContinuityBrokenFirstRow)
         {{ C::execution_sel, 0 }},  // End of trace!
         {{ C::execution_sel, 1 }},
         {{ C::execution_sel, 1 }},
-        {{ C::execution_sel, 1 }, {C::execution_last, 1}},
+        {{ C::execution_sel, 1 }},
     });
     // clang-format on
 
@@ -73,29 +74,11 @@ TEST(ExecutionConstrainingTest, ContinuityBrokenInMiddle)
         {{ C::execution_sel, 1 }},
         {{ C::execution_sel, 0 }},  // End of trace!
         {{ C::execution_sel, 1 }},
-        {{ C::execution_sel, 1 }, {C::execution_last, 1}},
+        {{ C::execution_sel, 1 }},
     });
     // clang-format on
 
     EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_TRACE_CONTINUITY), "TRACE_CONTINUITY");
-}
-
-TEST(ExecutionConstrainingTest, ContinuityMultipleLast)
-{
-    // clang-format off
-    TestTraceContainer trace({
-        {{ C::execution_sel, 1 }},
-        {{ C::execution_sel, 1 }},
-        {{ C::execution_sel, 1 }},
-        {{ C::execution_sel, 1 }, {C::execution_last, 1}},
-    });
-    // clang-format on
-
-    // Last is correct.
-    check_relation<execution>(trace, execution::SR_LAST_IS_LAST);
-    // If we add another last, it should fail.
-    trace.set(C::execution_last, /*row=*/1, /*value=*/1);
-    EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_LAST_IS_LAST), "LAST_IS_LAST.*row 1");
 }
 
 TEST(ExecutionConstrainingTest, TreeStateNotChanged)
@@ -218,9 +201,9 @@ TEST(ExecutionConstrainingTest, SideEffectStateNotChanged)
         },
         {
             { C::execution_sel, 1 },
-            { C::execution_prev_num_unencrypted_logs, 10 },
+            { C::execution_prev_num_unencrypted_log_fields, 10 },
             { C::execution_prev_num_l2_to_l1_messages, 11 },
-            { C::execution_num_unencrypted_logs, 10 },
+            { C::execution_num_unencrypted_log_fields, 10 },
             { C::execution_num_l2_to_l1_messages, 11 },
         },
     });
@@ -229,7 +212,7 @@ TEST(ExecutionConstrainingTest, SideEffectStateNotChanged)
         trace, execution::SR_NUM_UNENCRYPTED_LOGS_NOT_CHANGED, execution::SR_NUM_L2_TO_L1_MESSAGES_NOT_CHANGED);
 
     // Negative test: change num unencrypted logs
-    trace.set(C::execution_num_unencrypted_logs, 1, 100);
+    trace.set(C::execution_num_unencrypted_log_fields, 1, 100);
     EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_NUM_UNENCRYPTED_LOGS_NOT_CHANGED),
                               "NUM_UNENCRYPTED_LOGS_NOT_CHANGED");
 
@@ -237,6 +220,54 @@ TEST(ExecutionConstrainingTest, SideEffectStateNotChanged)
     trace.set(C::execution_num_l2_to_l1_messages, 1, 100);
     EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_NUM_L2_TO_L1_MESSAGES_NOT_CHANGED),
                               "NUM_L2_TO_L1_MESSAGES_NOT_CHANGED");
+}
+
+TEST(ExecutionConstrainingTest, SubtraceIdDecomposition)
+{
+    using tracegen::get_subtrace_id;
+    using tracegen::get_subtrace_selector;
+    using tracegen::SubtraceSel;
+
+    TestTraceContainer trace;
+    const uint8_t enum_length = static_cast<uint8_t>(SubtraceSel::MAX) + 1;
+
+    for (uint8_t i = 0; i < enum_length; i++) {
+        SubtraceSel subtrace_sel = static_cast<SubtraceSel>(i);
+        const auto subtrace_id = get_subtrace_id(subtrace_sel);
+        const auto subtrace_selector = get_subtrace_selector(subtrace_sel);
+
+        trace.set(i,
+                  { {
+                      { subtrace_selector, 1 },
+                      { C::execution_subtrace_id, subtrace_id },
+                      { C::execution_sel_should_execute_opcode, 1 },
+                  } });
+    }
+
+    check_relation<execution>(trace, execution::SR_SUBTRACE_ID_DECOMPOSITION);
+
+    for (uint8_t i = 0; i < enum_length; i++) {
+        const auto subtrace_selector = get_subtrace_selector(static_cast<SubtraceSel>(i));
+
+        // Negative test: de-activate the selector
+        trace.set(subtrace_selector, i, 0);
+        EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_SUBTRACE_ID_DECOMPOSITION),
+                                  "SUBTRACE_ID_DECOMPOSITION");
+
+        // Negative test: activate the wrong selector
+        const auto wrong_selector = get_subtrace_selector(static_cast<SubtraceSel>((i + 1) % enum_length));
+        trace.set(wrong_selector, i, 1);
+        EXPECT_THROW_WITH_MESSAGE(check_relation<execution>(trace, execution::SR_SUBTRACE_ID_DECOMPOSITION),
+                                  "SUBTRACE_ID_DECOMPOSITION");
+        // De-activate the wrong selector
+        trace.set(wrong_selector, i, 0);
+
+        // Re-activate the correct selector
+        trace.set(subtrace_selector, i, 1);
+
+        // Ensure we have a correct trace for the next iteration
+        check_relation<execution>(trace, execution::SR_SUBTRACE_ID_DECOMPOSITION);
+    }
 }
 
 } // namespace

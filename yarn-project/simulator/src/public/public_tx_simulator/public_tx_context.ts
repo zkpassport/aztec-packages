@@ -3,11 +3,10 @@ import {
   MAX_L2_TO_L1_MSGS_PER_TX,
   MAX_NOTE_HASHES_PER_TX,
   MAX_NULLIFIERS_PER_TX,
-  MAX_PUBLIC_LOGS_PER_TX,
   MAX_TOTAL_PUBLIC_DATA_UPDATE_REQUESTS_PER_TX,
 } from '@aztec/constants';
 import { padArrayEnd } from '@aztec/foundation/collection';
-import { Fr } from '@aztec/foundation/fields';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import {
   AvmAccumulatedData,
@@ -17,6 +16,7 @@ import {
   RevertCode,
 } from '@aztec/stdlib/avm';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
+import { AllContractDeploymentData, type ContractDeploymentData } from '@aztec/stdlib/contract';
 import type { SimulationError } from '@aztec/stdlib/errors';
 import { computeEffectiveGasFees, computeTransactionFee } from '@aztec/stdlib/fees';
 import { Gas, GasSettings } from '@aztec/stdlib/gas';
@@ -28,11 +28,12 @@ import {
   PublicCallRequestArrayLengths,
   countAccumulatedItems,
 } from '@aztec/stdlib/kernel';
-import { PublicLog } from '@aztec/stdlib/logs';
+import { FlatPublicLogs } from '@aztec/stdlib/logs';
 import { ScopedL2ToL1Message } from '@aztec/stdlib/messaging';
 import { MerkleTreeId } from '@aztec/stdlib/trees';
 import {
   type GlobalVariables,
+  ProtocolContracts,
   PublicCallRequestWithCalldata,
   TreeSnapshots,
   type Tx,
@@ -71,7 +72,8 @@ export class PublicTxContext {
     public readonly state: PhaseStateManager,
     private readonly startTreeSnapshots: TreeSnapshots,
     private readonly globalVariables: GlobalVariables,
-    private readonly protocolContractTreeRoot: Fr,
+    private readonly protocolContracts: ProtocolContracts,
+    private readonly proverId: Fr,
     private readonly gasSettings: GasSettings,
     private readonly gasUsedByPrivate: Gas,
     private readonly gasAllocatedToPublic: Gas,
@@ -79,6 +81,8 @@ export class PublicTxContext {
     private readonly setupCallRequests: PublicCallRequestWithCalldata[],
     private readonly appLogicCallRequests: PublicCallRequestWithCalldata[],
     private readonly teardownCallRequests: PublicCallRequestWithCalldata[],
+    public readonly nonRevertibleContractDeploymentData: ContractDeploymentData,
+    public readonly revertibleContractDeploymentData: ContractDeploymentData,
     public readonly nonRevertibleAccumulatedDataFromPrivate: PrivateToPublicAccumulatedData,
     public readonly revertibleAccumulatedDataFromPrivate: PrivateToPublicAccumulatedData,
     public readonly feePayer: AztecAddress,
@@ -92,9 +96,12 @@ export class PublicTxContext {
     contractsDB: PublicContractsDBInterface,
     tx: Tx,
     globalVariables: GlobalVariables,
-    protocolContractTreeRoot: Fr,
-    doMerkleOperations: boolean,
+    protocolContracts: ProtocolContracts,
+    proverId: Fr,
   ) {
+    const contractDeploymentData = AllContractDeploymentData.fromTx(tx);
+    const nonRevertibleContractDeploymentData = contractDeploymentData.getNonRevertibleContractDeploymentData();
+    const revertibleContractDeploymentData = contractDeploymentData.getRevertibleContractDeploymentData();
     const nonRevertibleAccumulatedDataFromPrivate = tx.data.forPublic!.nonRevertibleAccumulatedData;
 
     const trace = new SideEffectTrace();
@@ -106,7 +113,6 @@ export class PublicTxContext {
       treesDB,
       contractsDB,
       trace,
-      doMerkleOperations,
       firstNullifier,
       globalVariables.timestamp,
     );
@@ -121,7 +127,8 @@ export class PublicTxContext {
       new PhaseStateManager(txStateManager),
       await txStateManager.getTreeSnapshots(),
       globalVariables,
-      protocolContractTreeRoot,
+      protocolContracts,
+      proverId,
       gasSettings,
       gasUsedByPrivate,
       gasAllocatedToPublic,
@@ -129,6 +136,8 @@ export class PublicTxContext {
       getCallRequestsWithCalldataByPhase(tx, TxExecutionPhase.SETUP),
       getCallRequestsWithCalldataByPhase(tx, TxExecutionPhase.APP_LOGIC),
       getCallRequestsWithCalldataByPhase(tx, TxExecutionPhase.TEARDOWN),
+      nonRevertibleContractDeploymentData,
+      revertibleContractDeploymentData,
       tx.data.forPublic!.nonRevertibleAccumulatedData,
       tx.data.forPublic!.revertibleAccumulatedData,
       tx.data.feePayer,
@@ -334,7 +343,6 @@ export class PublicTxContext {
       avmNoteHashes.length,
       avmNullifiers.length,
       avmL2ToL1Msgs.length,
-      finalPublicLogs.length,
       finalPublicDataWrites.length,
     );
 
@@ -350,7 +358,7 @@ export class PublicTxContext {
         MAX_NULLIFIERS_PER_TX,
       ),
       /*l2ToL1Msgs=*/ padArrayEnd(avmL2ToL1Msgs, ScopedL2ToL1Message.empty(), MAX_L2_TO_L1_MSGS_PER_TX),
-      /*publicLogs=*/ padArrayEnd(finalPublicLogs, PublicLog.empty(), MAX_PUBLIC_LOGS_PER_TX),
+      /*publicLogs=*/ FlatPublicLogs.fromLogs(finalPublicLogs),
       /*publicDataWrites=*/ padArrayEnd(
         finalPublicDataWrites,
         PublicDataWrite.empty(),
@@ -379,12 +387,13 @@ export class PublicTxContext {
 
     return new AvmCircuitPublicInputs(
       this.globalVariables,
-      this.protocolContractTreeRoot,
+      this.protocolContracts,
       this.startTreeSnapshots,
       /*startGasUsed=*/ this.gasUsedByPrivate,
       this.gasSettings,
       computeEffectiveGasFees(this.globalVariables.gasFees, this.gasSettings),
       this.feePayer,
+      this.proverId,
       /*publicCallRequestArrayLengths=*/ new PublicCallRequestArrayLengths(
         this.setupCallRequests.length,
         this.appLogicCallRequests.length,

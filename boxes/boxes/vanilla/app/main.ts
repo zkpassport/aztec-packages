@@ -1,10 +1,7 @@
-import './style.css';
-import {
-  AztecAddress,
-  Fr,
-  getContractInstanceFromInstantiationParams,
-  type Wallet,
-} from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
+import { Fr } from '@aztec/aztec.js/fields';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import { EmbeddedWallet } from './embedded-wallet';
 import { PrivateVotingContract } from '../artifacts/PrivateVoting';
 
@@ -103,8 +100,8 @@ createAccountButton.addEventListener('click', async (e) => {
 });
 
 // Connect a test account
-// Sandbox comes with some test accounts. This can be used instead of creating new ones
-// when building against the Sandbox.
+// Local network comes with some test accounts. This can be used instead of creating new ones
+// when building against the local network.
 connectTestAccountButton.addEventListener('click', async (e) => {
   e.preventDefault();
   const button = e.target as HTMLButtonElement;
@@ -150,7 +147,7 @@ voteButton.addEventListener('click', async (e) => {
     }
 
     // Prepare contract interaction
-    const votingContract = await PrivateVotingContract.at(
+    const votingContract = PrivateVotingContract.at(
       AztecAddress.fromString(contractAddress),
       wallet
     );
@@ -184,7 +181,7 @@ async function updateVoteTally(wallet: Wallet, from: AztecAddress) {
   displayStatusMessage('Updating vote tally...');
 
   // Prepare contract interaction
-  const votingContract = await PrivateVotingContract.at(
+  const votingContract = PrivateVotingContract.at(
     AztecAddress.fromString(contractAddress),
     wallet
   );

@@ -1,24 +1,24 @@
 // TODO(#11825) finalize (probably once we have nightly tests setup for GKE) & enable in bootstrap.sh
-import {
-  type PXE,
-  ProvenTx,
-  SentTx,
-  SponsoredFeePaymentMethod,
-  Tx,
-  readFieldCompressedString,
-  sleep,
-} from '@aztec/aztec.js';
-import { Fr } from '@aztec/foundation/fields';
+import { SentTx } from '@aztec/aztec.js/contracts';
+import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
+import { readFieldCompressedString } from '@aztec/aztec.js/utils';
 import { createLogger } from '@aztec/foundation/log';
+import { sleep } from '@aztec/foundation/sleep';
+import type { ProvenTx, TestWallet } from '@aztec/test-wallet/server';
+import { proveInteraction } from '@aztec/test-wallet/server';
 
 import { jest } from '@jest/globals';
 import type { ChildProcess } from 'child_process';
 
 import { getSponsoredFPCAddress } from '../fixtures/utils.js';
-import { type TestAccounts, deploySponsoredTestAccounts, startCompatiblePXE } from './setup_test_wallets.js';
+import {
+  type TestAccounts,
+  createWalletAndAztecNodeClient,
+  deploySponsoredTestAccountsWithTokens,
+} from './setup_test_wallets.js';
 import { setupEnvironment, startPortForwardForRPC } from './utils.js';
 
-const config = { ...setupEnvironment(process.env), REAL_VERIFIER: true }; // TODO: remove REAL_VERIFIER: true
+const config = { ...setupEnvironment(process.env) };
 describe('token transfer test', () => {
   jest.setTimeout(10 * 60 * 2000); // 20 minutes
 
@@ -28,8 +28,8 @@ describe('token transfer test', () => {
   const ROUNDS = 1n;
 
   let testAccounts: TestAccounts;
+  let wallet: TestWallet;
   const forwardProcesses: ChildProcess[] = [];
-  let pxe: PXE;
   let cleanup: undefined | (() => Promise<void>);
 
   afterAll(async () => {
@@ -43,10 +43,16 @@ describe('token transfer test', () => {
     forwardProcesses.push(aztecRpcProcess);
     const rpcUrl = `http://127.0.0.1:${aztecRpcPort}`;
 
-    ({ pxe, cleanup } = await startCompatiblePXE(rpcUrl, config.REAL_VERIFIER, logger));
+    const {
+      wallet: _wallet,
+      aztecNode,
+      cleanup: _cleanup,
+    } = await createWalletAndAztecNodeClient(rpcUrl, config.REAL_VERIFIER, logger);
+    cleanup = _cleanup;
+    wallet = _wallet;
 
     // Setup wallets
-    testAccounts = await deploySponsoredTestAccounts(pxe, MINT_AMOUNT, logger);
+    testAccounts = await deploySponsoredTestAccountsWithTokens(wallet, aztecNode, MINT_AMOUNT, logger);
 
     expect(ROUNDS).toBeLessThanOrEqual(MINT_AMOUNT);
   });
@@ -76,50 +82,21 @@ describe('token transfer test', () => {
         .simulate({ from: testAccounts.tokenAdminAddress }),
     );
 
-    // For each round, make both private and public transfers
-    // for (let i = 1n; i <= ROUNDS; i++) {
-    //   const interactions = await Promise.all([
-    //     ...testAccounts.wallets.map(async w =>
-    //       (
-    //         await TokenContract.at(testAccounts.tokenAddress, w)
-    //       ).methods.transfer_in_public(w.getAddress(), recipient, transferAmount, 0),
-    //     ),
-    //   ]);
-
-    //   const txs = await Promise.all(interactions.map(async i => await i.prove()));
-
-    //   await Promise.all(txs.map(t => t.send().wait({ timeout: 600 })));
-    // }
-
     const defaultAccountAddress = testAccounts.accounts[0];
 
-    const baseTx = await testAccounts.tokenContract.methods
-      .transfer_in_public(defaultAccountAddress, recipient, transferAmount, 0)
-      .prove({
-        from: testAccounts.tokenAdminAddress,
-        fee: { paymentMethod: new SponsoredFeePaymentMethod(await getSponsoredFPCAddress()) },
-      });
-
-    const txs: ProvenTx[] = [];
-    for (let i = 0; i < 20; i++) {
-      const clonedTxData = Tx.clone(baseTx);
-
-      // Modify the first nullifier to make it unique
-      const nullifiers = clonedTxData.data.getNonEmptyNullifiers();
-      if (nullifiers.length > 0) {
-        // Create a new nullifier by adding the index to the original
-        const newNullifier = nullifiers[0].add(Fr.fromString(i.toString()));
-        // Replace the first nullifier with our new unique one
-        if (clonedTxData.data.forRollup) {
-          clonedTxData.data.forRollup.end.nullifiers[0] = newNullifier;
-        } else if (clonedTxData.data.forPublic) {
-          clonedTxData.data.forPublic.nonRevertibleAccumulatedData.nullifiers[0] = newNullifier;
-        }
-      }
-
-      const clonedTx = new ProvenTx(testAccounts.wallet, clonedTxData, []);
-      txs.push(clonedTx);
-    }
+    const sponsor = new SponsoredFeePaymentMethod(await getSponsoredFPCAddress());
+    const txs: ProvenTx[] = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        proveInteraction(
+          wallet,
+          testAccounts.tokenContract.methods.transfer_in_public(defaultAccountAddress, recipient, transferAmount, 0),
+          {
+            from: testAccounts.tokenAdminAddress,
+            fee: { paymentMethod: sponsor },
+          },
+        ),
+      ),
+    );
 
     const sentTxs: SentTx[] = [];
 

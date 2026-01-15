@@ -1,7 +1,8 @@
 import type { FeePaymentMethod } from '@aztec/aztec.js/fee';
-import { ExecutionPayload } from '@aztec/entrypoints/payload';
 import { FunctionSelector, FunctionType } from '@aztec/stdlib/abi';
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
+import type { GasSettings } from '@aztec/stdlib/gas';
+import { ExecutionPayload } from '@aztec/stdlib/tx';
 
 /**
  * A fee payment method that uses a contract that blindly sponsors transactions.
@@ -26,6 +27,7 @@ export class SponsoredFeePaymentMethod implements FeePaymentMethod {
           to: this.paymentContract,
           selector: await FunctionSelector.fromSignature('sponsor_unconditionally()'),
           type: FunctionType.PRIVATE,
+          hideMsgSender: false,
           isStatic: false,
           args: [],
           returnTypes: [],
@@ -33,6 +35,12 @@ export class SponsoredFeePaymentMethod implements FeePaymentMethod {
       ],
       [],
       [],
+      [],
+      this.paymentContract, // feePayer
     );
+  }
+
+  getGasSettings(): GasSettings | undefined {
+    return;
   }
 }

@@ -1,20 +1,23 @@
 import type { AztecNodeService } from '@aztec/aztec-node';
-import { EthAddress, type Logger, createLogger, retryUntil } from '@aztec/aztec.js';
+import { EthAddress } from '@aztec/aztec.js/addresses';
+import { type Logger, createLogger } from '@aztec/aztec.js/log';
+import { createExtendedL1Client } from '@aztec/ethereum/client';
+import {
+  EmpireSlashingProposerContract,
+  RollupContract,
+  TallySlashingProposerContract,
+} from '@aztec/ethereum/contracts';
+import { L1Deployer } from '@aztec/ethereum/deploy-l1-contracts';
 import {
   EmpireSlashingProposerArtifact,
-  EmpireSlashingProposerContract,
-  type ExtendedViemWalletClient,
-  L1Deployer,
-  L1TxUtils,
-  RollupContract,
   SlasherArtifact,
   TallySlashingProposerArtifact,
-  TallySlashingProposerContract,
-  createExtendedL1Client,
-  createL1TxUtilsFromViemWallet,
-} from '@aztec/ethereum';
+} from '@aztec/ethereum/l1-artifacts';
+import { L1TxUtils, createL1TxUtilsFromViemWallet } from '@aztec/ethereum/l1-tx-utils';
+import type { ExtendedViemWalletClient } from '@aztec/ethereum/types';
 import { tryJsonStringify } from '@aztec/foundation/json-rpc';
 import { promiseWithResolvers } from '@aztec/foundation/promise';
+import { retryUntil } from '@aztec/foundation/retry';
 import { bufferToHex } from '@aztec/foundation/string';
 import { GSEAbi } from '@aztec/l1-artifacts/GSEAbi';
 import { RollupAbi } from '@aztec/l1-artifacts/RollupAbi';
@@ -112,7 +115,10 @@ describe('veto slash', () => {
       t.ctx.aztecNodeConfig.l1RpcUrls,
       bufferToHex(getPrivateKeyFromIndex(VETOER_PRIVATE_KEY_INDEX)!),
     );
-    vetoerL1TxUtils = createL1TxUtilsFromViemWallet(vetoerL1Client, t.logger, t.ctx.dateProvider);
+    vetoerL1TxUtils = createL1TxUtilsFromViemWallet(vetoerL1Client, {
+      logger: t.logger,
+      dateProvider: t.ctx.dateProvider,
+    });
 
     ({ rollup } = await t.getContracts());
 
@@ -158,7 +164,7 @@ describe('veto slash', () => {
     const vetoer = deployerClient.account.address;
     const governance = EthAddress.random().toString(); // We don't need a real governance address for this test
     debugLogger.info(`\n\ndeploying slasher with vetoer: ${vetoer}\n\n`);
-    const slasher = await deployer.deploy(SlasherArtifact, [vetoer, governance, 3600n]);
+    const slasher = (await deployer.deploy(SlasherArtifact, [vetoer, governance, 3600n])).address;
     await deployer.waitForDeployments();
 
     let proposer: EthAddress;
@@ -172,7 +178,7 @@ describe('veto slash', () => {
         BigInt(EXECUTION_DELAY_IN_ROUNDS),
       ] as const;
       debugLogger.info(`\n\ndeploying empire slasher proposer with args: ${tryJsonStringify(proposerArgs)}\n\n`);
-      proposer = await deployer.deploy(EmpireSlashingProposerArtifact, proposerArgs);
+      proposer = (await deployer.deploy(EmpireSlashingProposerArtifact, proposerArgs)).address;
     } else if (slasherType === 'tally') {
       const proposerArgs = [
         rollup.address, // instance
@@ -187,13 +193,16 @@ describe('veto slash', () => {
         BigInt(SLASH_OFFSET_IN_ROUNDS),
       ] as const;
       debugLogger.info(`\n\ndeploying tally slasher proposer with args: ${tryJsonStringify(proposerArgs)}\n\n`);
-      proposer = await deployer.deploy(TallySlashingProposerArtifact, proposerArgs);
+      proposer = (await deployer.deploy(TallySlashingProposerArtifact, proposerArgs)).address;
     } else {
       throw new Error(`Unknown slasher type: ${slasherType}`);
     }
 
     debugLogger.info(`\n\ninitializing slasher with proposer: ${proposer}\n\n`);
-    const txUtils = createL1TxUtilsFromViemWallet(deployerClient, t.logger, t.ctx.dateProvider);
+    const txUtils = createL1TxUtilsFromViemWallet(deployerClient, {
+      logger: t.logger,
+      dateProvider: t.ctx.dateProvider,
+    });
     await txUtils.sendAndMonitorTransaction({
       to: slasher.toString(),
       data: encodeFunctionData({

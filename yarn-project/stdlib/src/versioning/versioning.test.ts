@@ -1,5 +1,6 @@
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { EthAddress } from '@aztec/foundation/eth-address';
-import { Fr } from '@aztec/foundation/fields';
 import { createSafeJsonRpcClient } from '@aztec/foundation/json-rpc/client';
 import { type JsonRpcTestContext, createJsonRpcTestSetup } from '@aztec/foundation/json-rpc/test';
 
@@ -23,7 +24,7 @@ describe('versioning', () => {
       l1ChainId: 1,
       l1RollupAddress: EthAddress.random(),
       rollupVersion: 3,
-      l2ProtocolContractsTreeRoot: Fr.random().toString(),
+      l2ProtocolContractsHash: Fr.random().toString(),
       l2CircuitsVkTreeRoot: Fr.random().toString(),
     };
   });
@@ -62,11 +63,11 @@ describe('versioning', () => {
         l1ChainId: 1,
         l1RollupAddress: EthAddress.random(),
         rollupVersion: undefined,
-        l2ProtocolContractsTreeRoot: Fr.random().toString(),
+        l2ProtocolContractsHash: Fr.random().toString(),
         l2CircuitsVkTreeRoot: Fr.random().toString(),
       };
 
-      const handler = { get: () => Promise.resolve(1) };
+      const handler = { get: () => Promise.resolve(BlockNumber(1)) };
       context = await createJsonRpcTestSetup<TestApi>(
         handler,
         TestApiSchema,
@@ -81,7 +82,7 @@ describe('versioning', () => {
 
     it('passes versioning headers', async () => {
       const result = await context.client.get();
-      expect(result).toBe(1);
+      expect(result).toBe(BlockNumber(1));
     });
 
     it('throws on mismatch', async () => {
@@ -95,14 +96,54 @@ describe('versioning', () => {
       const client = createSafeJsonRpcClient(context.url, TestApiSchema, {
         onResponse: getVersioningResponseHandler({ ...versions, rollupVersion: 5 }),
       });
-      expect(await client.get()).toEqual(1);
+      expect(await client.get()).toEqual(BlockNumber(1));
     });
 
     it('passes if missing on client', async () => {
       const client = createSafeJsonRpcClient(context.url, TestApiSchema, {
         onResponse: getVersioningResponseHandler({ ...versions, l1ChainId: undefined }),
       });
-      expect(await client.get()).toEqual(1);
+      expect(await client.get()).toEqual(BlockNumber(1));
+    });
+
+    it('throws ComponentsVersionsError on version mismatch even when request causes validation error', async () => {
+      // Create a schema that expects a string parameter
+      type TestApiWithParam = { getWithParam: (value: string) => Promise<number> };
+      const TestApiWithParamSchema: ApiSchemaFor<TestApiWithParam> = {
+        getWithParam: z.function().args(z.string()).returns(z.number()),
+      };
+
+      // Server handler with correct version
+      const handler = { getWithParam: (value: string) => Promise.resolve(value.length) };
+      const serverContext = await createJsonRpcTestSetup<TestApiWithParam>(
+        handler,
+        TestApiWithParamSchema,
+        { middlewares: [getVersioningMiddleware(versions)] },
+        {},
+      );
+
+      try {
+        // Client with mismatched version - should throw ComponentsVersionsError
+        // even if the request would cause a Zod validation error
+        const client = createSafeJsonRpcClient(serverContext.url, TestApiWithParamSchema, {
+          onResponse: getVersioningResponseHandler({ ...versions, l1ChainId: 999 }),
+        });
+
+        // Send a request that would normally cause a Zod error (passing number instead of string)
+        // But we should get a version mismatch error instead of a Zod validation error
+        try {
+          await (client.getWithParam as any)(123);
+          fail('Expected error to be thrown');
+        } catch (err: any) {
+          // Verify we get a version error, not a Zod validation error
+          expect(err.message).toMatch(/Expected component version/);
+          expect(err.message).toMatch(/l1ChainId/);
+          expect(err.message).not.toMatch(/validation/i);
+          expect(err.name).toBe('ComponentsVersionsError');
+        }
+      } finally {
+        serverContext.httpServer.close();
+      }
     });
   });
 });

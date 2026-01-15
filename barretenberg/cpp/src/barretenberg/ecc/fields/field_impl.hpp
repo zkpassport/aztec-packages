@@ -7,7 +7,6 @@
 #pragma once
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/common/bb_bench.hpp"
-#include "barretenberg/common/slab_allocator.hpp"
 #include "barretenberg/common/throw_or_abort.hpp"
 #include "barretenberg/numeric/bitop/get_msb.hpp"
 #include "barretenberg/numeric/random/engine.hpp"
@@ -378,25 +377,36 @@ template <class T> constexpr field<T> field<T>::pow(const uint64_t exponent) con
 template <class T> constexpr field<T> field<T>::invert() const noexcept
 {
     if (*this == zero()) {
-        throw_or_abort("Trying to invert zero in the field");
+        bb::assert_failure("Trying to invert zero in the field");
     }
     return pow(modulus_minus_two);
 }
 
+// TODO(https://github.com/AztecProtocol/barretenberg/issues/1166)
 template <class T> void field<T>::batch_invert(field* coeffs, const size_t n) noexcept
 {
     batch_invert(std::span{ coeffs, n });
 }
 
-// TODO(https://github.com/AztecProtocol/barretenberg/issues/1166)
 template <class T> void field<T>::batch_invert(std::span<field> coeffs) noexcept
+{
+    batch_invert<decltype(coeffs)>(coeffs);
+}
+
+template <class T>
+template <typename C>
+    requires requires(C& c) {
+        { c.size() } -> std::convertible_to<size_t>;
+        { c[0] };
+    }
+void field<T>::batch_invert(C& coeffs) noexcept
 {
     const size_t n = coeffs.size();
 
-    auto temporaries_ptr = std::static_pointer_cast<field[]>(get_mem_slab(n * sizeof(field)));
-    auto skipped_ptr = std::static_pointer_cast<bool[]>(get_mem_slab(n));
-    auto temporaries = temporaries_ptr.get();
-    auto* skipped = skipped_ptr.get();
+    std::vector<field> temporaries;
+    std::vector<bool> skipped;
+    temporaries.reserve(n);
+    skipped.reserve(n);
 
     field accumulator = one();
     for (size_t i = 0; i < n; ++i) {
@@ -566,7 +576,9 @@ template <class T> constexpr field<T> field<T>::tonelli_shanks_sqrt() const noex
             }
         }
 
-        ASSERT_IN_CONSTEXPR(count != table_size);
+        if (count == table_size) {
+            bb::assert_failure("Tonelli-Shanks: count == table_size");
+        }
         e_slices[table_index] = count;
     }
 

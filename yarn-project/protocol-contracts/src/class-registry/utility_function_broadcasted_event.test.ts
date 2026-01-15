@@ -1,5 +1,5 @@
-import { randomBytes } from '@aztec/foundation/crypto';
-import { Fr } from '@aztec/foundation/fields';
+import { randomBytes } from '@aztec/foundation/crypto/random';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import type { Tuple } from '@aztec/foundation/serialize';
 import { setupCustomSnapshotSerializers } from '@aztec/foundation/testing';
 import { FunctionSelector } from '@aztec/stdlib/abi';
@@ -22,7 +22,7 @@ describe('UtilityFunctionBroadcastedEvent', () => {
   });
 
   it('filters out zero-elements at the end of the artifact tree sibling path', () => {
-    const siblingPath: Tuple<Fr, 5> = [Fr.ZERO, new Fr(1), Fr.ZERO, new Fr(2), Fr.ZERO];
+    const siblingPath: Tuple<Fr, 7> = [Fr.ZERO, new Fr(1), Fr.ZERO, new Fr(2), Fr.ZERO, new Fr(3), Fr.ZERO];
     const event = new UtilityFunctionBroadcastedEvent(
       Fr.random(),
       Fr.random(),
@@ -32,6 +32,6 @@ describe('UtilityFunctionBroadcastedEvent', () => {
       new BroadcastedUtilityFunction(FunctionSelector.random(), Fr.random(), randomBytes(32)),
     );
     const filtered = event.toFunctionWithMembershipProof().artifactTreeSiblingPath;
-    expect(filtered).toEqual([Fr.ZERO, new Fr(1), Fr.ZERO, new Fr(2)]);
+    expect(filtered).toEqual([Fr.ZERO, new Fr(1), Fr.ZERO, new Fr(2), Fr.ZERO, new Fr(3)]);
   });
 });

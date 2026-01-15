@@ -1,4 +1,4 @@
-import { type L1ReaderConfig, l1ReaderConfigMappings } from '@aztec/ethereum';
+import { type L1ReaderConfig, l1ReaderConfigMappings } from '@aztec/ethereum/l1-reader';
 import {
   type ConfigMappingsType,
   booleanConfigHelper,
@@ -22,9 +22,9 @@ export const ProverBrokerConfig = z.object({
   /** If starting a prover broker locally, the directory to store broker data */
   dataDirectory: z.string().optional(),
   /** The size of the data store map */
-  dataStoreMapSizeKB: z.number().int().nonnegative(),
-  /** The size of the prover broker's database. Will override the dataStoreMapSizeKB if set. */
-  proverBrokerStoreMapSizeKB: z.number().int().nonnegative().optional(),
+  dataStoreMapSizeKb: z.number().int().nonnegative(),
+  /** The size of the prover broker's database. Will override the dataStoreMapSizeKb if set. */
+  proverBrokerStoreMapSizeKb: z.number().int().nonnegative().optional(),
   /** The prover broker may batch jobs together before writing to the database */
   proverBrokerBatchSize: z.number().int().nonnegative(),
   /** How often the job batches get flushed */
@@ -34,7 +34,7 @@ export const ProverBrokerConfig = z.object({
 });
 
 export type ProverBrokerConfig = z.infer<typeof ProverBrokerConfig> &
-  Pick<DataStoreConfig, 'dataStoreMapSizeKB' | 'dataDirectory'> &
+  Pick<DataStoreConfig, 'dataStoreMapSizeKb' | 'dataDirectory'> &
   L1ReaderConfig &
   Pick<ChainConfig, 'rollupVersion'>;
 
@@ -69,10 +69,10 @@ export const proverBrokerConfigMappings: ConfigMappingsType<ProverBrokerConfig> 
     description: 'The maximum number of epochs to keep results for',
     ...numberConfigHelper(1),
   },
-  proverBrokerStoreMapSizeKB: {
+  proverBrokerStoreMapSizeKb: {
     env: 'PROVER_BROKER_STORE_MAP_SIZE_KB',
     parseEnv: (val: string | undefined) => (val ? +val : undefined),
-    description: "The size of the prover broker's database. Will override the dataStoreMapSizeKB if set.",
+    description: "The size of the prover broker's database. Will override the dataStoreMapSizeKb if set.",
   },
   ...dataConfigMappings,
   ...l1ReaderConfigMappings,
@@ -98,6 +98,8 @@ export const ProverAgentConfig = z.object({
   proverTestDelayMs: z.number(),
   /** If using realistic delays, what percentage of realistic times to apply. */
   proverTestDelayFactor: z.number(),
+  /** The delay (ms) to inject during fake proof verification */
+  proverTestVerificationDelayMs: z.number().optional(),
 });
 
 export type ProverAgentConfig = z.infer<typeof ProverAgentConfig>;
@@ -145,5 +147,10 @@ export const proverAgentConfigMappings: ConfigMappingsType<ProverAgentConfig> = 
     env: 'PROVER_TEST_DELAY_FACTOR',
     description: 'If using realistic delays, what percentage of realistic times to apply.',
     ...numberConfigHelper(1),
+  },
+  proverTestVerificationDelayMs: {
+    env: 'PROVER_TEST_VERIFICATION_DELAY_MS',
+    description: 'The delay (ms) to inject during fake proof verification',
+    ...numberConfigHelper(10),
   },
 };

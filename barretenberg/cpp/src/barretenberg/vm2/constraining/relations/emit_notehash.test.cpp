@@ -7,6 +7,7 @@
 #include "barretenberg/vm2/constraining/flavor_settings.hpp"
 #include "barretenberg/vm2/constraining/testing/check_relation.hpp"
 #include "barretenberg/vm2/generated/relations/execution.hpp"
+#include "barretenberg/vm2/simulation/gadgets/note_hash_tree_check.hpp"
 #include "barretenberg/vm2/simulation/lib/merkle.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_merkle_check.hpp"
 #include "barretenberg/vm2/simulation/testing/mock_note_hash_tree_check.hpp"
@@ -125,7 +126,7 @@ TEST(EmitNoteHashConstrainingTest, Interactions)
 
     AppendOnlyTreeSnapshot prev_snapshot = AppendOnlyTreeSnapshot{
         .root = 27,
-        .nextAvailableLeafIndex = 128,
+        .next_available_leaf_index = 128,
     };
     uint32_t prev_num_note_hashes_emitted = 2;
 
@@ -146,8 +147,8 @@ TEST(EmitNoteHashConstrainingTest, Interactions)
         { C::execution_num_note_hashes_emitted, prev_num_note_hashes_emitted + 1 },
         { C::execution_prev_note_hash_tree_root, prev_snapshot.root },
         { C::execution_note_hash_tree_root, next_snapshot.root },
-        { C::execution_prev_note_hash_tree_size, prev_snapshot.nextAvailableLeafIndex },
-        { C::execution_note_hash_tree_size, next_snapshot.nextAvailableLeafIndex },
+        { C::execution_prev_note_hash_tree_size, prev_snapshot.next_available_leaf_index },
+        { C::execution_note_hash_tree_size, next_snapshot.next_available_leaf_index },
         { C::execution_contract_address, contract_address },
     } });
 

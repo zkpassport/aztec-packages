@@ -7,6 +7,7 @@ import ListSubheader from '@mui/material/ListSubheader';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import CircularProgress from '@mui/material/CircularProgress';
 import Typography from '@mui/material/Typography';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { CopyToClipboardButton } from '../../common/CopyToClipboardButton';
 import {
   convertFromUTF8BufferAsString,
@@ -15,7 +16,8 @@ import {
 } from '../../../utils/conversion';
 import { PREDEFINED_CONTRACTS } from '../../../utils/types';
 import { AztecContext } from '../../../aztecContext';
-import { AztecAddress, loadContractArtifact } from '@aztec/aztec.js';
+import { loadContractArtifact } from '@aztec/aztec.js/abi';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
 import { parse } from 'buffer-json';
 import { navbarButtonStyle, navbarSelect, navbarSelectLabel } from '../../../styles/common';
 import { filterDeployedAliasedContracts } from '../../../utils/contracts';
@@ -136,6 +138,7 @@ export function ContractSelector() {
           onOpen={() => setIsOpen(true)}
           onClose={() => setIsOpen(false)}
           onChange={handleContractChange}
+          IconComponent={KeyboardArrowDownIcon}
           fullWidth
           renderValue={selected => {
             const contract = contracts.find(contract => contract.item === selected);
@@ -148,6 +151,19 @@ export function ContractSelector() {
             return selected ?? 'Select Contract';
           }}
           disabled={isContractsLoading}
+          MenuProps={{
+            disableScrollLock: true,
+            PaperProps: {
+              sx: {
+                width: '300px',
+                marginLeft: '-12px',
+                '@media (max-width: 900px)': {
+                  width: '100vw',
+                  marginLeft: 0,
+                },
+              },
+            },
+          }}
         >
           {(!playgroundDB || !wallet) && (
             <div css={navbarSelectLabel}>

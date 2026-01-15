@@ -1,82 +1,65 @@
-import { BLS12Point, Fr } from '@aztec/foundation/fields';
+import { commitmentToFields, computeBlobFieldsHash, encodeCheckpointEndMarker } from '@aztec/blob-lib';
+import { MAX_U32_VALUE } from '@aztec/constants';
+import { Fr } from '@aztec/foundation/curves/bn254';
+import { toInlineStrArray } from '@aztec/foundation/testing';
 import { updateInlineTestData } from '@aztec/foundation/testing/files';
-import { getBlockBlobFields } from '@aztec/stdlib/block';
-import { TxEffect, TxHash } from '@aztec/stdlib/tx';
 
-import { buildBlobHints, getEmptyBlockBlobsHash } from './block-building-helpers.js';
+import { buildBlobHints } from './block-building-helpers.js';
 
-function fieldArrToStr(arr: Fr[]) {
-  return `[${arr.map(f => (f.isZero() ? '0' : f.toString())).join(', ')}]`;
-}
 describe('buildBlobHints', () => {
-  it('correctly builds hints for empty blob fields', async () => {
-    const { blobCommitments, blobsHash, blobs } = await buildBlobHints([]);
-    expect(blobCommitments.length).toBe(1);
-    const blobCommitmentStr = blobCommitments[0].compress().toString('hex');
-    expect(blobCommitmentStr).toEqual(BLS12Point.COMPRESSED_ZERO.toString('hex'));
+  it('correctly builds hints for 1 blob', async () => {
+    const blobFieldsWithoutEndMarker = Array.from({ length: 5 }, (_, i) => new Fr((i + 123) * MAX_U32_VALUE));
 
-    expect(await getEmptyBlockBlobsHash()).toEqual(blobsHash);
-    const blobsHashStr = blobsHash.toString();
-    expect(blobsHashStr).toMatchInlineSnapshot(`"0x001cedbd7ea5309ef9d1d159209835409bf41b6b1802597a52fa70cc82e934d9"`);
+    // The fixtures are used in the checkpoint root rollup tests.
+    // It expects the last field to be the checkpoint end marker.
+    const blobFields = blobFieldsWithoutEndMarker.concat([
+      encodeCheckpointEndMarker({ numBlobFields: blobFieldsWithoutEndMarker.length + 1 }),
+    ]);
+
+    const { blobCommitments, blobsHash, blobs } = buildBlobHints(blobFields);
 
     expect(blobs.length).toBe(1);
-    expect(blobs[0].evaluate().y).toEqual(Buffer.alloc(32));
-    const zStr = blobs[0].challengeZ.toString();
-    expect(zStr).toMatchInlineSnapshot(`"0x0ac4f3ee53aedc4865073ae7fb664e7401d10eadbe3bbcc266c35059f14826bb"`);
-  });
-
-  it('correctly builds hints for non-empty blob fields', async () => {
-    const txEffect0 = TxEffect.empty();
-    txEffect0.txHash = new TxHash(new Fr(42));
-    txEffect0.nullifiers[0] = new Fr(0x123);
-    const txEffect1 = TxEffect.empty();
-    txEffect1.txHash = new TxHash(new Fr(43));
-    txEffect1.noteHashes[0] = new Fr(0x6789);
-    txEffect1.nullifiers[0] = new Fr(0x45);
-    const blobFields = getBlockBlobFields([txEffect0, txEffect1]);
-    const { blobCommitments, blobsHash, blobs } = await buildBlobHints(blobFields);
-
-    const blobFields0Str = fieldArrToStr(blobFields.slice(0, 5));
-    const blobFields1Str = fieldArrToStr(blobFields.slice(5, -1));
-    expect(blobFields.length).toBe(5 + 7 + 1);
+    const onlyBlob = blobs[0];
 
     expect(blobCommitments.length).toBe(1);
-    const blobCommitmentStr = blobCommitments[0].compress().toString('hex');
+    const blobCommitmentsFields = commitmentToFields(onlyBlob.commitment);
+    expect(blobCommitmentsFields).toEqual(blobCommitments[0].toBN254Fields());
+    const blobCommitmentStr = onlyBlob.commitment.toString('hex');
     expect(blobCommitmentStr).toMatchInlineSnapshot(
-      `"b6a72d9aa6fb01ee6a0dd8a53a734dc499bbe6f88b6b43380878a643b1735825a3a664e9ae3ca778116790bcf988457c"`,
+      `"b6e7a457a8799e584eeac804e0e01d8bc4e1d159ac2a801309b22d1612691ecc97d31a330b5cd07fc78df6ffe5c7c4d6"`,
     );
 
     const blobsHashStr = blobsHash.toString();
-    expect(blobsHashStr).toMatchInlineSnapshot(`"0x0099cbfdd6f70f6e0f26f4462998aaadd7c3e36e07b67891d544f0513b3e870d"`);
+    expect(blobsHashStr).toMatchInlineSnapshot(`"0x0098b965ae031d8ee91534cdd87a14d0edb804397e31ae1daf0ea27fa9c502b9"`);
 
-    expect(blobs.length).toBe(1);
-    expect(blobs[0].evaluate().y.toString('hex')).toMatchInlineSnapshot(
-      `"6ce7b00c406888c4967abe3108e2387aba885229cccbfbb03981781e08525053"`,
-    );
-    const zStr = blobs[0].challengeZ.toString();
-    expect(zStr).toMatchInlineSnapshot(`"0x1d7ceb7a6a43b63cd57ba894701c9aa5f2f2e6f55aa93200ca95616572eddf56"`);
+    const blobFieldsHash = await computeBlobFieldsHash(blobFields);
+    const challengeZ = await onlyBlob.computeChallengeZ(blobFieldsHash);
+    const zStr = challengeZ.toString();
+    expect(zStr).toMatchInlineSnapshot(`"0x214fde23666780cf52da41db2ce5ac67b74907efeecfb183c477063859fd8e4b"`);
 
-    const blobCommitmentsFields = blobCommitments[0].toBN254Fields();
+    const proof = onlyBlob.evaluate(challengeZ, true /* verifyProof */);
+    const yStr = proof.y.toString();
+    expect(yStr).toMatchInlineSnapshot(`"0x058c570b7d2911810e7e797a8c242928751ce2385a6591f9884e32b60c27482c"`);
 
     // Run with AZTEC_GENERATE_TEST_DATA=1 to update noir test data.
     updateInlineTestData(
-      'noir-projects/noir-protocol-circuits/crates/rollup-lib/src/checkpoint_root/checkpoint_root_rollup_private_inputs.nr',
-      'blob_fields_0',
-      blobFields0Str,
+      'noir-projects/noir-protocol-circuits/crates/rollup-lib/src/checkpoint_root/tests/blob_tests.nr',
+      'blob_fields_from_ts',
+      toInlineStrArray(blobFields),
     );
     updateInlineTestData(
-      'noir-projects/noir-protocol-circuits/crates/rollup-lib/src/checkpoint_root/checkpoint_root_rollup_private_inputs.nr',
-      'blob_fields_1',
-      blobFields1Str,
+      'noir-projects/noir-protocol-circuits/crates/rollup-lib/src/checkpoint_root/tests/blob_tests.nr',
+      'blob_commitment_limbs_x_from_ts',
+      toInlineStrArray(blobCommitments[0].x.toNoirBigNum().limbs),
     );
     updateInlineTestData(
-      'noir-projects/noir-protocol-circuits/crates/rollup-lib/src/checkpoint_root/checkpoint_root_rollup_private_inputs.nr',
-      'expected_blob_commitment_fields_fixture',
-      fieldArrToStr(blobCommitmentsFields),
+      'noir-projects/noir-protocol-circuits/crates/rollup-lib/src/checkpoint_root/tests/blob_tests.nr',
+      'blob_commitment_limbs_y_from_ts',
+      toInlineStrArray(blobCommitments[0].y.toNoirBigNum().limbs),
     );
     updateInlineTestData(
-      'noir-projects/noir-protocol-circuits/crates/rollup-lib/src/checkpoint_root/checkpoint_root_rollup_private_inputs.nr',
-      'expected_challenge_z_fixture',
+      'noir-projects/noir-protocol-circuits/crates/rollup-lib/src/checkpoint_root/tests/blob_tests.nr',
+      'challenge_z_from_ts',
       zStr,
     );
   });

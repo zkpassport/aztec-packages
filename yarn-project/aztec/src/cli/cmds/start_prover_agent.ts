@@ -45,10 +45,15 @@ export async function startProverAgent(
 
   await preloadCrsDataForServerSideProving(config, userLog);
 
-  const fetch = makeTracedFetch([1, 2, 3], false, makeUndiciFetch(new Agent({ connections: 10 })));
+  const fetch = makeTracedFetch(
+    // retry connections every 3s, up to 30s before giving up
+    [1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+    false,
+    makeUndiciFetch(new Agent({ connections: 10 })),
+  );
   const broker = createProvingJobBrokerClient(config.proverBrokerUrl, getVersions(), fetch);
 
-  const telemetry = initTelemetryClient(extractRelevantOptions(options, telemetryClientConfigMappings, 'tel'));
+  const telemetry = await initTelemetryClient(extractRelevantOptions(options, telemetryClientConfigMappings, 'tel'));
   const prover = await buildServerCircuitProver(config, telemetry);
   const proofStore = new InlineProofStore();
   const agents = times(

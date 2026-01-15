@@ -19,7 +19,7 @@ namespace bb {
  */
 template <typename BF> struct TranslationEvaluations_ {
     BF op, Px, Py, z1, z2;
-    static size_t size() { return field_conversion::calc_num_bn254_frs<BF>() * NUM_TRANSLATION_EVALUATIONS; }
+    static size_t size() { return (FrCodec::calc_num_fields<BF>()) * NUM_TRANSLATION_EVALUATIONS; }
 
     RefArray<BF, NUM_TRANSLATION_EVALUATIONS> get_all() { return { op, Px, Py, z1, z2 }; }
 
@@ -29,6 +29,18 @@ template <typename BF> struct TranslationEvaluations_ {
     ;
 
     MSGPACK_FIELDS(op, Px, Py, z1, z2);
+};
+
+/**
+ * @brief Data passed from ECCVM Verifier to Translator Verifier for verification
+ * @tparam FF The field type (either bb::fq or bigfield)
+ */
+template <typename FF> struct TranslatorInputData_ {
+    FF evaluation_challenge_x;
+    FF batching_challenge_v;
+    FF accumulated_result;
+
+    MSGPACK_FIELDS(evaluation_challenge_x, batching_challenge_v, accumulated_result);
 };
 
 /**

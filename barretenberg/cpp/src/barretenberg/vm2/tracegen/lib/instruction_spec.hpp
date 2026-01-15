@@ -11,21 +11,23 @@
 
 namespace bb::avm2::tracegen {
 
+// Follows the order of the subtrace IDs (AVM_SUBTRACE_ID_*) in the constants_gen.pil file
 enum class SubtraceSel : uint8_t {
+    EXECUTION,
     ALU,
-    CAST,
-    SET,
     BITWISE,
-    TORADIXBE,
-    POSEIDON2PERM,
-    ECC,
+    CAST,
     CALLDATACOPY,
     RETURNDATACOPY,
-    EXECUTION,
-    KECCAKF1600,
+    SET,
     GETCONTRACTINSTANCE,
     EMITUNENCRYPTEDLOG,
-    SHA256COMPRESSION
+    POSEIDON2PERM,
+    SHA256COMPRESSION,
+    KECCAKF1600,
+    ECC,
+    TORADIXBE,
+    MAX = TORADIXBE, // Keep this at the end. Serves looping over all values.
 };
 
 struct SubtraceInfo {
@@ -33,7 +35,8 @@ struct SubtraceInfo {
     uint128_t subtrace_operation_id;
 };
 
-extern const std::unordered_map<ExecutionOpCode, SubtraceInfo> SUBTRACE_INFO_MAP;
+// Lazy-initialized function to avoid expensive startup initialization
+const std::unordered_map<ExecutionOpCode, SubtraceInfo>& get_subtrace_info_map();
 
 /**
  * @brief Get the subtrace ID for a given subtrace enum.

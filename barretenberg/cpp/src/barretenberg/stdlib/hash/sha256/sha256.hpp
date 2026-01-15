@@ -88,7 +88,7 @@ template <typename Builder> class SHA256 {
         sparse_value(const field_ct& in = 0)
         {
             normal = in;
-            if (normal.witness_index == IS_CONSTANT) {
+            if (normal.is_constant()) {
                 sparse = field_ct(in.get_context(),
                                   bb::fr(numeric::map_into_sparse_form<16>(uint256_t(in.get_value()).data[0])));
             }
@@ -120,7 +120,5 @@ template <typename Builder> class SHA256 {
                                                 const std::array<field_ct, 16>& input);
 
     static std::array<field_ct, 64> extend_witness(const std::array<field_ct, 16>& w_in);
-
-    static byte_array<Builder> hash(const byte_array_ct& input);
 };
 } // namespace bb::stdlib

@@ -4,43 +4,35 @@ use aztec::macros::aztec;
 #[aztec]
 pub contract Escrow {
     use aztec::{
-        macros::{functions::{initializer, private}, storage::storage},
+        macros::{functions::{external, initializer}, storage::storage},
         messages::message_delivery::MessageDelivery,
         protocol_types::address::AztecAddress,
-        state_vars::PrivateImmutable,
+        state_vars::SinglePrivateImmutable,
     };
 
-    // docs:start:addressnote_import
     use address_note::address_note::AddressNote;
-    // docs:end:addressnote_import
     use token::Token;
 
     #[storage]
     struct Storage<Context> {
-        owner: PrivateImmutable<AddressNote, Context>,
+        owner: SinglePrivateImmutable<AddressNote, Context>,
     }
 
     // Creates a new instance
-    #[private]
+    #[external("private")]
     #[initializer]
     fn constructor(owner: AztecAddress) {
-        // docs:start:addressnote_new
-        let note = AddressNote::new(owner, owner);
-        // docs:end:addressnote_new
-        storage.owner.initialize(note).emit(&mut context, owner, MessageDelivery.CONSTRAINED_ONCHAIN);
+        let note = AddressNote { address: owner };
+        self.storage.owner.initialize(note).deliver(MessageDelivery.CONSTRAINED_ONCHAIN);
     }
 
-    // docs:start:withdraw
     // Withdraws balance. Requires that msg.sender is the owner.
-    #[private]
+    #[external("private")]
     fn withdraw(token: AztecAddress, amount: u128, recipient: AztecAddress) {
-        let sender = context.msg_sender();
+        let sender = self.msg_sender().unwrap();
 
-        let note = storage.owner.get_note();
-        assert(note.get_address() == sender);
-        // docs:start:call_function
-        Token::at(token).transfer(recipient, amount).call(&mut context);
-        // docs:end:call_function
+        let note = self.storage.owner.get_note();
+        assert(note.address == sender);
+        self.call(Token::at(token).transfer(recipient, amount));
     }
-    // docs:end:withdraw
 }

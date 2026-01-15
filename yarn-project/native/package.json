@@ -6,28 +6,24 @@
     ".": "./dest/index.js"
   },
   "scripts": {
-    "build": "yarn clean && yarn generate && tsc -b",
-    "build:dev": "tsc -b --watch",
-    "build:cpp": "PROJECT=$(pwd); cd $(git rev-parse --show-toplevel)/barretenberg/cpp; cmake --preset ${PRESET:-clang16-pic} && cmake --build --preset ${PRESET:-clang16-pic} --target nodejs_module && cd $PROJECT && yarn generate",
-    "clean:cpp": "rm -rf $(git rev-parse --show-toplevel)/barretenberg/cpp/build-pic",
+    "build": "yarn clean && ../scripts/tsc.sh",
+    "build:dev": "../scripts/tsc.sh --watch",
     "clean": "rm -rf ./dest .tsbuildinfo",
-    "test": "NODE_NO_WARNINGS=1 node --experimental-vm-modules ../node_modules/.bin/jest --passWithNoTests --maxWorkers=${JEST_MAX_WORKERS:-8}",
-    "generate": "mkdir -p build && cp -v $(git rev-parse --show-toplevel)/barretenberg/cpp/build-pic/lib/nodejs_module.node build"
+    "test": "NODE_NO_WARNINGS=1 node --experimental-vm-modules ../node_modules/.bin/jest --passWithNoTests --maxWorkers=${JEST_MAX_WORKERS:-8}"
   },
   "inherits": [
-    "../package.common.json",
-    "./package.local.json"
+    "../package.common.json"
   ],
   "dependencies": {
+    "@aztec/bb.js": "workspace:^",
     "@aztec/foundation": "workspace:^",
-    "bindings": "^1.5.0",
     "msgpackr": "^1.11.2"
   },
   "devDependencies": {
     "@jest/globals": "^30.0.0",
-    "@types/bindings": "^1.5.5",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.15.17",
+    "@typescript/native-preview": "7.0.0-dev.20251126.1",
     "jest": "^30.0.0",
     "ts-node": "^10.9.1",
     "typescript": "^5.3.3"
@@ -35,6 +31,7 @@
   "files": [
     "dest",
     "src",
+    "build",
     "!*.test.*"
   ],
   "engines": {

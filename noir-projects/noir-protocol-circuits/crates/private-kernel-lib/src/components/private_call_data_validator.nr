@@ -1,85 +1,19 @@
 pub(crate) mod find_index_of_first_fully_revertible_private_call_request;
 mod validate_contract_address;
-mod validate_min_revertible_side_effect_counter;
+pub(crate) mod validate_side_effect_counters;
 
 use dep::types::{
     abis::{
         kernel_circuit_public_inputs::PrivateKernelCircuitPublicInputs,
         private_call_request::PrivateCallRequest,
-        private_kernel::private_call_data::PrivateCallData,
-        public_call_request::PublicCallRequest,
-        side_effect::{Ordered, RangeOrdered},
-        transaction::tx_request::TxRequest,
+        private_kernel::private_call_data::PrivateCallData, protocol_contracts::ProtocolContracts,
+        public_call_request::PublicCallRequest, transaction::tx_request::TxRequest,
     },
-    address::AztecAddress,
-    constants::{
-        CONTRACT_CLASS_LOG_SIZE_IN_FIELDS, CONTRACT_CLASS_REGISTRY_CONTRACT_ADDRESS,
-        MAX_FIELD_VALUE, PRIVATE_LOG_SIZE_IN_FIELDS,
-    },
-    traits::FromField,
-    utils::arrays::ClaimedLengthArray,
+    constants::NULL_MSG_SENDER_CONTRACT_ADDRESS,
+    traits::Empty,
 };
 use validate_contract_address::validate_contract_address;
-use validate_min_revertible_side_effect_counter::validate_that_this_call_doesnt_try_to_set_a_phase_change_within_a_child_calls_execution_frame;
-
-fn validate_incrementing_counters_within_range<T, let N: u32>(
-    counter_start: u32,
-    counter_end: u32,
-    items: ClaimedLengthArray<T, N>,
-)
-where
-    T: Ordered,
-{
-    let num_items = items.length;
-    let mut prev_counter = counter_start;
-    let mut should_check = true;
-
-    for i in 0..N {
-        should_check &= i != num_items;
-        if should_check {
-            let item = items.array[i];
-            assert(
-                item.counter() > prev_counter,
-                "counter must be larger than the counter of the previous item",
-            );
-            prev_counter = item.counter();
-        }
-    }
-    assert(prev_counter < counter_end, "counter must be smaller than the end counter of the call");
-}
-
-fn validate_incrementing_counter_ranges_within_range<T, let N: u32>(
-    counter_start: u32,
-    counter_end: u32,
-    items: ClaimedLengthArray<T, N>,
-)
-where
-    T: RangeOrdered,
-{
-    let num_items = items.length;
-    let mut prev_counter = counter_start;
-    let mut should_check = true;
-
-    for i in 0..N {
-        should_check &= i != num_items;
-        if should_check {
-            let item = items.array[i];
-            assert(
-                item.counter_start() > prev_counter,
-                "start counter must be larger than the end counter of the previous call",
-            );
-            assert(
-                item.counter_end() > item.counter_start(),
-                "nested call has incorrect counter range",
-            );
-            prev_counter = item.counter_end();
-        }
-    }
-    assert(
-        prev_counter < counter_end,
-        "end counter must be smaller than the end counter of the parent call",
-    );
-}
+use validate_side_effect_counters::validate_unique_and_within_bounds_side_effect_counters;
 
 pub struct PrivateCallDataValidator {
     data: PrivateCallData,
@@ -98,32 +32,41 @@ impl PrivateCallDataValidator {
 
     /// Validate properties of the PrivateCallData, which are "common" to both
     /// the Init and Inner circuits.
-    pub fn validate_common(self, protocol_contract_tree_root: Field) {
+    pub fn validate_common(self, protocol_contracts: ProtocolContracts) {
         // Validate that the vk exists within the called contract address:
-        validate_contract_address(self.data, protocol_contract_tree_root);
+        validate_contract_address(self.data, protocol_contracts);
 
         self.restrict_side_effects();
+        self.validate_claimed_lengths();
 
         self.validate_private_call_requests();
         self.validate_public_call_requests();
 
-        self.validate_that_side_effect_counters_are_strictly_increasing_and_within_bounds();
-        self.validate_log_lengths();
+        validate_unique_and_within_bounds_side_effect_counters(self.data.public_inputs);
     }
 
     /// For Init only.
-    /// Asserts: No static calls. No msg_sender.
-    pub fn validate_as_first_call(self) {
+    /// Asserts: No static calls. No msg_sender. Validate expected counters.
+    pub fn validate_as_first_call(self, claimed_revertible_counter: u32) {
         let public_inputs = self.data.public_inputs;
         let call_context = public_inputs.call_context;
 
         assert_eq(call_context.is_static_call, false, "Users cannot make a static call");
 
-        // Notice: msg_sender MUST be `-1` for the first function call in a tx.
+        // Notice: msg_sender MUST be "null" for the first function call in a tx.
         assert(
-            call_context.msg_sender == AztecAddress::from_field(MAX_FIELD_VALUE),
+            call_context.msg_sender == NULL_MSG_SENDER_CONTRACT_ADDRESS,
             "Users cannot set msg_sender in first call",
         );
+
+        // Side effect counter 1 is reserved for the protocol nullifier.
+        // Any subsequent call must start with a side effect counter > than the init one
+        assert(
+            public_inputs.start_side_effect_counter > 1,
+            "start_side_effect_counter must be greater than 1",
+        );
+
+        self.validate_expected_counters(claimed_revertible_counter);
     }
 
     /// For Init only.
@@ -206,6 +149,7 @@ impl PrivateCallDataValidator {
         );
         assert_eq(public_inputs.tx_context, constants.tx_context, "mismatch tx context");
         // constants.global_variables is not relevant to private functions and is ensured to be empty in PrivateKernelCircuitOutputValidator.
+        self.validate_expected_counters(previous_kernel.claimed_revertible_counter);
     }
 
     fn restrict_side_effects(self) {
@@ -215,8 +159,8 @@ impl PrivateCallDataValidator {
         // TODO: When we introduce a dedicated static_call kernel, we might want to consider disallowing static_calls to come through this circuit at all.
         if call_context.is_static_call {
             // No state changes are allowed for static calls.
-            // Note: Although a EmptyRHSArray usually gives weak guarantees, if its
-            // length is 0, then the array is _guaranteed_ to be empty.
+            // By checking that the length is zero, we ensure we won't process any items in the arrays.
+            // Garbage items could be present in the arrays after the length, but they won't exit the private kernels on tail.
             assert_eq(
                 self.data.public_inputs.note_hashes.length,
                 0,
@@ -243,21 +187,41 @@ impl PrivateCallDataValidator {
                 "contract_class_logs_hashes must be empty for static calls",
             );
         }
-
-        // TODO(#15092): consider removing this assertion.
-        // Would it be bad if we enabled other functions to emit these logs?
-        // Oh, maybe the AVM does stuff with those logs, with the presumption that they
-        // contain avm bytecode that needs to be validated by the avm?
-        if (self.data.public_inputs.contract_class_logs_hashes.length != 0) {
-            assert_eq(
-                call_context.contract_address,
-                CONTRACT_CLASS_REGISTRY_CONTRACT_ADDRESS,
-                "only the class registry may emit contract class logs",
-            );
-        }
     }
 
-    // TODO: Maybe we should loop once over each array. This will be the 2nd time we iterate over this array (the first time being the length validation).
+    fn validate_claimed_lengths(self) {
+        self.data.public_inputs.note_hash_read_requests.assert_length_within_bounds(
+            "note_hash_read_requests length out of bounds",
+        );
+        self.data.public_inputs.nullifier_read_requests.assert_length_within_bounds(
+            "nullifier_read_requests length out of bounds",
+        );
+        self.data.public_inputs.key_validation_requests_and_generators.assert_length_within_bounds(
+            "key_validation_requests_and_generators length out of bounds",
+        );
+        self.data.public_inputs.note_hashes.assert_length_within_bounds(
+            "note_hashes length out of bounds",
+        );
+        self.data.public_inputs.nullifiers.assert_length_within_bounds(
+            "nullifiers length out of bounds",
+        );
+        self.data.public_inputs.private_call_requests.assert_length_within_bounds(
+            "private_call_requests length out of bounds",
+        );
+        self.data.public_inputs.public_call_requests.assert_length_within_bounds(
+            "public_call_requests length out of bounds",
+        );
+        self.data.public_inputs.l2_to_l1_msgs.assert_length_within_bounds(
+            "l2_to_l1_msgs length out of bounds",
+        );
+        self.data.public_inputs.private_logs.assert_length_within_bounds(
+            "private_logs length out of bounds",
+        );
+        self.data.public_inputs.contract_class_logs_hashes.assert_length_within_bounds(
+            "contract_class_logs_hashes length out of bounds",
+        );
+    }
+
     fn validate_private_call_requests(self) {
         let public_inputs = self.data.public_inputs;
         let call_requests = public_inputs.private_call_requests;
@@ -280,12 +244,6 @@ impl PrivateCallDataValidator {
                 }
             }
         }
-
-        let min_revertible_side_effect_counter = public_inputs.min_revertible_side_effect_counter;
-        validate_that_this_call_doesnt_try_to_set_a_phase_change_within_a_child_calls_execution_frame(
-            min_revertible_side_effect_counter,
-            public_inputs.private_call_requests,
-        );
     }
 
     fn validate_public_call_requests(self) {
@@ -296,18 +254,30 @@ impl PrivateCallDataValidator {
         });
 
         // We also process the enqueued teardown call request:
-        if !public_inputs.public_teardown_call_request.contract_address.is_zero() {
+        if !public_inputs.public_teardown_call_request.is_empty() {
             self.validate_public_call_request(public_inputs.public_teardown_call_request);
         }
     }
 
     fn validate_public_call_request(self, call_request: PublicCallRequest) {
         let this_context = self.data.public_inputs.call_context;
-        assert_eq(
-            call_request.msg_sender,
-            this_context.contract_address,
-            "incorrect msg_sender for call request",
-        );
+
+        if call_request.msg_sender != NULL_MSG_SENDER_CONTRACT_ADDRESS {
+            // We assert that the caller's address is copied-over as the
+            // msg_sender of the called function (the call_request), with one
+            // exception:
+            // The calling contract can instead elect to set the msg_sender as
+            // the `NULL_MSG_SENDER_CONTRACT_ADDRESS`, so as not to leak to
+            // the world which address made the public call.
+            // It is up to the called public function to determine whether a
+            // "null" value is acceptable for its use case, and revert if not.
+            assert_eq(
+                call_request.msg_sender,
+                this_context.contract_address,
+                "incorrect msg_sender for call request",
+            );
+        }
+
         if !call_request.is_static_call {
             assert(
                 this_context.is_static_call == false,
@@ -316,81 +286,26 @@ impl PrivateCallDataValidator {
         }
     }
 
-    // Tested with validate_counters.nr
-    fn validate_that_side_effect_counters_are_strictly_increasing_and_within_bounds(self) {
-        let public_inputs = self.data.public_inputs;
-        let counter_start = public_inputs.start_side_effect_counter;
-        let counter_end = public_inputs.end_side_effect_counter;
+    fn validate_expected_counters(self, claimed_revertible_counter: u32) {
+        let expected_non_revertible_side_effect_counter =
+            self.data.public_inputs.expected_non_revertible_side_effect_counter;
+        let expected_revertible_side_effect_counter =
+            self.data.public_inputs.expected_revertible_side_effect_counter;
 
-        assert(counter_start < counter_end, "private call has incorrect counter range");
-
-        validate_incrementing_counters_within_range(
-            counter_start,
-            counter_end,
-            public_inputs.note_hash_read_requests,
-        );
-        validate_incrementing_counters_within_range(
-            counter_start,
-            counter_end,
-            public_inputs.nullifier_read_requests,
-        );
-        validate_incrementing_counters_within_range(
-            counter_start,
-            counter_end,
-            public_inputs.note_hashes,
-        );
-        validate_incrementing_counters_within_range(
-            counter_start,
-            counter_end,
-            public_inputs.nullifiers,
-        );
-        validate_incrementing_counters_within_range(
-            counter_start,
-            counter_end,
-            public_inputs.l2_to_l1_msgs,
-        );
-        validate_incrementing_counters_within_range(
-            counter_start,
-            counter_end,
-            public_inputs.private_logs,
-        );
-        validate_incrementing_counters_within_range(
-            counter_start,
-            counter_end,
-            public_inputs.contract_class_logs_hashes,
-        );
-        validate_incrementing_counter_ranges_within_range(
-            counter_start,
-            counter_end,
-            public_inputs.private_call_requests,
-        );
-
-        // Validate the public call requests by checking their start counters only, as their end counters are unknown.
-        validate_incrementing_counters_within_range(
-            counter_start,
-            counter_end,
-            public_inputs.public_call_requests,
-        );
-    }
-
-    fn validate_log_lengths(self) {
-        let public_inputs = self.data.public_inputs;
-
-        // Private logs.
-        let logs = public_inputs.private_logs;
-        for i in 0..logs.array.len() {
-            let log = logs.array[i];
-            assert(log.log.length <= PRIVATE_LOG_SIZE_IN_FIELDS, "private log length is too large");
-        }
-
-        // Contract class logs.
-        let logs = public_inputs.contract_class_logs_hashes;
-        for i in 0..logs.array.len() {
-            let log = logs.array[i];
+        // If claimed_revertible_counter is 0, it means that end_setup was never called, so everything is non revertible.
+        if expected_non_revertible_side_effect_counter != 0 {
             assert(
-                log.inner.length <= CONTRACT_CLASS_LOG_SIZE_IN_FIELDS,
-                "contract class log length is too large",
-            );
+                (claimed_revertible_counter == 0)
+                    | (expected_non_revertible_side_effect_counter < claimed_revertible_counter),
+                "Failed to validate expected non revertible side effect counter",
+            )
+        }
+        if expected_revertible_side_effect_counter != 0 {
+            assert(
+                (claimed_revertible_counter != 0)
+                    & (expected_revertible_side_effect_counter >= claimed_revertible_counter),
+                "Failed to validate expected revertible side effect counter",
+            )
         }
     }
 }

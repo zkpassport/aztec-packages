@@ -1,4 +1,5 @@
-import { Fr } from '@aztec/foundation/fields';
+import { BlockNumber } from '@aztec/foundation/branded-types';
+import { Fr } from '@aztec/foundation/curves/bn254';
 import { toArray } from '@aztec/foundation/iterable';
 import { type Logger, createLogger } from '@aztec/foundation/log';
 import type { TypedEventEmitter } from '@aztec/foundation/types';
@@ -6,7 +7,7 @@ import type { AztecAsyncKVStore, AztecAsyncMap, AztecAsyncMultiMap, AztecAsyncSi
 import { ProtocolContractAddress } from '@aztec/protocol-contracts';
 import { GasFees } from '@aztec/stdlib/gas';
 import type { MerkleTreeReadOperations, WorldStateSynchronizer } from '@aztec/stdlib/interfaces/server';
-import { ClientIvcProof } from '@aztec/stdlib/proofs';
+import { ChonkProof } from '@aztec/stdlib/proofs';
 import type { TxAddedToPoolStats } from '@aztec/stdlib/stats';
 import { DatabasePublicStateSource } from '@aztec/stdlib/trees';
 import { BlockHeader, Tx, TxHash } from '@aztec/stdlib/tx';
@@ -37,7 +38,7 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
   txPoolOverflowFactor: number = 1;
 
   /** Index from tx hash to the block number in which they were mined, filtered by mined txs. */
-  #minedTxHashToBlock: AztecAsyncMap<string, number>;
+  #minedTxHashToBlock: AztecAsyncMap<string, BlockNumber>;
 
   /** Index from tx priority (stored as hex) to its tx hash, filtered by pending txs. */
   #pendingTxPriorityToHash: AztecAsyncMultiMap<string, string>;
@@ -47,6 +48,12 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
 
   /** Index from tx hash to its header hash, filtered by pending txs. */
   #pendingTxHashToHeaderHash: AztecAsyncMap<string, string>;
+
+  /** Map from tx hash to the block number it was originally mined in (for soft-deleted txs). */
+  #deletedMinedTxHashes: AztecAsyncMap<string, BlockNumber>;
+
+  /** MultiMap from block number to deleted mined tx hashes for efficient cleanup. */
+  #blockToDeletedMinedTxHash: AztecAsyncMultiMap<BlockNumber, string>;
 
   /** The cumulative tx size in bytes that the pending txs in the pool take up. */
   #pendingTxSize: AztecAsyncSingleton<number>;
@@ -103,6 +110,8 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
     this.#pendingTxHashToSize = store.openMap('pendingTxHashToSize');
     this.#pendingTxHashToHeaderHash = store.openMap('pendingTxHashToHeaderHash');
     this.#pendingTxSize = store.openSingleton('pendingTxSize');
+    this.#deletedMinedTxHashes = store.openMap('deletedMinedTxHashes');
+    this.#blockToDeletedMinedTxHash = store.openMultiMap('blockToDeletedMinedTxHash');
 
     this.#pendingTxs = new Map<string, Tx>();
     this.#nonEvictableTxs = new Set<string>();
@@ -152,6 +161,17 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
       let pendingTxSize = (await this.#pendingTxSize.getAsync()) ?? 0;
       for (const hash of txHashes) {
         const key = hash.toString();
+
+        // If this tx was previously soft-deleted, remove it from the deleted sets
+        if (await this.#deletedMinedTxHashes.hasAsync(key)) {
+          const originalBlock = await this.#deletedMinedTxHashes.getAsync(key);
+          await this.#deletedMinedTxHashes.delete(key);
+          // Remove from block-to-hash mapping
+          if (originalBlock !== undefined) {
+            await this.#blockToDeletedMinedTxHash.deleteValue(originalBlock, key);
+          }
+        }
+
         await this.#minedTxHashToBlock.set(key, blockHeader.globalVariables.blockNumber);
 
         const tx = await this.getPendingTxByHash(hash);
@@ -200,10 +220,10 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
 
   public async getPendingTxHashes(): Promise<TxHash[]> {
     const vals = await toArray(this.#pendingTxPriorityToHash.valuesAsync({ reverse: true }));
-    return vals.map(x => TxHash.fromString(x));
+    return vals.map(TxHash.fromString);
   }
 
-  public async getMinedTxHashes(): Promise<[TxHash, number][]> {
+  public async getMinedTxHashes(): Promise<[TxHash, BlockNumber][]> {
     const vals = await toArray(this.#minedTxHashToBlock.entriesAsync());
     return vals.map(([txHash, blockNumber]) => [TxHash.fromString(txHash), blockNumber]);
   }
@@ -216,11 +236,17 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
     return (await this.#minedTxHashToBlock.sizeAsync()) ?? 0;
   }
 
-  public async getTxStatus(txHash: TxHash): Promise<'pending' | 'mined' | undefined> {
+  public async getTxStatus(txHash: TxHash): Promise<'pending' | 'mined' | 'deleted' | undefined> {
     const key = txHash.toString();
-    const [isMined, isKnown] = await Promise.all([this.#minedTxHashToBlock.hasAsync(key), this.#txs.hasAsync(key)]);
+    const [isMined, isKnown, isDeleted] = await Promise.all([
+      this.#minedTxHashToBlock.hasAsync(key),
+      this.#txs.hasAsync(key),
+      this.#deletedMinedTxHashes.hasAsync(key),
+    ]);
 
-    if (isMined) {
+    if (isDeleted) {
+      return 'deleted';
+    } else if (isMined) {
       return 'mined';
     } else if (isKnown) {
       return 'pending';
@@ -236,28 +262,21 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
    */
   public async getTxByHash(txHash: TxHash): Promise<Tx | undefined> {
     const buffer = await this.#txs.getAsync(txHash.toString());
-    if (buffer) {
-      const tx = Tx.fromBuffer(buffer);
-      tx.setTxHash(txHash);
-      return tx;
-    }
-    return undefined;
+    return buffer ? Tx.fromBuffer(buffer) : undefined;
   }
 
   async getTxsByHash(txHashes: TxHash[]): Promise<(Tx | undefined)[]> {
     const txs = await Promise.all(txHashes.map(txHash => this.#txs.getAsync(txHash.toString())));
-    return txs.map((buffer, index) => {
-      if (buffer) {
-        const tx = Tx.fromBuffer(buffer);
-        tx.setTxHash(txHashes[index]);
-        return tx;
-      }
-      return undefined;
-    });
+    return txs.map(buffer => (buffer ? Tx.fromBuffer(buffer) : undefined));
   }
 
   async hasTxs(txHashes: TxHash[]): Promise<boolean[]> {
     return await Promise.all(txHashes.map(txHash => this.#txs.hasAsync(txHash.toString())));
+  }
+
+  async hasTx(txHash: TxHash): Promise<boolean> {
+    const result = await this.hasTxs([txHash]);
+    return result[0];
   }
 
   /**
@@ -267,12 +286,7 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
    */
   public async getArchivedTxByHash(txHash: TxHash): Promise<Tx | undefined> {
     const buffer = await this.#archivedTxs.getAsync(txHash.toString());
-    if (buffer) {
-      const tx = Tx.fromBuffer(buffer);
-      tx.setTxHash(txHash);
-      return tx;
-    }
-    return undefined;
+    return buffer ? Tx.fromBuffer(buffer) : undefined;
   }
 
   /**
@@ -322,10 +336,11 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
 
   /**
    * Deletes transactions from the pool. Tx hashes that are not present are ignored.
-   * @param txHashes - An array of tx hashes to be removed from the tx pool.
+   * Mined transactions are soft-deleted with a timestamp, pending transactions are permanently deleted.
+   * @param txHashes - An array of tx hashes to be deleted from the tx pool.
    * @returns Empty promise.
    */
-  public deleteTxs(txHashes: TxHash[], eviction = false): Promise<void> {
+  public deleteTxs(txHashes: TxHash[], opts: { eviction?: boolean; permanently?: boolean } = {}): Promise<void> {
     if (txHashes.length === 0) {
       return Promise.resolve();
     }
@@ -337,18 +352,33 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
         const tx = await this.getTxByHash(hash);
 
         if (tx) {
-          const isMined = await this.#minedTxHashToBlock.hasAsync(key);
-          if (!isMined) {
+          const minedBlockNumber = await this.#minedTxHashToBlock.getAsync(key);
+
+          if (minedBlockNumber !== undefined) {
+            await this.#minedTxHashToBlock.delete(key);
+            if (opts.permanently) {
+              // Permanently delete mined transactions if specified
+              this.#log.trace(`Deleting mined tx ${key} from pool`);
+              await this.#txs.delete(key);
+            } else {
+              // Soft-delete mined transactions: remove from mined set but keep in storage
+              this.#log.trace(`Soft-deleting mined tx ${key} from pool`);
+              await this.#deletedMinedTxHashes.set(key, minedBlockNumber);
+              await this.#blockToDeletedMinedTxHash.set(minedBlockNumber, key);
+            }
+          } else {
+            // Permanently delete pending transactions
+            this.#log.trace(`Deleting pending tx ${key} from pool`);
             pendingTxSize -= tx.getSize();
             await this.removePendingTxIndices(tx, key);
+            await this.#txs.delete(key);
           }
 
-          if (!eviction && this.#archivedTxLimit) {
+          if (!opts.eviction && this.#archivedTxLimit) {
             deletedTxs.push(tx);
           }
-
-          await this.#txs.delete(key);
-          await this.#minedTxHashToBlock.delete(key);
+        } else {
+          this.#log.trace(`Skipping deletion of missing tx ${key} from pool`);
         }
       }
 
@@ -363,12 +393,8 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
    * @returns Array of tx objects in the order they were added to the pool.
    */
   public async getAllTxs(): Promise<Tx[]> {
-    const vals = await toArray(this.#txs.entriesAsync());
-    return vals.map(([hash, buffer]) => {
-      const tx = Tx.fromBuffer(buffer);
-      tx.setTxHash(TxHash.fromString(hash));
-      return tx;
-    });
+    const vals = await toArray(this.#txs.valuesAsync());
+    return vals.map(buffer => Tx.fromBuffer(buffer));
   }
 
   /**
@@ -402,11 +428,53 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
       assert(archivedTxLimit >= 0, 'archivedTxLimit must be greater or equal to 0');
       this.#archivedTxLimit = archivedTxLimit;
     }
+
+    // deletedMinedCleanupThresholdMs is no longer used in block-based cleanup
   }
 
   public markTxsAsNonEvictable(txHashes: TxHash[]): Promise<void> {
     txHashes.forEach(txHash => this.#nonEvictableTxs.add(txHash.toString()));
     return Promise.resolve();
+  }
+
+  /**
+   * Permanently deletes deleted mined transactions from blocks up to and including the specified block number.
+   * @param blockNumber - Block number threshold. Deleted mined txs from this block or earlier will be permanently deleted.
+   * @returns The number of transactions permanently deleted.
+   */
+  public async cleanupDeletedMinedTxs(blockNumber: BlockNumber): Promise<number> {
+    let deletedCount = 0;
+    const txHashesToDelete: string[] = [];
+    const blocksToDelete: BlockNumber[] = [];
+
+    await this.#store.transactionAsync(async () => {
+      // Iterate through all entries and check block numbers
+      for await (const [block, txHash] of this.#blockToDeletedMinedTxHash.entriesAsync()) {
+        if (block <= blockNumber) {
+          // Permanently delete the transaction
+          await this.#txs.delete(txHash);
+          await this.#deletedMinedTxHashes.delete(txHash);
+          txHashesToDelete.push(txHash);
+          if (!blocksToDelete.includes(block)) {
+            blocksToDelete.push(block);
+          }
+          deletedCount++;
+        }
+      }
+
+      // Clean up block-to-hash mapping - delete all values for each block
+      for (const block of blocksToDelete) {
+        const txHashesForBlock = await toArray(this.#blockToDeletedMinedTxHash.getValuesAsync(block));
+        for (const txHash of txHashesForBlock) {
+          await this.#blockToDeletedMinedTxHash.deleteValue(block, txHash);
+        }
+      }
+    });
+
+    if (deletedCount > 0) {
+      this.#log.debug(`Permanently deleted ${deletedCount} deleted mined txs from blocks up to ${blockNumber}`);
+    }
+    return deletedCount;
   }
 
   /**
@@ -484,7 +552,7 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
           const archivedTx: Tx = new Tx(
             tx.txHash,
             tx.data,
-            ClientIvcProof.empty(),
+            ChonkProof.empty(),
             tx.contractClassLogFields,
             tx.publicFunctionCalldata,
           );
@@ -546,7 +614,7 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
     }
 
     if (txsToEvict.length > 0) {
-      await this.deleteTxs(txsToEvict, true);
+      await this.deleteTxs(txsToEvict, { eviction: true });
     }
     return {
       numLowPriorityTxsEvicted: txsToEvict.length,
@@ -620,7 +688,7 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
     }
 
     if (txsToEvict.length > 0) {
-      await this.deleteTxs(txsToEvict, true);
+      await this.deleteTxs(txsToEvict, { eviction: true });
     }
     return txsToEvict.length;
   }
@@ -663,7 +731,7 @@ export class AztecKVTxPool extends (EventEmitter as new () => TypedEventEmitter<
     }
 
     if (txsToEvict.length > 0) {
-      await this.deleteTxs(txsToEvict, true);
+      await this.deleteTxs(txsToEvict, { eviction: true });
     }
     return txsToEvict.length;
   }

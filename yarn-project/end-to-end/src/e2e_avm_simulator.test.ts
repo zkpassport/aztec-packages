@@ -1,4 +1,8 @@
-import { AztecAddress, BatchCall, Fr, TxStatus, type Wallet } from '@aztec/aztec.js';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { BatchCall, type ContractInstanceWithAddress } from '@aztec/aztec.js/contracts';
+import { Fr } from '@aztec/aztec.js/fields';
+import { TxStatus } from '@aztec/aztec.js/tx';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import { AvmInitializerTestContract } from '@aztec/noir-test-contracts.js/AvmInitializerTest';
 import { AvmTestContract } from '@aztec/noir-test-contracts.js/AvmTest';
 
@@ -28,10 +32,13 @@ describe('e2e_avm_simulator', () => {
 
   describe('AvmTestContract', () => {
     let avmContract: AvmTestContract;
+    let avmContractInstance: ContractInstanceWithAddress;
     let secondAvmContract: AvmTestContract;
 
     beforeEach(async () => {
-      avmContract = await AvmTestContract.deploy(wallet).send({ from: defaultAccountAddress }).deployed();
+      ({ contract: avmContract, instance: avmContractInstance } = await AvmTestContract.deploy(wallet)
+        .send({ from: defaultAccountAddress })
+        .wait());
       secondAvmContract = await AvmTestContract.deploy(wallet).send({ from: defaultAccountAddress }).deployed();
     });
 
@@ -64,7 +71,7 @@ describe('e2e_avm_simulator', () => {
           ).rejects.toThrow("Assertion failed: Nullifier doesn't exist!");
         });
         it('PXE processes intrinsic assertions and recovers message', async () => {
-          await expect(avmContract.methods.divide_by_zero().simulate({ from: defaultAccountAddress })).rejects.toThrow(
+          await expect(avmContract.methods.divide_by_zero(0).simulate({ from: defaultAccountAddress })).rejects.toThrow(
             'Division by zero',
           );
         });
@@ -142,9 +149,9 @@ describe('e2e_avm_simulator', () => {
         const tx = await avmContract.methods
           .test_get_contract_instance_matches(
             avmContract.address,
-            avmContract.instance.deployer,
-            avmContract.instance.currentContractClassId,
-            avmContract.instance.initializationHash,
+            avmContractInstance.deployer,
+            avmContractInstance.currentContractClassId,
+            avmContractInstance.initializationHash,
           )
           .send({ from: defaultAccountAddress })
           .wait();
@@ -190,7 +197,7 @@ describe('e2e_avm_simulator', () => {
         // The nested call reverts and by default caller rethrows
         await expect(
           avmContract.methods.nested_call_to_nothing().simulate({ from: defaultAccountAddress }),
-        ).rejects.toThrow(/No bytecode/);
+        ).rejects.toThrow(/not deployed/);
       });
 
       it('Nested CALL instruction to non-existent contract returns failure, but caller can recover', async () => {

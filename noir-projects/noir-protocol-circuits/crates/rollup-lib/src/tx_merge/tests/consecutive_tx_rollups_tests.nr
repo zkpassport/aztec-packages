@@ -1,11 +1,56 @@
 use super::TestBuilder;
-use dep::types::address::EthAddress;
+use dep::types::{address::EthAddress, hash::accumulate_sha256};
 
 #[test]
-fn correct_default_inputs() {
-    let builder = TestBuilder::default();
+fn accumulated_out_hash_correctly() {
+    let mut builder = TestBuilder::default();
+
+    builder.left_rollup.out_hash = 456;
+    builder.right_rollup.out_hash = 123;
+
     let pi = builder.execute();
     builder.assert_expected_public_inputs(pi);
+
+    assert_eq(pi.out_hash, accumulate_sha256(456, 123));
+}
+
+#[test]
+fn propagate_left_out_hash_when_right_is_zero() {
+    let mut builder = TestBuilder::default();
+
+    builder.left_rollup.out_hash = 456;
+    builder.right_rollup.out_hash = 0;
+
+    let pi = builder.execute();
+    builder.assert_expected_public_inputs(pi);
+
+    assert_eq(pi.out_hash, 456);
+}
+
+#[test]
+fn propagate_right_out_hash_when_left_is_zero() {
+    let mut builder = TestBuilder::default();
+
+    builder.left_rollup.out_hash = 0;
+    builder.right_rollup.out_hash = 123;
+
+    let pi = builder.execute();
+    builder.assert_expected_public_inputs(pi);
+
+    assert_eq(pi.out_hash, 123);
+}
+
+#[test]
+fn output_zero_when_both_out_hashes_are_zero() {
+    let mut builder = TestBuilder::default();
+
+    builder.left_rollup.out_hash = 0;
+    builder.right_rollup.out_hash = 0;
+
+    let pi = builder.execute();
+    builder.assert_expected_public_inputs(pi);
+
+    assert_eq(pi.out_hash, 0);
 }
 
 #[test(should_fail_with = "Mismatched constants in tx rollups")]
@@ -51,11 +96,11 @@ fn mismatch_vk_tree_root_on_left_rollup() {
 }
 
 #[test(should_fail_with = "Mismatched constants in tx rollups")]
-fn mismatch_protocol_contract_tree_root() {
+fn mismatch_protocol_contracts_hash() {
     let mut builder = TestBuilder::default();
 
-    // Tweak the protocol_contract_tree_root of the left rollup.
-    builder.left_rollup.constants.protocol_contract_tree_root += 1;
+    // Tweak the protocol_contracts_hash of the left rollup.
+    builder.left_rollup.constants.protocol_contracts_hash += 1;
 
     builder.execute_and_fail();
 }
@@ -155,8 +200,8 @@ fn non_consecutive_note_hash_tree_roots() {
     let mut builder = TestBuilder::default();
 
     // Change the start note_hash_tree root of the right rollup to be the same as the start note_hash_tree root of the left rollup.
-    builder.right_rollup.start_partial_state.note_hash_tree.root =
-        builder.left_rollup.start_partial_state.note_hash_tree.root;
+    builder.right_rollup.start_tree_snapshots.note_hash_tree.root =
+        builder.left_rollup.start_tree_snapshots.note_hash_tree.root;
 
     builder.execute_and_fail();
 }
@@ -166,8 +211,8 @@ fn non_consecutive_nullifier_tree_roots() {
     let mut builder = TestBuilder::default();
 
     // Change the start nullifier_tree root of the right rollup to be the same as the start nullifier_tree root of the left rollup.
-    builder.right_rollup.start_partial_state.nullifier_tree.root =
-        builder.left_rollup.start_partial_state.nullifier_tree.root;
+    builder.right_rollup.start_tree_snapshots.nullifier_tree.root =
+        builder.left_rollup.start_tree_snapshots.nullifier_tree.root;
 
     builder.execute_and_fail();
 }
@@ -177,8 +222,8 @@ fn non_consecutive_public_data_tree_roots() {
     let mut builder = TestBuilder::default();
 
     // Change the start public_data_tree root of the right rollup to be the same as the start public_data_tree root of the left rollup.
-    builder.right_rollup.start_partial_state.public_data_tree.root =
-        builder.left_rollup.start_partial_state.public_data_tree.root;
+    builder.right_rollup.start_tree_snapshots.public_data_tree.root =
+        builder.left_rollup.start_tree_snapshots.public_data_tree.root;
 
     builder.execute_and_fail();
 }

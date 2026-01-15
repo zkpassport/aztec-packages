@@ -6,9 +6,9 @@ This document outlines all modifications made to the `barretenberg/cpp/` directo
 
 **Total Changes:**
 
-- 26 files modified (+ `bb_rs/build.rs` for VLA flags)
-- ~230 insertions, ~30 deletions
-- Main focus: Mobile platform support (iOS/Android), conditional compilation, memory management improvements, and Xcode 26.x compatibility
+- 27 files modified (+ `bb_rs/build.rs` for VLA flags)
+- ~250 insertions, ~30 deletions
+- Main focus: Mobile platform support (iOS/Android), conditional compilation, memory management improvements, Xcode 26.x compatibility, and **IPC exclusion for mobile Debug builds**
 
 ## Change Categories
 
@@ -36,9 +36,68 @@ endif()
 
 **Impact:** When `MOBILE=ON`, test framework dependencies (GoogleTest and Google Benchmark) are completely excluded from the build, preventing unnecessary downloads and compilation. This is critical for mobile builds where these frameworks would fail to build or are unnecessary.
 
+**Added BB_MOBILE preprocessor define** (for conditional C++ compilation):
+
+```cmake
+# Added after MOBILE option
+if(MOBILE)
+    add_compile_definitions(BB_MOBILE)
+    message(STATUS "Building for MOBILE - IPC, world_state, vm2 disabled")
+endif()
+```
+
+**Impact:** Exposes the `BB_MOBILE` preprocessor macro to C++ code, enabling conditional compilation of IPC-related code paths that would cause linker errors on mobile.
+
 ---
 
-#### 1.2 cmake/module.cmake
+#### 1.2 IPC Exclusion for Mobile Builds
+
+**File:** `barretenberg/cpp/src/barretenberg/api/CMakeLists.txt`
+
+Excluded IPC linking for mobile builds to prevent undefined symbol errors in Debug mode:
+
+```cmake
+# Before:
+if(NOT WASM)
+    target_link_libraries(api_objects PRIVATE ipc)
+endif()
+
+# After:
+if(NOT WASM AND NOT MOBILE)
+    target_link_libraries(api_objects PRIVATE ipc)
+endif()
+```
+
+**File:** `barretenberg/cpp/src/barretenberg/api/api_msgpack.cpp`
+
+Added `BB_MOBILE` guards to exclude IPC code paths on mobile:
+
+```cpp
+// Before:
+#ifndef __wasm__
+#include "barretenberg/ipc/ipc_server.hpp"
+...
+#endif
+
+// After:
+// IPC is only available on desktop platforms (not WASM or Mobile)
+#if !defined(__wasm__) && !defined(BB_MOBILE)
+#include "barretenberg/ipc/ipc_server.hpp"
+...
+#endif
+```
+
+**Why this is needed:**
+
+- In **Release** mode, LTO (Link-Time Optimization) eliminates unused IPC code paths
+- In **Debug** mode, all symbols are kept, exposing undefined `IpcServer::create_shm` and `create_socket` references
+- IPC (shared memory, Unix sockets) is not applicable to mobile single-process apps
+
+**Impact:** Fixes linker errors like `Undefined symbols: bb::ipc::IpcServer::create_shm` when building in Debug mode for iOS Simulator.
+
+---
+
+#### 1.4 cmake/module.cmake
 
 **File:** `barretenberg/cpp/cmake/module.cmake`
 
@@ -66,7 +125,7 @@ if(BENCH_SOURCE_FILES AND NOT FUZZING AND NOT MOBILE)
 
 ---
 
-#### 1.3 src/CMakeLists.txt
+#### 1.5 src/CMakeLists.txt
 
 **File:** `barretenberg/cpp/src/CMakeLists.txt`
 
@@ -595,9 +654,10 @@ config.cxxflag("-Wno-vla-cxx-extension");
 
 ## Status Summary
 
-### Changes (26 files + build.rs)
+### Changes (27 files + build.rs)
 
 - ✅ Mobile build flag support
+- ✅ **IPC exclusion for mobile builds** (fixes Debug mode linker errors)
 - ✅ Platform-specific compilation guards
 - ✅ Tracy instrumentation conditionals
 - ✅ Memory management improvements
@@ -724,7 +784,7 @@ When merging upstream changes from future versions:
 
 - **Based on tag:** v3.0.0-devnet.20251212
 - **Branch:** pr/obsidion-mobile-devnet
-- **Last updated:** 2026-01-14 (Xcode 26.x VLA compatibility)
+- **Last updated:** 2026-01-15 (IPC exclusion for mobile Debug builds)
 
 ---
 
@@ -742,3 +802,4 @@ Key achievements:
 - ✅ Robust build system with proper test framework exclusion
 - ✅ Clean build output with minimal warnings
 - ✅ **Xcode 26.x / AppleClang 17+ compatibility** via VLA warning suppression
+- ✅ **Debug mode support** via IPC exclusion (fixes undefined symbol errors on iOS Simulator)

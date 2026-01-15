@@ -39,6 +39,12 @@ option(ENABLE_WASM_BENCH "Enable BB_BENCH benchmarking support in WASM builds (d
 option(AVM "enable building of vm2 module and bb-avm" ON)
 option(MOBILE "Exclude ipc, lmdblib, nodejs_module, world_state, vm2 for mobile" OFF)
 
+# Add MOBILE preprocessor define for conditional compilation
+if(MOBILE)
+    add_compile_definitions(BB_MOBILE)
+    message(STATUS "Building for MOBILE - IPC, world_state, vm2 disabled")
+endif()
+
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
     message(STATUS "Compiling for ARM.")
     set(ARM ON)

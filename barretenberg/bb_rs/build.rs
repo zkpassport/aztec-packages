@@ -3,6 +3,20 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+/// Get the SDK path dynamically using xcrun
+/// This ensures compatibility with any Xcode version
+fn get_sdk_path(sdk_name: &str) -> String {
+    let output = Command::new("xcrun")
+        .args(["--sdk", sdk_name, "--show-sdk-path"])
+        .output()
+        .expect("Failed to execute xcrun");
+    
+    String::from_utf8(output.stdout)
+        .expect("Invalid UTF-8 from xcrun")
+        .trim()
+        .to_string()
+}
+
 /// Fix duplicate type definitions in the generated bindings file
 /// It's known bug with bindgen that generates duplicate type definitions
 /// if they are defined in multiple templates.
@@ -319,11 +333,15 @@ fn main() {
     } else if target_os == "ios" {
         // Detect iOS Simulator vs Device target
         let target = env::var("TARGET").unwrap_or_default();
-        let (platform, sdk) = if target.contains("sim") {
-            ("iPhoneSimulator", "iPhoneSimulator.sdk")
+        let sdk_name = if target.contains("sim") {
+            "iphonesimulator"
         } else {
-            ("iPhoneOS", "iPhoneOS.sdk")
+            "iphoneos"
         };
+        
+        // Get SDK path dynamically using xcrun (works with any Xcode version)
+        let sdk_path = get_sdk_path(sdk_name);
+        println!("cargo:warning=📱 Using iOS SDK: {}", sdk_path);
         
         // Read iOS deployment target from environment (set by build-dev-cache.sh)
         let ios_version = env::var("IPHONEOS_DEPLOYMENT_TARGET").unwrap_or_else(|_| "15.1".to_string());
@@ -343,19 +361,22 @@ fn main() {
             //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
             // Tell msgpack to not use Boost
             "-DMSGPACK_NO_BOOST",
-            &format!("-I/Applications/Xcode.app/Contents/Developer/Platforms/{}.platform/Developer/SDKs/{}/usr/include/c++/v1", platform, sdk),
-            &format!("-I/Applications/Xcode.app/Contents/Developer/Platforms/{}.platform/Developer/SDKs/{}/usr/include", platform, sdk),
+            &format!("-I{}/usr/include/c++/v1", sdk_path),
+            &format!("-I{}/usr/include", sdk_path),
             // Fix for iOS system type issues
             "-D_LIBCPP_DISABLE_AVAILABILITY",
-            &format!("--sysroot=/Applications/Xcode.app/Contents/Developer/Platforms/{}.platform/Developer/SDKs/{}", platform, sdk),
+            &format!("--sysroot={}", sdk_path),
             // Set iOS deployment target for bindgen
             &format!("-miphoneos-version-min={}", ios_version),
-            // "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include/c++/v1",
-            // "-I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include",
-            // "-target", "arm64-apple-ios15.0",
-            // "--sysroot=/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
         ]);
     } else if target_os == "macos" {
+        // Get SDK path dynamically using xcrun (works with any Xcode version)
+        let sdk_path = get_sdk_path("macosx");
+        println!("cargo:warning=🖥️  Using macOS SDK: {}", sdk_path);
+        
+        // Get macOS deployment target from environment or default
+        let macos_version = env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "15.0".to_string());
+        
         builder = builder
             // Add the include path for headers.
             .clang_args([
@@ -369,12 +390,12 @@ fn main() {
                 //&format!("-I{}/build/_deps/libdeflate-src", dst.display()),
                 // Tell msgpack to not use Boost
                 "-DMSGPACK_NO_BOOST",
-                "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1",
-                "-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include",
+                &format!("-I{}/usr/include/c++/v1", sdk_path),
+                &format!("-I{}/usr/include", sdk_path),
                 // Fix for macOS system type issues
                 "-D_LIBCPP_DISABLE_AVAILABILITY",
-                "-target", "arm64-apple-macosx15.1",
-                "--sysroot=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+                "-target", &format!("arm64-apple-macosx{}", macos_version),
+                &format!("--sysroot={}", sdk_path),
             ]);
     } else {
         builder = builder

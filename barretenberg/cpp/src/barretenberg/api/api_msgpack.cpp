@@ -8,7 +8,8 @@
 #include <string>
 #include <vector>
 
-#ifndef __wasm__
+// IPC is only available on desktop platforms (not WASM or Mobile)
+#if !defined(__wasm__) && !defined(BB_MOBILE)
 #include "barretenberg/ipc/ipc_server.hpp"
 #include <csignal>
 #include <thread>
@@ -104,7 +105,8 @@ int process_msgpack_commands(std::istream& input_stream)
     return 0;
 }
 
-#ifndef __wasm__
+// IPC server functions only available on desktop platforms
+#if !defined(__wasm__) && !defined(BB_MOBILE)
 // Set up platform-specific parent death monitoring
 // This ensures the bb process exits when the parent (Node.js) dies
 static void setup_parent_death_monitoring()
@@ -285,7 +287,8 @@ int execute_msgpack_run(const std::string& msgpack_input_file,
                         [[maybe_unused]] size_t request_ring_size,
                         [[maybe_unused]] size_t response_ring_size)
 {
-#ifndef __wasm__
+// IPC paths only available on desktop platforms
+#if !defined(__wasm__) && !defined(BB_MOBILE)
     // Check if this is a shared memory path (ends with .shm)
     if (!msgpack_input_file.empty() && msgpack_input_file.size() >= 4 &&
         msgpack_input_file.substr(msgpack_input_file.size() - 4) == ".shm") {

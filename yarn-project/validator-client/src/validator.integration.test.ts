@@ -170,6 +170,7 @@ describe('ValidatorClient Integration', () => {
         validatorReexecute: true,
         slashBroadcastedInvalidBlockPenalty: 10n,
         slashDuplicateProposalPenalty: 10n,
+        slashDuplicateAttestationPenalty: 10n,
         haSigningEnabled: false,
         skipCheckpointProposalValidation: false,
         skipPushProposedBlocksToArchiver: false,

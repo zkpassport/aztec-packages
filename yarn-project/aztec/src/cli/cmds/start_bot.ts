@@ -10,9 +10,9 @@ import {
   initTelemetryClient,
   makeTracedFetch,
 } from '@aztec/telemetry-client';
-import { EmbeddedWallet } from '@aztec/wallets/embedded';
+import { TestWallet } from '@aztec/test-wallet/server';
 
-import { extractRelevantOptions } from '../util.js';
+import { extractRelevantOptions, stringifyConfig } from '../util.js';
 import { getVersions } from '../versioning.js';
 
 export async function startBot(
@@ -38,22 +38,25 @@ export async function startBot(
   const aztecNode = createAztecNodeClient(config.nodeUrl, getVersions(), fetch);
 
   const pxeConfig = extractRelevantOptions<PXEConfig & CliPXEOptions>(options, allPxeConfigMappings, 'pxe');
-  const wallet = await EmbeddedWallet.create(aztecNode, { pxeConfig });
+  userLog(`Creating bot test wallet with config ${stringifyConfig(pxeConfig)}`);
+  const wallet = await TestWallet.create(aztecNode, pxeConfig);
 
   const telemetry = await initTelemetryClient(getTelemetryClientConfig());
-  await addBot(options, signalHandlers, services, wallet, aztecNode, telemetry, undefined);
+  await addBot(options, signalHandlers, services, wallet, aztecNode, telemetry, undefined, userLog);
 }
 
 export async function addBot(
   options: any,
   signalHandlers: (() => Promise<void>)[],
   services: NamespacedApiHandlers,
-  wallet: EmbeddedWallet,
+  wallet: TestWallet,
   aztecNode: AztecNode,
   telemetry: TelemetryClient,
   aztecNodeAdmin?: AztecNodeAdmin,
+  userLog?: LogFn,
 ) {
   const config = extractRelevantOptions<BotConfig>(options, botConfigMappings, 'bot');
+  userLog?.(`Starting bot with config ${stringifyConfig(config)}`);
 
   const db = await (config.dataDirectory
     ? createStore('bot', BotStore.SCHEMA_VERSION, config)

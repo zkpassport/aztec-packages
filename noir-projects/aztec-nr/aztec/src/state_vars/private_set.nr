@@ -2,7 +2,7 @@ use crate::{
     context::{PrivateContext, UtilityContext},
     note::{
         constants::MAX_NOTES_PER_PAGE,
-        lifecycle::{create_note, create_note_with_randomness, destroy_note_unsafe},
+        lifecycle::{create_note, destroy_note_unsafe},
         note_getter::{get_notes, view_notes},
         note_getter_options::NoteGetterOptions,
         note_interface::{NoteHash, NoteType},
@@ -189,14 +189,6 @@ where
         Note: Packable,
     {
         create_note(self.context, self.owner, self.storage_slot, note)
-    }
-
-    /// Same as `insert`, but takes an explicit `randomness` parameter for the note hash.
-    pub fn insert_with_randomness(self, note: Note, randomness: Field) -> NoteMessage<Note>
-    where
-        Note: Packable,
-    {
-        create_note_with_randomness(self.context, self.owner, self.storage_slot, note, randomness)
     }
 
     /// Pops a collection of "current" notes (i.e. not-yet-nullified notes) which

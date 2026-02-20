@@ -71,43 +71,6 @@ where
     )
 }
 
-/// Same as `create_note`, but takes an explicit `randomness` parameter instead of sampling one via
-/// oracle. This lets the caller precompute the inner note hash *before* execution, which is needed
-/// when the hash must be committed to in a receipt or assertion that is signed ahead of time.
-///
-/// **Security**: `randomness` MUST be sampled from a CSPRNG with sufficient entropy. Poor
-/// randomness compromises note privacy (enables brute-force trial hashing by third parties).
-pub fn create_note_with_randomness<Note>(
-    context: &mut PrivateContext,
-    owner: AztecAddress,
-    storage_slot: Field,
-    note: Note,
-    randomness: Field,
-) -> NoteMessage<Note>
-where
-    Note: NoteType + NoteHash + Packable,
-{
-    let note_hash_counter = context.side_effect_counter;
-    let note_hash = note.compute_note_hash(owner, storage_slot, randomness);
-
-    notify_created_note(
-        owner,
-        storage_slot,
-        randomness,
-        Note::get_id(),
-        note.pack(),
-        note_hash,
-        note_hash_counter,
-    );
-
-    context.push_note_hash(note_hash);
-
-    NoteMessage::new(
-        NewNote::new(note, owner, storage_slot, randomness, note_hash_counter),
-        context,
-    )
-}
-
 // Note: This function is currently totally unused.
 pub fn destroy_note<Note>(context: &mut PrivateContext, retrieved_note: RetrievedNote<Note>)
 where
